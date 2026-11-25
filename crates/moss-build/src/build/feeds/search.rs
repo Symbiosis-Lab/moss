@@ -578,6 +578,10 @@ pub fn build_search_index(site_dir: &Path) -> Result<SearchIndex, String> {
     index_pages(read_pages(site_dir), t_read)
 }
 
+/// Pages handed to Pagefind per parallel parse: enough to keep every core busy,
+/// few enough that the owned HTML copies stay a few MB.
+const FOSSICK_CHUNK: usize = 512;
+
 /// [`build_search_index`] over pages already read; `t_read` is when the read
 /// started, for the segment timing.
 pub(crate) fn index_pages(
@@ -611,16 +615,28 @@ pub(crate) fn index_pages(
                 let mut index = pagefind::api::PagefindIndex::new(None)
                     .map_err(|e| format!("failed to create search index: {}", e))?;
 
-                // One page at a time: Pagefind holds its index lock across
-                // each page's parse, so there is no parallel form of this call.
-                // A page Pagefind cannot parse is left out, as its own
-                // directory walk left it out.
+                // Pagefind parses each chunk on rayon's pool, after
+                // segmentation has finished with it. Chunks bound the owned
+                // copies of page HTML held at once. A page Pagefind cannot
+                // parse is left out, as its own directory walk left it out.
                 let t_fossick = std::time::Instant::now();
                 let mut page_count = 0;
-                for page in pages {
-                    match index.add_html_file(Some(page.rel_path), None, page.html.to_string()).await {
-                        Ok(_) => page_count += 1,
-                        Err(e) => log::info!(target: "search", "search index skipped a page: {}", e),
+                let mut pages = pages.into_iter().peekable();
+                while pages.peek().is_some() {
+                    let chunk: Vec<_> = pages
+                        .by_ref()
+                        .take(FOSSICK_CHUNK)
+                        .map(|page| (Some(page.rel_path), None, page.html.to_string()))
+                        .collect();
+                    let added = index
+                        .add_html_files(chunk)
+                        .await
+                        .map_err(|e| format!("failed to index pages: {}", e))?;
+                    for result in added {
+                        match result {
+                            Ok(_) => page_count += 1,
+                            Err(e) => log::info!(target: "search", "search index skipped a page: {}", e),
+                        }
                     }
                 }
                 let fossick_ms = t_fossick.elapsed().as_millis();

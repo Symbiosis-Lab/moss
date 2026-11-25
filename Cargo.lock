@@ -3666,8 +3666,7 @@ dependencies = [
 [[package]]
 name = "pagefind"
 version = "1.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa7d3c661e0e18b6c9eec1305908baf2bd9564af247727f9e7f4b4d25cd2da39"
+source = "git+https://github.com/Symbiosis-Lab/pagefind?rev=262e9eb5ef727ec64666e0b381dd871f17211e38#262e9eb5ef727ec64666e0b381dd871f17211e38"
 dependencies = [
  "anyhow",
  "async-compression",
