@@ -1,0 +1,7 @@
+{
+  "name": "hash-fixture-blocks",
+  "version": "1.0.0",
+  "contributes": {
+    "blocks": { "b": { "element": "hash-b", "script": "b.js" } }
+  }
+}

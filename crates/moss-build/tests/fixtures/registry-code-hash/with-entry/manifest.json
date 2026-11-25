@@ -1,0 +1,11 @@
+{
+  "name": "hash-fixture",
+  "version": "1.0.0",
+  "entry": "main.js",
+  "contributes": {
+    "blocks": {
+      "b": { "element": "hash-b", "script": "z.js", "stylesheet": "a.css" },
+      "c": { "element": "hash-c", "script": "z.js", "stylesheet": "gone.css" }
+    }
+  }
+}
