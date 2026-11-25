@@ -78,6 +78,7 @@ pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,
     moss: crate::build::inputs::Measured,
     completes: bool,
+    problems_at_entry: usize,
 }
 
 impl LastSeal {
@@ -87,7 +88,8 @@ impl LastSeal {
     pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>, completes: bool) -> Self {
         let _trace = crate::build::phase::PhaseTrace::start("seal_read");
         let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
-        let mut seal = Self { manifest, moss: Default::default(), completes };
+        let problems_at_entry = crate::build::cli_output::problems_counted();
+        let mut seal = Self { manifest, moss: Default::default(), completes, problems_at_entry };
         seal.remeasure(folder, options);
         seal
     }
@@ -104,6 +106,11 @@ impl LastSeal {
     /// `PendingManifest::set_build_inputs`.
     pub(crate) fn record(&self) -> Option<crate::build::inputs::BuildInputs> {
         self.moss.record.clone()
+    }
+
+    /// The process's problem count when this build began.
+    pub(crate) fn problems_at_entry(&self) -> usize {
+        self.problems_at_entry
     }
 
     /// Whether `.moss/config.toml` differs from the seal's only in
@@ -374,7 +381,7 @@ impl AtEntry {
         }
         let Ok(_lock) = crate::infra::folder_lock::acquire(folder) else { return Self::Build { comments_refreshed: false } };
         let Some(recorded) = seal.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()) else { return Self::Build { comments_refreshed: false } };
-        if !recorded.day.as_ref().is_some_and(|d| d.is_today()) || !seal.media_settled() || !seal.sealed_generation_is_current(folder) || !seal.hands_over(folder) || SinceSeal::walk(folder, builder, seal) != Some(SinceSeal::Nothing) {
+        if recorded.warned || !recorded.day.as_ref().is_some_and(|d| d.is_today()) || !seal.media_settled() || !seal.sealed_generation_is_current(folder) || !seal.hands_over(folder) || SinceSeal::walk(folder, builder, seal) != Some(SinceSeal::Nothing) {
             return Self::Build { comments_refreshed: false };
         }
         let fetched = fetch();

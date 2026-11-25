@@ -72,6 +72,11 @@ pub struct BuildInputs {
     /// their bytes; see [`generations_hold`].
     #[serde(default)]
     pub generations: Option<BTreeMap<String, String>>,
+    /// Whether the build reported a problem before it sealed. A build that
+    /// ends at its entry reports none, so only a seal that reported none
+    /// may be kept that way.
+    #[serde(default)]
+    pub warned: bool,
 }
 
 /// [`BuildInputs::evidence`]: the lasting refusals and report lines of a seal
@@ -298,13 +303,19 @@ pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, sealed: Opt
 /// character, which no environment variable's name can hold, since the first
 /// such `=` ends the name on every platform.
 ///
-/// Plugins are recorded as on or off only: the blocking, non-blocking and
-/// slots-only modes differ in when hooks run, and what a hook writes is on
-/// disk, where the `.moss/` measurement compares it.
-pub(crate) fn options(site_url_override: Option<&str>, plugins_skipped: bool) -> BTreeMap<String, String> {
+/// Plugins are recorded as off, or on with which of the folder's plugins may
+/// run (`enforce::folder_admission`): trusting the folder changes pages with
+/// no file in it moving. The blocking, non-blocking and slots-only modes
+/// differ only in when hooks run, and what a hook writes is on disk, where
+/// the `.moss/` measurement compares it.
+pub(crate) fn options(site_url_override: Option<&str>, plugins_skipped: bool, folder: &Path) -> BTreeMap<String, String> {
+    let plugins = match plugins_skipped {
+        true => "off".to_string(),
+        false => format!("on/{}", crate::plugins::install::registry_client::enforce::folder_admission(folder)),
+    };
     BTreeMap::from([
         ("moss=site_url".to_string(), value_hash(site_url_override)),
-        ("moss=plugins".to_string(), value_hash(Some(if plugins_skipped { "off" } else { "on" }))),
+        ("moss=plugins".to_string(), value_hash(Some(&plugins))),
     ])
 }
 
@@ -467,11 +478,30 @@ pub(crate) fn effective_now(instant: jiff::Timestamp, zone: Option<&str>) -> chr
         .and_time(chrono::NaiveTime::MIN)
 }
 
+/// [`BuildInputs::media_settled`] for `sealed` against the seal its render read.
+/// Sharing cards are left out (see [`is_sharing_card`]): counted, every first
+/// build would look unsettled and its next edit would render the whole site.
+///
+/// [`is_sharing_card`]: crate::build::served_path::is_sharing_card
+pub(crate) fn media_settled(previous: Option<&crate::types::content::SiteHashes>, sealed: &crate::types::content::SiteHashes) -> bool {
+    fn outputs(hashes: &crate::types::content::SiteHashes) -> std::collections::BTreeMap<&str, Option<&str>> {
+        hashes.image_outputs.iter().chain(&hashes.video_outputs)
+            .filter(|path| !crate::build::served_path::is_sharing_card(path))
+            .map(|path| (path.as_str(), hashes.files.get(path).map(String::as_str)))
+            .collect()
+    }
+    previous.is_some_and(|previous| outputs(previous) == outputs(sealed))
+}
+
 /// [`effective_now`] for a site with no zone, as of [`build_instant`].
 #[cfg(test)]
 pub(crate) fn now() -> chrono::NaiveDateTime {
     effective_now(build_instant(), None)
 }
+
+#[cfg(test)]
+#[path = "media_settled_tests.rs"]
+mod media_settled_tests;
 
 #[cfg(test)]
 mod tests {

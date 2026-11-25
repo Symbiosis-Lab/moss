@@ -1505,3 +1505,16 @@ fn a_key_lands_after_the_show_only_when_its_entry_changes() {
     assert!(!never_shown.was_shown());
     assert!(never_shown.landed_after_show("anything"), "a render never shown announced nothing");
 }
+
+#[test]
+fn a_closing_line_printed_between_entry_and_seal_leaves_the_seal_warned() {
+    let at_entry = crate::build::cli_output::problems_counted();
+    let mut pending = empty_manifest();
+    pending.set_build_inputs(Some(crate::build::inputs::BuildInputs::default()), None, at_entry);
+    crate::build::cli_output::note_cli_problem();
+    // A watch rebuild's closing line, or another build's in the same process.
+    let _ = crate::build::cli_output::take_cli_problems();
+    let mut sealed = pending.seal();
+    sealed.note_warned();
+    assert!(sealed.site_hashes_view().build_inputs.as_ref().is_some_and(|inputs| inputs.warned));
+}

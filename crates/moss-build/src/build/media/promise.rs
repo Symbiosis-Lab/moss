@@ -311,7 +311,7 @@ pub(crate) fn trigger_media_settle_rerender(
     let needs_rerender = settled.iter().any(|a| {
         a.asset_type == "thumbnail"
             || (a.asset_type == "image"
-                && !a.path.starts_with(crate::build::served_path::OG_CARD_PREFIX)
+                && !crate::build::served_path::is_sharing_card(&a.path)
                 && !previous.files.contains_key(&a.path))
     });
     if !needs_rerender {

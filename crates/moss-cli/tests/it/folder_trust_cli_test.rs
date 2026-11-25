@@ -66,4 +66,12 @@ fn a_headless_build_runs_a_folder_s_plugins_only_when_the_app_trusted_the_folder
     for file in trust_files(&home) {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), record, "a headless build wrote the record");
     }
+
+    let withdrawn = serde_json::json!({"folders": [{"dir": site.canonicalize().unwrap(), "trusted": false}]}).to_string();
+    for file in trust_files(&home) {
+        write(&file, &withdrawn);
+    }
+    let refused_again = build(&site, &home);
+    assert!(refused_again.status.success(), "{}", stderr(&refused_again));
+    assert!(!page().contains("boardview"), "kept a plugin's output after trust was withdrawn: {}", page());
 }

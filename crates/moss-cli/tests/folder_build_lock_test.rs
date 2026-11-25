@@ -258,7 +258,11 @@ fn an_older_admission_never_overwrites_an_already_promoted_newer_one() {
     );
 
     // The OLDER admission, built and arriving SECOND in real time — must be
-    // refused, and must NOT move the persisted epoch backward.
+    // refused, and must NOT move the persisted epoch backward. An edit gives
+    // it something to promote: an unchanged folder ends at its entry.
+    let index = site_dir.join("index.md");
+    let body = std::fs::read_to_string(&index).expect("read index.md");
+    std::fs::write(&index, format!("{body}\nEdited between the two admissions.\n")).expect("edit index.md");
     let older_admission = 1u64;
     let output_older = run(older_admission);
     let stderr_older = String::from_utf8_lossy(&output_older.stderr);

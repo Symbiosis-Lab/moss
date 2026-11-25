@@ -167,7 +167,7 @@ async fn the_stop_measures_again_after_the_passes_that_read_from_outside() {
         }).await.expect("fixture builds");
     }
     let builder = crate::plugins::fingerprint::builder_fingerprint();
-    let options = || crate::build::inputs::options(None, true);
+    let options = || crate::build::inputs::options(None, true, &root);
     let check = |fetch: &dyn Fn() -> Option<bool>| AtEntry::check(&root, &builder, &mut LastSeal::read(&root, options(), true), options(), fetch);
     assert_eq!(check(&|| Some(false)), AtEntry::Unchanged);
     assert_eq!(check(&|| None), AtEntry::Build { comments_refreshed: false }, "which cards are missing is not known");

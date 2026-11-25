@@ -230,7 +230,7 @@ async fn seal_keeps_evidence(promised: bool) -> bool {
     std::fs::write(mp.staging_dir().join("index.html"), VIDEO_PAGE).unwrap();
     let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(tmp.path()));
     pending.register(&ServedPath::from_source("index.html").unwrap(), VIDEO_PAGE, HashBucket::Files);
-    pending.set_build_inputs(Some(crate::build::inputs::BuildInputs::default()), None);
+    pending.set_build_inputs(Some(crate::build::inputs::BuildInputs::default()), None, 0);
     let sealed = pending.seal();
 
     let assets = std::sync::Arc::new(AssetRegistry::new());

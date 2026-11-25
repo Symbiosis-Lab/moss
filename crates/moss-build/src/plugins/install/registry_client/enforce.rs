@@ -36,10 +36,13 @@ static SNAPSHOT: RwLock<Option<CachedRegistry>> = RwLock::new(None);
 /// want of an answer (the same posture as a kill list moss never fetched).
 static TRUST: RwLock<Option<Trust>> = RwLock::new(None);
 
+
 struct Trust {
     /// Where answers are written. `None` for a headless build, which reads
     /// the app's answers and never writes them.
     writes_to: Option<PathBuf>,
+    /// The command consented to every plugin (`--allow-plugins`).
+    consent: bool,
     record: TrustRecord,
     /// The per-plugin approvals an earlier moss kept, and what they settled
     /// for each folder asked about since.
@@ -51,6 +54,7 @@ impl Trust {
     fn read(root: Option<&Path>, writes: bool) -> Self {
         Trust {
             writes_to: root.filter(|_| writes).map(Path::to_path_buf),
+            consent: false,
             record: root.map(trust::load).unwrap_or_default(),
             legacy: root.map(|root| trust::load_legacy(root, &std::env::temp_dir())).unwrap_or_default(),
             settled: Mutex::default(),
@@ -156,7 +160,7 @@ pub fn install_headless(registry_dir: Option<&Path>, trust_root: Option<&Path>, 
     // With no trust root nothing was ever trusted, which is not the same as
     // trust going unenforced: the record is installed empty, so headless is
     // always the enforced state.
-    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(trust_root, false));
+    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust { consent: allow_plugins, ..Trust::read(trust_root, false) });
     crate::plugins::admission::install_check(if allow_plugins {
         refusal_without_consent
     } else {
@@ -502,6 +506,17 @@ pub fn folder_of(plugin_dir: &Path) -> Option<PathBuf> {
 pub fn is_trusted(folder: &Path) -> bool {
     let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
     guard.as_ref().is_none_or(|trust| trust.answer(&canonical(folder)) == Some(true))
+}
+
+/// Which of a folder's plugins may run, in one word: everything this command
+/// consented to, or what the user's answer for the folder allows.
+pub fn folder_admission(folder: &Path) -> &'static str {
+    let consent = TRUST.read().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|trust| trust.consent);
+    match (consent, is_trusted(folder)) {
+        (true, _) => "consent",
+        (false, true) => "trusted",
+        (false, false) => "untrusted",
+    }
 }
 
 /// The user's answer for `folder`, for the app to decide whether to ask:

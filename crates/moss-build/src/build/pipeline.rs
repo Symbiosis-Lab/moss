@@ -1549,8 +1549,8 @@ fn build_inner(
     // stands; a full render reads every one again.
     let carried_env = previous_hashes.build_inputs.as_ref().filter(|_| incremental.render_skip).map(|inputs| inputs.env.clone());
     // A carrying build's record is only as complete as the one it carries from.
-    let record = last_seal.and_then(|seal| seal.record()).filter(|_| !incremental.render_skip || previous_hashes.build_inputs.is_some());
-    pending.set_build_inputs(record, carried_env);
+    let record = last_seal.as_ref().and_then(|seal| seal.record()).filter(|_| !incremental.render_skip || previous_hashes.build_inputs.is_some());
+    pending.set_build_inputs(record, carried_env, last_seal.map_or(0, |seal| seal.problems_at_entry()));
     // Register exactly the bytes parsed above; a second read here could
     // certify different bytes from those that shaped the rendered pages.
     if let Some(content) = places_content.as_ref() {

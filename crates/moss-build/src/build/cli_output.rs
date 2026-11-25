@@ -82,7 +82,7 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
             if !first_time {
                 return;
             }
-            with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
+            with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
         }
     } else if quiet_now() {
         return;
@@ -177,8 +177,12 @@ pub use crate::cli_eprintln;
 /// the only thing that can tell [`print_cli_build_result`] whether the build it
 /// is about to summarize as "complete" actually had any. `Relaxed` is enough:
 /// this is a plain counter, not a synchronization point with other memory.
+///
+/// Two counts: every problem this process has counted, which only grows, and
+/// that count when the last closing line took it. A build's seal judges its
+/// own problems from the first, whatever closing lines print meanwhile.
 #[cfg(not(test))]
-static CLI_PROBLEMS: AtomicUsize = AtomicUsize::new(0);
+static CLI_PROBLEMS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
 
 // Unit tests count per thread instead. The test harness runs every test on its
 // own fresh thread, all in one process, and dozens of tests drive code that
@@ -189,16 +193,16 @@ static CLI_PROBLEMS: AtomicUsize = AtomicUsize::new(0);
 // `spawn_blocking`) is not seen by that test.
 #[cfg(test)]
 thread_local! {
-    static CLI_PROBLEMS: AtomicUsize = const { AtomicUsize::new(0) };
+    static CLI_PROBLEMS: [AtomicUsize; 2] = const { [AtomicUsize::new(0), AtomicUsize::new(0)] };
 }
 
 #[cfg(not(test))]
-fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+fn with_problem_count<R>(f: impl FnOnce(&[AtomicUsize; 2]) -> R) -> R {
     f(&CLI_PROBLEMS)
 }
 
 #[cfg(test)]
-fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+fn with_problem_count<R>(f: impl FnOnce(&[AtomicUsize; 2]) -> R) -> R {
     CLI_PROBLEMS.with(f)
 }
 
@@ -257,15 +261,22 @@ pub fn note_cli_problem() {
     if quiet_now() {
         return;
     }
-    with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
+    with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
 }
 
-/// Read and reset the problem count. `swap`, not `load`: each build (and each
-/// `--watch` rebuild) must start counting from zero, or problems from an
-/// earlier build would be double-reported in a later summary.
+/// Every problem this process has counted.
+pub(crate) fn problems_counted() -> usize {
+    with_problem_count(|n| n[0].load(Ordering::Relaxed))
+}
+
+/// The problems counted since the last take, which moves the mark: each build
+/// (and each `--watch` rebuild) reports only its own.
 pub fn take_cli_problems() -> usize {
     with_reported(|r| r.clear());
-    with_problem_count(|n| n.swap(0, Ordering::Relaxed))
+    with_problem_count(|n| {
+        let now = n[0].load(Ordering::Relaxed);
+        now.saturating_sub(n[1].fetch_max(now, Ordering::Relaxed))
+    })
 }
 
 /// Drop-in for `cli_eprintln!` at call sites that report a build *problem*
@@ -340,9 +351,9 @@ pub(crate) use log_note;
 /// about the build that just ran. Each CLI entry point prints it immediately
 /// after calling this — see `startup::headless` and `lib::run_cli_build`.
 ///
-/// **Returns the problem count it drained**, and that return value is the only
-/// way to learn it. [`take_cli_problems`] is a `swap`, so by the time this
-/// function returns the counter reads zero — a caller that decides `--strict`'s
+/// **Returns the problem count it took**, and that return value is the only
+/// way to learn it. [`take_cli_problems`] moves its mark, so by the time this
+/// function returns another take reads zero — a caller that decides `--strict`'s
 /// exit code by calling `take_cli_problems()` *after* this would always see 0
 /// and `--strict` would be green forever. Decide the exit code from the value
 /// returned here.

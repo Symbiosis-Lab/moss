@@ -33,11 +33,15 @@
 use crate::build::scan::slug::slugify_dir_path;
 use std::fmt;
 
-/// Directory every auto-generated OG card is written under, shared by
-/// [`ServedPath::for_og_card`] and the incremental render skip's card
-/// carry-forward (`build/render/blocking.rs`) and the media-settle re-render
-/// trigger (`build.rs`), both of which recognize cards by this prefix alone.
+/// Directory every auto-generated OG card is written under.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
+
+/// Whether a served path is a sharing card. A page names its card by an
+/// address hashed from the card's inputs, so no page reads whether the card
+/// exists yet: a card landing at a seal changes no page.
+pub fn is_sharing_card(path: &str) -> bool {
+    path.starts_with(OG_CARD_PREFIX)
+}
 
 pub use moss_core::page::site_page::NOT_FOUND_PAGE;
 

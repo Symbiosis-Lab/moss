@@ -205,18 +205,16 @@ fn a_build_that_reused_a_serving_seal_does_not_let_the_next_one_stop() {
     assert_publishes_a_full_render(&site);
 }
 
-/// Media the seal found other than the ones its render read (a first build's
-/// share image, a video ladder registered at the seal) leave no page to carry:
-/// the build after renders every page, and the one after that is unchanged.
+/// A first build's sharing cards land at its seal, but no page reads one, so
+/// the seal is settled and the build after it, with nothing changed, ends at
+/// its entry.
 #[test]
-fn a_build_after_media_landed_at_the_seal_renders_every_page() {
+fn a_build_after_a_cold_build_with_nothing_changed_ends_at_its_entry() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let site = Site::new();
     build(site.root(), BuildTrigger::Unobserved);
     let record = build(site.root(), BuildTrigger::Unobserved);
-    assert!(rendered_everything(&record), "{record}");
-    let settled = build(site.root(), BuildTrigger::Unobserved);
-    assert!(unchanged(&settled), "{settled}");
+    assert!(unchanged(&record), "{record}");
 }
 
 /// A video and a `.webp` source are published by their media lanes, not the
@@ -253,6 +251,19 @@ fn one_markdown_edit_renders_that_page_and_not_the_site() {
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_rendered") >= 1, "{record}");
+    assert!(count(&record, "pages_carried") > 0, "{record}");
+}
+
+/// A first build's sharing cards are new beside an empty last seal, but a page
+/// names its card by address whether or not the card exists yet.
+#[test]
+fn the_first_edit_after_a_cold_build_renders_that_page_and_not_the_site() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    build(site.root(), BuildTrigger::Unobserved);
+    site.write("about.md", "---\ntitle: About\n---\n\nAbout us, at length.\n");
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
 }
 
