@@ -43,6 +43,11 @@
  * Then Alt with an arrow on a `:::` block's opening fence moves the whole
  * block, and on a line in its body stops at the closing fence.
  *
+ * Then the `:::` fences of a paired block hang in the margin beside a rail, at
+ * a phone width and past the reading measure, and an unpaired one stays in the
+ * text; Backspace on a hung fence unwraps the block in one undo step, and a
+ * fence marker opens no line-type menu where a heading's `#` does.
+ *
  * Then the create menu offers a page's version in another language only when
  * it has none: a version linked by `translationKey` under another file name
  * counts.
@@ -80,6 +85,8 @@ const EVENTS: Record<string, string> = {
 };
 
 const BLOCKS = '---\ntitle: Blocks\n---\nIntro paragraph.\n\n:::callout\nFirst inside.\n\nSecond inside.\n:::\n\nAfter the block.\n';
+
+const FENCES = '---\ntitle: Fences\n---\n# Heading\n\n:::grid\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n:::\n\nA paragraph.\n\n:::note\n';
 
 const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -171,6 +178,7 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
     writeFileSync(join(site, 'album.md'), '---\ntitle: Album\n---\nAn album.\n\n![Door](pictures/door.png)\n\n![Later](pictures/later.png)\n\nLast line.\n');
   }
   writeFileSync(join(site, 'blocks.md'), BLOCKS);
+  writeFileSync(join(site, 'fences.md'), FENCES);
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -387,6 +395,76 @@ test('Alt with an arrow moves a ::: block whole from its fence, and keeps a body
   await expect.poll(file, { timeout: 15_000, message: 'the file after Alt-Down then Alt-Up on a body line' })
     .toBe('---\ntitle: Blocks\n---\n:::callout\nSecond inside.\n\nFirst inside.\n:::\n\nIntro paragraph.\n\nAfter the block.\n');
   expect(await caretLine(), 'the caret moves with its block').toBe('Second inside.');
+});
+
+test('paired ::: fences hang in the margin beside a rail, an unpaired one stays text, and Backspace unwraps the block', async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  if ((await editor.locator('.seg[data-path="fences.md"]').count()) === 0) await openTreeRoot(editor);
+  await editor.click('.seg[data-path="fences.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('A paragraph.', { timeout: 15_000 });
+  const file = () => readFileSync(join(serve.site, 'fences.md'), 'utf8');
+  const line = (text: string) => editor.locator('.cm-line', { hasText: text });
+  // Where the line's marker ends and its text begins, and the rail's box.
+  const geometry = (text: string) => line(text).evaluate((el) => {
+    const hang = el.querySelector('.cm-hang')?.getBoundingClientRect();
+    const own = el.getBoundingClientRect();
+    const textLeft = own.left + parseFloat(getComputedStyle(el).paddingLeft);
+    const rail = getComputedStyle(el, '::after');
+    return {
+      hung: !!hang, hangRight: hang?.right ?? null, hangLeft: hang?.left ?? null, textLeft,
+      railWidth: rail.content === 'none' ? 0 : parseFloat(rail.width), railLeft: rail.content === 'none' ? null : own.left + parseFloat(rail.left),
+      menuTarget: !!el.querySelector('.cm-hang[data-indicator]'),
+    };
+  });
+
+  // The reading inset is spine + gutter in a pane up to about 797px wide and (pane - measure) / 2 beyond it: the panes run from the narrowest through both sides of that switch.
+  const pane = () => editor.evaluate(() => document.querySelector('.cm-scroller')!.clientWidth);
+  const inset = () => line('One.').evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft));
+  let narrowInset = 0;
+  for (const [width, regime] of [[420, 'below'], [780, 'below'], [820, 'above'], [1600, 'above']] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(async () => (await pane() > 797) === (regime === 'above'), { message: `the editor pane at ${width}px` }).toBe(true);
+    const paneWidth = await pane(), padding = await inset();
+    console.log(`hung fences: viewport ${width}px, editor pane ${paneWidth}px, text inset ${padding}px`);
+    if (regime === 'below') narrowInset = narrowInset || padding;
+    else expect(padding, 'past the switch the inset grows with the pane').toBeGreaterThan(narrowInset);
+    const open = await geometry(':::grid');
+    expect(open.hung, `the opening fence hangs at ${width}px`).toBe(true);
+    expect(open.hangRight!, 'the marker ends before the text column').toBeLessThanOrEqual(open.textLeft);
+    expect(open.hangLeft!, 'the marker is not clipped off the left edge').toBeGreaterThanOrEqual(0);
+    expect(open.railWidth, 'one rail beside the outer fence').toBeGreaterThan(0);
+    expect(open.railLeft!, 'the rail is in the margin, left of the marker').toBeLessThan(open.hangLeft!);
+
+    const nested = await geometry('::::buttons');
+    expect(nested.hung).toBe(true);
+    expect(nested.railWidth, 'a nested block stacks a second rail').toBeGreaterThan(open.railWidth);
+
+    const body = await geometry('One.');
+    expect(body.hung).toBe(false);
+    expect(body.railWidth, 'a body line keeps its rail').toBeGreaterThan(0);
+
+    const close = await line(':::').evaluateAll((els) => els.map((el) => ({ text: el.textContent, hung: !!el.querySelector('.cm-hang') })));
+    expect(close.filter((l) => l.hung).length, 'both closing fences hang and so does the outer opening one').toBeGreaterThanOrEqual(3);
+
+    const lone = await geometry(':::note');
+    expect(lone.hung, 'an unpaired fence stays in the text column').toBe(false);
+    expect(lone.railWidth).toBe(0);
+  }
+
+  await editor.locator('.cm-line', { hasText: '# Heading' }).locator('.cm-hang').click();
+  await expect(editor.locator('[role="menu"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await line(':::grid').locator('.cm-hang').click();
+  await page.waitForTimeout(300);
+  expect(await editor.locator('[role="menu"]').count(), 'a fence marker opens no line-type menu').toBe(0);
+
+  // The caret is at the start of the fence's text after the click; Backspace unwraps.
+  await page.keyboard.press('Backspace');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Backspace on the hung opening fence' })
+    .toBe('---\ntitle: Fences\n---\n# Heading\n\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n\nA paragraph.\n\n:::note\n');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the block' }).toBe(FENCES);
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
