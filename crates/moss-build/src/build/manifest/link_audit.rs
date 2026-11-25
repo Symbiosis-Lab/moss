@@ -218,17 +218,21 @@ pub fn dead_links_in_page(
 /// generation is scanned and no tree traversal is added to the seal tail.
 /// A page that cannot be read (an eviction between write and audit) is skipped
 /// — the alternative is inventing broken links out of an I/O error.
+/// Pages are audited in parallel; `collect` keeps them in sorted order.
 pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
+    use rayon::prelude::*;
     let files = sealed.files();
     let satisfied: HashSet<&str> = files.keys().map(String::as_str).collect();
     let mut pages: Vec<&&str> = satisfied.iter().filter(|k| k.ends_with(".html")).collect();
     pages.sort();
-    let mut dead = Vec::new();
-    for page in pages {
-        let Ok(html) = std::fs::read_to_string(stage_dir.join(page)) else { continue };
-        dead.extend(dead_links_in_page(page, &html, &satisfied, stage_dir));
-    }
-    dead
+    pages
+        .par_iter()
+        .flat_map_iter(|page| {
+            std::fs::read_to_string(stage_dir.join(page))
+                .map(|html| dead_links_in_page(page, &html, &satisfied, stage_dir))
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 /// How many dead links the summary line quotes by name before falling back to
