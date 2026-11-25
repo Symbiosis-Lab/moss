@@ -404,7 +404,7 @@ fn compare_directories(actual: &Path, expected: &Path) -> Vec<String> {
                 ));
             }
         }
-        // Everything else (raster images) is presence-only — see
+        // Everything else is presence-only — see
         // `is_content_compared` for why that is deliberate.
     }
 
@@ -452,13 +452,12 @@ fn update_snapshots(actual: &Path, expected: &Path) -> std::io::Result<()> {
 ///     filename is a content hash of it, so every regen replaced ~18 PNGs per
 ///     fixture that the walker then skipped. The card's existence, not its
 ///     bytes, is the contract.
-///   - Every file that reads as UTF-8 is normalized, not just `.html`/`.css`.
-///     The extension filter is a compare-side detail (only those two are
-///     content-compared); on the WRITE side it left `llms.txt` and
-///     `_moss/previews.json` carrying the per-run site name — the title-less
-///     homepage falls back to the temp-dir folder name — where nothing ever
-///     compared them and nothing ever caught it. Binary files fail
-///     `read_to_string` and fall through to a byte copy.
+///   - A content-compared file is stored normalized. Every other file is
+///     stored empty: the comparison checks only that it exists, so its
+///     presence is its whole stored form. Storing its bytes let encoder
+///     output that is not reproducible under load (HLS segments from x264's
+///     frame-threaded rate control, re-encoded images) rewrite the fixture on
+///     every regen with nothing changed.
 ///
 /// This does NOT apply to `copy_dir_recursive`'s other caller, which stages a
 /// fixture's `input/` into the temp build dir — that side is the build's
@@ -482,14 +481,34 @@ fn copy_dir_normalized_rel(src: &Path, dst: &Path, rel: &Path) -> std::io::Resul
         if is_platform_variant_path(&child_rel) {
             continue;
         }
-        match fs::read_to_string(&path) {
-            Ok(content) => fs::write(&dst_path, normalize_html(&content))?,
-            Err(_) => {
-                fs::copy(&path, &dst_path)?;
-            }
+        let extension = child_rel.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if is_content_compared(extension) {
+            fs::write(&dst_path, normalize_html(&fs::read_to_string(&path)?))?;
+        } else {
+            fs::write(&dst_path, b"")?;
         }
     }
     Ok(())
+}
+
+#[test]
+fn presence_only_files_store_the_same_form_whatever_their_bytes() {
+    let stored = |segment: &[u8]| {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        fs::create_dir_all(src.path().join("clip.hls")).unwrap();
+        fs::write(src.path().join("clip.hls/seg-1.m4s"), segment).unwrap();
+        // The playlist is text but carries the measured bitrate, so it varies too.
+        fs::write(src.path().join("clip.hls/master.m3u8"), segment).unwrap();
+        fs::write(src.path().join("index.html"), "<p>kept</p>").unwrap();
+        copy_dir_normalized(src.path(), &dst.path().join("expected")).unwrap();
+        let read = |rel: &str| fs::read(dst.path().join("expected").join(rel)).unwrap();
+        (read("clip.hls/seg-1.m4s"), read("clip.hls/master.m3u8"), read("index.html"))
+    };
+    let (segment, playlist, page) = stored(b"one run's encoder output");
+    assert_eq!((segment, playlist), (Vec::new(), Vec::new()));
+    assert_eq!(page, b"<p>kept</p>");
+    assert_eq!(stored(b"one run's encoder output"), stored(b"another run's"));
 }
 
 /// `copy_dir_normalized` stores normalized text, and `compare_directories` then
