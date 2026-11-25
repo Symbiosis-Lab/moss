@@ -2273,6 +2273,23 @@ describe('scroll sync always-on', () => {
       expect(syncsDuring(() => scroller.dispatchEvent(new Event('scroll')))).toHaveLength(1);
     });
 
+    // A jump from the preview (the right-click rows, double click) placed the
+    // editor where the person should look; the question the load asked, and
+    // any the panel's grow re-asks, must not move it after.
+    test('a jump from the preview holds its place against the follow question', async () => {
+      const { dispatch } = await loadWithRealScroller();
+      listenCallbacks.get('editor:goto-line')!({ line: 2 });
+      window.dispatchEvent(new Event('resize'));
+      await settle();
+      expect(asked()).toEqual([]);
+      dispatch.mockClear();
+      answer(HELLO);
+      expect(dispatch).not.toHaveBeenCalled();
+      // A scroll the preview itself makes still leads.
+      listenCallbacks.get('scroll-sync:preview-to-editor')!({ type: 'source-line', line: 3 });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
     test('an answer about the document the editor has since left is dropped', async () => {
       const { dispatch } = await loadWithRealScroller();
       answer('/Users/test/blog/content/posts/other.md');

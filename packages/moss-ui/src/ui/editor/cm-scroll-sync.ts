@@ -221,7 +221,10 @@ const REVEAL_KEEP_ABOVE = 2 / 3;
 export function revealLine(view: Pick<EditorView, 'scrollDOM' | 'contentDOM' | 'state' | 'dispatch' | 'lineBlockAt' | 'documentTop'>, lineNumber: number): void {
   const n = Math.max(1, Math.min(lineNumber, view.state.doc.lines));
   if (n === 1) {
-    scrollEditorToTop(view);
+    // Through CM6, not scrollTop: a direct write is undone by the measure the
+    // caret's dispatch already scheduled. A margin taller than the title
+    // makes CM6 clamp the scroll to the very top.
+    view.dispatch({ effects: EditorView.scrollIntoView(0, { y: 'start', yMargin: view.scrollDOM.clientHeight }) });
     return;
   }
   const sd = view.scrollDOM;

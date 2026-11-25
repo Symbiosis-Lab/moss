@@ -1303,7 +1303,7 @@ async function init(): Promise<void> {
   pendingListeners.push(
     uiHost.bus.on<{ line: number }>(EDITOR_GOTO_LINE, (payload) => {
       if (!cmEditor) return;
-      followPreview();
+      holdJump();
       uiHost.focusView?.();
       gotoLine(cmEditor.getView(), payload.line);
     }),
@@ -1312,7 +1312,7 @@ async function init(): Promise<void> {
     uiHost.bus.on<{ selector: string }>(EDITOR_GOTO_RULE, (payload) => {
       const view = cmEditor?.getView();
       const line = view && findRuleLine(view.state.doc.toString(), payload.selector);
-      if (view && line) { followPreview(); uiHost.focusView?.(); gotoLine(view, line); }
+      if (view && line) { holdJump(); uiHost.focusView?.(); gotoLine(view, line); }
     }),
   );
 
@@ -1321,7 +1321,7 @@ async function init(): Promise<void> {
   pendingListeners.push(
     uiHost.bus.on<{ text: string; startLine: number; endLine: number }>('editor:select-text', (payload) => {
       if (!cmEditor) return;
-      followPreview();
+      holdJump();
       const { text, startLine, endLine } = payload;
       selectTextNearLine(cmEditor.getView(), startLine, endLine, text);
     }),
@@ -3201,16 +3201,17 @@ onHoldChange(applyHold);
  * Following means going where the preview is, not only moving when it moves:
  * see `followPreviewPosition`.
  *
+ * `jump`: a jump from the preview (the right-click rows, double click) put
+ * the editor where the person should look. Neither pane leads: the editor
+ * neither asks where the preview is nor tells it, until the preview scrolls
+ * or another document opens.
+ *
  * Only a leading editor tells the preview where to go. CM6 fires `scroll` for
  * layout as readily as for the user, so a scroll event on its own says nothing
  * about who moved: reopening the editor on the file it last showed grows the
- * panel from collapsed, the reflow moves `scrollTop`, and the editor used to
- * push the line it had been left on into a preview the user was reading
- * somewhere else. The 400ms lock this replaces could not tell those apart
- * either — it only hid the echo of a scroll the editor had just been told to
- * make.
+ * panel from collapsed, and the reflow moves `scrollTop`.
  */
-let editorLeads = false;
+let lead: 'preview' | 'editor' | 'jump' = 'preview';
 
 let scrollSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let caretSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3220,14 +3221,14 @@ let lastCaretSyncLine = 0;
 
 /** The preview leads again: drop the editor's lead and any sync it had queued. */
 function followPreview(): void {
-  editorLeads = false;
+  lead = 'preview';
   if (scrollSyncTimer) clearTimeout(scrollSyncTimer);
   if (caretSyncTimer) clearTimeout(caretSyncTimer);
 }
 
 /** The user is working in the editor, so its position is the one to share. */
 function leadFromEditor(): void {
-  editorLeads = true;
+  lead = 'editor';
 }
 
 let followPositionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3246,13 +3247,22 @@ let followPositionTimer: ReturnType<typeof setTimeout> | null = null;
  * a different page than this document.
  */
 function followPreviewPosition(): void {
+  if (lead !== 'preview') return;
   if (followPositionTimer) clearTimeout(followPositionTimer);
   followPositionTimer = setTimeout(() => {
     followPositionTimer = null;
     const path = currentFilePath();
-    if (editorLeads || !cmEditor || !path) return;
+    if (lead !== 'preview' || !cmEditor || !path) return;
     uiHost.bus.emit('scroll-sync:request-preview-position', { sourceFile: toAbsolute(path, projectRoot ?? '') });
   }, 150);
+}
+
+/** A jump from the preview: drop what either pane had queued and hold the editor where it lands. */
+function holdJump(): void {
+  followPreview();
+  lead = 'jump';
+  if (followPositionTimer) clearTimeout(followPositionTimer);
+  followPositionTimer = null;
 }
 
 /** Threshold for "editor at top." Mirror of TOP_THRESHOLD in
@@ -3270,7 +3280,7 @@ const BOTTOM_THRESHOLD = 4;
  * Falls back to heading-anchor sync for content without line annotations.
  */
 function onEditorScroll(): void {
-  if (!editorLeads || !cmEditor) return;
+  if (lead !== 'editor' || !cmEditor) return;
 
   if (scrollSyncTimer) clearTimeout(scrollSyncTimer);
   scrollSyncTimer = setTimeout(() => {
@@ -3343,7 +3353,7 @@ function onEditorScroll(): void {
  * key down or arrowing through a paragraph costs one message, not fifty.
  */
 function onEditorCaretMove(): void {
-  if (!editorLeads || !cmEditor) return;
+  if (lead !== 'editor' || !cmEditor) return;
   if (caretSyncTimer) clearTimeout(caretSyncTimer);
   caretSyncTimer = setTimeout(() => {
     if (!cmEditor) return;
@@ -3385,7 +3395,7 @@ function onPreviewScroll({ line, atTop, atBottom, answering }: { line?: number; 
   // happened here while it was in flight: the user starting to work in the
   // editor, or the editor moving on to another document.
   const path = currentFilePath();
-  if (answering !== undefined && (editorLeads || !path || answering !== toAbsolute(path, projectRoot ?? ''))) return;
+  if (answering !== undefined && (lead !== 'preview' || !path || answering !== toAbsolute(path, projectRoot ?? ''))) return;
   followPreview();
   const view = cmEditor.getView();
   if (atTop) scrollEditorToTop(view);
@@ -3410,7 +3420,7 @@ function onPreviewScroll({ line, atTop, atBottom, answering }: { line?: number; 
  * would sit on a different part of the page than the one being edited until a
  * scroll happened to shake it loose.
  *
- * Both triggers fire only while the editor leads (see `editorLeads`), so the
+ * Both triggers fire only while the editor leads (see `lead`), so the
  * user's own input in the editor's pane is what hands it the lead: the pane,
  * not just this scroller, because the insert bar sits beside the scroller in
  * it. (A file drop never reaches the DOM — Tauri takes it — so the native drop

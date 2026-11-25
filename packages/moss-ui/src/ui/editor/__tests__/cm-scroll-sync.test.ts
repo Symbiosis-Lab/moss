@@ -364,7 +364,7 @@ describe('selectTextNearLine', () => {
   test('line 1 clamp for article title sentinel', () => {
     const { view, dispatched } = createMockView('first line content\nsecond');
     selectTextNearLine(view as any, 1, 1, 'first');
-    expect(dispatched).toHaveLength(1);
+    expect(dispatched).toHaveLength(2); // the selection, then the scroll to the top
     expect(dispatched[0].selection.anchor).toBe(0);
     expect(dispatched[0].selection.head).toBe(5);
   });
@@ -415,12 +415,12 @@ describe('revealLine', () => {
     }
   });
 
-  test('the first line goes to the very top, where the title is', () => {
+  test('the first line goes to the very top, where the title is, through CM6', () => {
+    const into = vi.spyOn(EditorView, 'scrollIntoView');
     const v = view(5000);
-    v.scrollDOM.scrollTop = 900;
     revealLine(v, 1);
-    expect(v.scrollDOM.scrollTop).toBe(0);
-    expect(v.dispatch).not.toHaveBeenCalled();
+    expect(into).toHaveBeenLastCalledWith(0, { y: 'start', yMargin: 600 });
+    expect(v.dispatch).toHaveBeenCalledTimes(1);
   });
 });
 
