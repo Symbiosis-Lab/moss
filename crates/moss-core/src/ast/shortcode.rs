@@ -35,7 +35,7 @@ pub enum Shortcode {
     Subscribe(SubscribeShortcode),
     /// `:::buttons {.classname}` — list of action buttons.
     ///
-    /// Body is one markdown link per line (`[text](url)`). The first
+    /// Body is one link per line (`[text](url)` or `[[page|text]]`). The first
     /// button gets the primary class; subsequent buttons get secondary.
     /// Optional `{.classname}` extra classes attach to the wrapping div.
     ///

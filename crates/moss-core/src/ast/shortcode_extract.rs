@@ -1460,10 +1460,12 @@ fn parse_buttons_body(args: &str, body: &str) -> (ButtonsShortcode, Vec<String>)
             // first is primary, the rest secondary), but the link is still the
             // author's button: keep it and say the attributes are dropped.
             let (link, dropped_attrs) = match trimmed.strip_suffix('}').and_then(|r| r.rsplit_once('{')) {
-                Some((head, _)) if head.trim_end().ends_with(')') => (head.trim_end(), true),
+                Some((head, _)) if head.trim_end().ends_with(')') || head.trim_end().ends_with("]]") => {
+                    (head.trim_end(), true)
+                }
                 _ => (trimmed, false),
             };
-            match extract_markdown_link(link) {
+            match extract_markdown_link(link).or_else(|| extract_wikilink(link)) {
                 Some((text, url)) => {
                     if url.contains("](") || url.contains(") [") {
                         warnings.push(format!(
@@ -1481,7 +1483,7 @@ fn parse_buttons_body(args: &str, body: &str) -> (ButtonsShortcode, Vec<String>)
                     items.push(ButtonItem { text, url: Url::unresolved(url) });
                 }
                 None => warnings.push(format!(
-                    "shortcode `:::buttons` expects one `[text](url)` link per line; `{}` is not one and is left out",
+                    "shortcode `:::buttons` expects one `[text](url)` or `[[page|text]]` link per line; `{}` is not one and is left out",
                     clip_for_warning(trimmed)
                 )),
             }
@@ -1501,6 +1503,22 @@ fn extract_markdown_link(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((text.to_string(), url.to_string()))
+}
+
+/// Read a `[[page]]` or `[[page|text]]` line as `(text, address)`. The text is
+/// the alias, else the target as written. The fragment is slugged here as a
+/// wikilink's is, because the link pass reads a button address as a markdown
+/// destination and keeps its fragment raw.
+fn extract_wikilink(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    let r = extract_md_references(s).into_iter().next().filter(|r| r.byte_from == 0 && r.byte_to == s.len())?;
+    let text = match r.syntax {
+        RefSyntax::WikilinkAliased { display } => display,
+        RefSyntax::WikilinkStem | RefSyntax::WikilinkPath => s.get(2..s.len() - 2)?.to_string(),
+        _ => return None,
+    };
+    let (path, suffix) = crate::resolve::fuzzy_path::split_url_path(&r.text);
+    Some((text, format!("{path}{}", super::resolve_urls::slug_wikilink_suffix(suffix))))
 }
 
 /// Parse `:::subscribe {placeholder="..." button="..."}` into a typed struct.

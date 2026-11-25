@@ -53,6 +53,7 @@ mod beacon_file_test;
 mod body_heading_replaces_title_note_test;
 mod breadcrumb_separator_contrast_test;
 mod build_tree_migration_test;
+mod buttons_wikilink_test;
 mod card_fields_test;
 mod card_subtitle_test;
 mod card_text_wrap_test;

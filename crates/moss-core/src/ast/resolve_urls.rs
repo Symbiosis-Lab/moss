@@ -963,9 +963,8 @@ where
         Shortcode::Subscribe(_) | Shortcode::Recent(_) | Shortcode::Form(_) => {}
         Shortcode::Buttons(args) => {
             for item in &mut args.items {
-                // ButtonItem display text comes from item.text per the
-                // shortcode shape (crates/moss-core/src/ast/shortcode.rs).
-                // Button URLs are authored markdown targets, not wikilinks.
+                // A wikilink line's fragment is slugged when it is parsed,
+                // so every button address is read as a markdown destination.
                 let text = item.text.clone();
                 f(&mut item.url, &text, false);
             }

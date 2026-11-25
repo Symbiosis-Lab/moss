@@ -3445,6 +3445,19 @@ fn two_links_on_one_buttons_line_are_named_in_a_warning() {
     assert!(result.warnings.iter().any(|w| w.contains("[a](/a/) [b](/b/)") && w.contains("one link per line")), "{:?}", result.warnings);
 }
 
+#[test]
+fn a_wikilink_buttons_line_is_a_button_with_its_alias_and_slugged_fragment() {
+    let result = extract_shortcodes(":::buttons\n[[訂閱|訂閱]]\n[[about#Our Team]]\n[[a]] [[b]]\n:::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => {
+            let items: Vec<_> = args.items.iter().map(|i| (i.text.as_str(), i.url.clone())).collect();
+            assert_eq!(items, [("訂閱", Url::unresolved("訂閱")), ("about#Our Team", Url::unresolved("about#our-team"))]);
+        }
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(result.warnings.iter().any(|w| w.contains("[[a]] [[b]]")), "{:?}", result.warnings);
+}
+
 mod plugin_blocks {
     use crate::ast::{parse_with_config, Block, ParseConfig, Shortcode};
     use crate::page::block_names::BlockNames;
