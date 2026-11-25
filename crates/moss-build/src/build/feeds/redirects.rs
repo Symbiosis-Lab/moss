@@ -22,11 +22,12 @@ use crate::types::content::file_entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// Detect URL renames by comparing article UIDs between what is live and what
+/// Detect URL renames by comparing page UIDs between what is live and what
 /// this build produced.
 ///
 /// For each UID present in both at different pretty-URLs, records
-/// `old_url → new_url`. Articles without a UID are skipped.
+/// `old_url → new_url`. Articles and folder homes are matched alike; pages
+/// without a UID are skipped.
 ///
 /// The baseline is a [`LiveBaseline`] rather than a whole `ArticleMap` because
 /// uid and URL are all this ever read of it — see
@@ -37,12 +38,7 @@ pub fn detect_renames(
 ) -> HashMap<String, String> {
     let prev_uid_to_url = previous.urls_by_uid();
 
-    let curr_uid_to_url: HashMap<&str, &str> = current_map
-        .articles
-        .iter()
-        .filter_map(|(url, info)| info.uid.as_deref().map(|uid| (uid, url.as_str())))
-        .collect();
-
+    let curr_uid_to_url = current_urls_by_uid(current_map);
     let mut renames = HashMap::new();
 
     for (uid, old_url) in &prev_uid_to_url {
@@ -54,6 +50,52 @@ pub fn detect_renames(
     }
 
     renames
+}
+
+/// Where each uid this build gave a page (article or folder home) is served.
+fn current_urls_by_uid(map: &ArticleMap) -> HashMap<&str, &str> {
+    let articles = map.articles.iter().filter_map(|(url, info)| Some((info.uid.as_deref()?, url.as_str())));
+    let homes = map.page_uids.iter().map(|(url, uid)| (uid.as_str(), url.as_str()));
+    articles.chain(homes).collect()
+}
+
+/// Forwards for the folders a rename moved, derived from the page renames: a
+/// folder without an `index.md` has no uid of its own to follow. `a/b/c/ →
+/// z/b/c/` proposes `a/ → z/` and `a/b/ → z/b/`. A proposal `F → G` holds when
+/// the last publish served `F`, this build serves nothing there, and every
+/// page `previous` held under `F` that this build still has is now at the same
+/// place under `G`; two proposals for one `F` cancel out.
+pub fn folder_forwards(
+    renames: &HashMap<String, String>,
+    previous: &LiveBaseline,
+    previous_files: &HashMap<String, String>,
+    current_by_uid: &HashMap<&str, &str>,
+    current_urls: &HashSet<String>,
+) -> HashMap<String, String> {
+    let mut proposed: HashMap<String, Option<String>> = HashMap::new();
+    for (old, new) in renames {
+        let (o, n): (Vec<&str>, Vec<&str>) = (old.split_terminator('/').collect(), new.split_terminator('/').collect());
+        let mut k = 1;
+        while k < o.len() && k < n.len() && o[o.len() - k] == n[n.len() - k] {
+            let folder = |segs: &[&str]| format!("{}/", segs.join("/"));
+            let (from, to) = (folder(&o[..o.len() - k]), folder(&n[..n.len() - k]));
+            proposed.entry(from).and_modify(|t| if t.as_deref() != Some(to.as_str()) { *t = None }).or_insert(Some(to));
+            k += 1;
+        }
+    }
+    proposed
+        .into_iter()
+        .filter_map(|(from, to)| Some((from, to?)))
+        .filter(|(from, to)| {
+            from != to
+                && !renames.contains_key(from)
+                && previous_files.contains_key(&pretty_url_to_fs_path(from))
+                && !current_urls.contains(from)
+                && previous.entries.iter().filter(|e| e.url.starts_with(from.as_str()) && e.url != *from).all(|e| {
+                    current_by_uid.get(e.uid.as_str()).is_none_or(|now| e.url.strip_prefix(from.as_str()).is_some_and(|rel| *now == format!("{to}{rel}")))
+                })
+        })
+        .collect()
 }
 
 /// Every URL a real page — article or folder index — will serve in this
@@ -243,23 +285,15 @@ pub fn emit_redirect_table(
         Baseline::Present(projection) => detect_renames(projection, current_article_map),
         Baseline::Absent | Baseline::Unreadable(_) => HashMap::new(),
     };
-    // Folder homes have no article UID entry. Their unchanged source path
-    // still identifies an output moved by slug rules or a `url:` edit.
     use crate::build::manifest::{backfill, published_record};
     use crate::build::media::qr::qr_key_for_url_path;
-    use crate::build::scan::article_map::to_pretty_url;
-    let previous = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref());
-    if let Some(previous) = &previous {
-        let folder_sources: HashSet<&str> = current_article_map.pages.values().map(String::as_str).collect();
-        for (source, old) in &previous.source_to_output {
-            let Some(new) = pending.source_to_output().get(source) else { continue };
-            if old == new { continue; }
-            if folder_sources.contains(source.as_str()) {
-                new_renames.insert(to_pretty_url(old), to_pretty_url(new));
-            }
-        }
-    }
     let current_urls = current_build_urls(current_article_map);
+    let previous = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref());
+    if let (Baseline::Present(projection), Some(previous)) = (&baseline, &previous) {
+        let by_uid = current_urls_by_uid(current_article_map);
+        let folders = folder_forwards(&new_renames, projection, &previous.files, &by_uid, &current_urls);
+        new_renames.extend(folders);
+    }
     let mut merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
     // QR codes are derived from the stubs on every build; drop the ones older builds saved.
     merged.retain(|from, _| !from.starts_with("qr/"));
@@ -511,6 +545,38 @@ mod tests {
         live_baseline::from_article_map(map)
     }
 
+    /// `folder_forwards` over a folder `river/` whose pages were at `before`
+    /// and are now at `after` (`None`: deleted), the folder served last time.
+    fn forwards_for(before: &[(&str, &str)], after: &[(&str, Option<&str>)]) -> HashMap<String, String> {
+        let entry = |uid: &str, url: &str| crate::build::manifest::change_set::LiveEntry {
+            uid: uid.into(), url: url.into(), source_path: String::new(), title: String::new(),
+        };
+        let previous = LiveBaseline { entries: before.iter().map(|(uid, url)| entry(uid, url)).collect(), ..Default::default() };
+        let by_uid: HashMap<&str, &str> = after.iter().filter_map(|(uid, now)| Some((*uid, (*now)?))).collect();
+        let old = |uid: &str| before.iter().find(|(u, _)| *u == uid).unwrap().1.to_string();
+        let renames: HashMap<String, String> =
+            by_uid.iter().filter(|(uid, now)| old(uid) != **now).map(|(uid, now)| (old(uid), now.to_string())).collect();
+        let files = HashMap::from([("river/index.html".to_string(), "h".to_string())]);
+        let urls: HashSet<String> = by_uid.values().map(|u| u.to_string()).collect();
+        folder_forwards(&renames, &previous, &files, &by_uid, &urls)
+    }
+
+    #[test]
+    fn a_renamed_folder_forwards_its_own_address() {
+        let before = [("u1", "river/flood/"), ("u2", "river/banks/high/")];
+        let moved = forwards_for(&before, &[("u1", Some("stream/flood/")), ("u2", Some("stream/banks/high/"))]);
+        assert_eq!(moved, HashMap::from([("river/".to_string(), "stream/".to_string())]), "river/banks/ was never served");
+        let one_deleted = forwards_for(&before, &[("u1", Some("stream/flood/")), ("u2", None)]);
+        assert_eq!(one_deleted.get("river/").map(String::as_str), Some("stream/"));
+    }
+
+    #[test]
+    fn a_folder_whose_pages_did_not_all_move_together_is_not_forwarded() {
+        let before = [("u1", "river/flood/"), ("u2", "river/rain/")];
+        assert!(forwards_for(&before, &[("u1", Some("stream/flood/")), ("u2", Some("river/rain/"))]).is_empty(), "a page stayed");
+        assert!(forwards_for(&before, &[("u1", Some("stream/flood/")), ("u2", Some("lake/rain/"))]).is_empty(), "two new folders");
+    }
+
     // ---------------------------------------------------------------
     // detect_renames
     // ---------------------------------------------------------------
@@ -536,10 +602,10 @@ mod tests {
 
         let (_tmp, paths, output) = qr_fixture();
         let cases = [
-            ("cafe\u{301}/index.md", "cafe/index.html", "café/index.html", None),
-            ("folder/index.md", "share-id/index.html", "share/id/index.html", None),
-            ("ordinary.md", "path-item/index.html", "path/item/index.html", Some("arti0001")),
-            ("note-e\u{301}.md", "note-e/index.html", "note-é/index.html", Some("arti0002")),
+            ("cafe\u{301}/index.md", "cafe/index.html", "café/index.html", "home0001"),
+            ("folder/index.md", "share-id/index.html", "share/id/index.html", "home0002"),
+            ("ordinary.md", "path-item/index.html", "path/item/index.html", "arti0001"),
+            ("note-e\u{301}.md", "note-e/index.html", "note-é/index.html", "arti0002"),
         ];
         let mut previous_map = ArticleMap::new();
         let mut current_map = ArticleMap::new();
@@ -549,13 +615,14 @@ mod tests {
             record.source_to_output.insert(source.into(), old.into());
             record.files.insert(old.into(), "old-page".into());
             record.files.insert(qr_key_for_url_path(old), "old-qr".into());
-            if let Some(uid) = uid {
-                let mut info = article_info_with_uid(Some(uid));
-                info.source_path = source.into();
-                previous_map.articles.insert(to_pretty_url(old), info.clone());
-                current_map.articles.insert(to_pretty_url(new), info);
-            } else {
+            let mut info = article_info_with_uid(Some(uid));
+            info.source_path = source.into();
+            previous_map.articles.insert(to_pretty_url(old), info.clone());
+            if source.ends_with("index.md") {
                 current_map.pages.insert(to_pretty_url(new), source.into());
+                current_map.page_uids.insert(to_pretty_url(new), uid.into());
+            } else {
+                current_map.articles.insert(to_pretty_url(new), info);
             }
             let page = ServedPath::from_source(new).unwrap();
             pending.register_source_mapping(source.into(), &page);

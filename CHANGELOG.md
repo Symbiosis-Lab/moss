@@ -73,6 +73,7 @@ All notable changes to moss will be documented here.
 - A Finder alias in a copy of a site folder publishes the copy's own file; it used to be skipped as pointing outside the folder, taking its address offline.
 - An article with comments no longer logs a 405 in the `moss edit` preview.
 - The Obsidian plugin checks the notes of a moss folder inside a vault, below its top level, as it checks a vault that is a moss folder: each note against the files, fields and language of the moss folder it sits in, with links read from there. A moss folder inside another is its own site, left out of the one around it, as in a build. Notes outside every moss folder stay unchecked.
+- After you rename a folder, its old address forwards to the new one when you publish, whether or not the folder has an `index.md`. Before, publishing reported the folder's page deleted, and old links to it broke.
 
 ### Removed
 

@@ -99,6 +99,10 @@ pub struct ArticleMap {
     /// link-target completion both read it).
     #[serde(default)]
     pub page_titles: HashMap<String, String>,
+    /// Uid of every `pages` entry that has one, same key: what follows a folder
+    /// home to its new address when the folder is renamed.
+    #[serde(default)]
+    pub page_uids: HashMap<String, String>,
 
     /// Rendered site names by pretty page URL, independent of content language.
     #[serde(default)]
@@ -496,6 +500,9 @@ pub fn build_article_map(
             let pretty_url = to_pretty_url(&doc.url_path);
             if let Some(ref src) = doc.source_path {
                 map.page_titles.insert(pretty_url.clone(), doc.title.clone());
+                if let Some(uid) = &doc.uid {
+                    map.page_uids.insert(pretty_url.clone(), uid.clone());
+                }
                 map.pages.insert(pretty_url, src.clone());
             }
             continue;
