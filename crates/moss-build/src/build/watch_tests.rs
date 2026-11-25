@@ -4382,14 +4382,7 @@ fn an_atomic_save_of_a_known_page_is_a_content_edit() {
         }
         DebouncedEvent::new(event, std::time::Instant::now())
     };
-    let kind = |ev: DebouncedEvent, baseline: Option<&SiteHashes>| match classify_trigger(root, &[&ev], || baseline.cloned()) {
-        BuildTrigger::ContentOnly(_) => "content",
-        BuildTrigger::Structural(_) => "structural",
-        BuildTrigger::Full => "full",
-        BuildTrigger::Unobserved => "unobserved",
-        BuildTrigger::ImagesSettled { .. } => "images-settled",
-        BuildTrigger::VideosSettled => "videos-settled",
-    };
+    let kind = |ev: DebouncedEvent, baseline: Option<&SiteHashes>| crate::build::record::trigger_word(&classify_trigger(root, &[&ev], || baseline.cloned()));
     let renamed_over = || event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), &["a.md"]);
     assert_eq!(kind(renamed_over(), Some(&baseline)), "content");
     assert_eq!(kind(event(EventKind::Create(CreateKind::File), &["a.md"]), Some(&baseline)), "content");

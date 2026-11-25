@@ -127,6 +127,7 @@ pub mod parse_cache;
 pub mod served_path;
 pub mod page;
 pub mod phase;
+pub mod record;
 pub mod prior_output;
 pub mod scan;
 
@@ -773,14 +774,7 @@ pub async fn run_pipeline(mut config: PipelineConfig) -> Result<String, String> 
         cloud_readiness::record_download_pool(reads_before);
         result
     }).await;
-    crate::build::phase::log_build_summary(
-        &collector,
-        pipeline_start.elapsed(),
-        if result.is_ok() { "ok" } else { "error" },
-        &config.trigger,
-        config.reason,
-    );
-    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger, config.reason);
+    crate::build::phase::finish_build(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger, config.reason);
     result
 }
 

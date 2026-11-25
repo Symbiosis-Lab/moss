@@ -42,7 +42,7 @@
 //!   a real upload showed these start/completed pairs as noise once a build ran
 //!   many times in a session, and the information they carry — which phase,
 //!   how long — now survives in the one `build.summary` INFO line `run_pipeline`
-//!   logs per build (see `record`/`log_build_summary` below).
+//!   logs per build (see `finish_build` below).
 //! - Logged on `Drop` so an early `?` return still records the partial elapsed.
 //! - `target: "phase"` so users can filter (`MOSS_LOG_LEVEL=debug` shows
 //!   these; future: per-target level filter).
@@ -52,8 +52,8 @@
 //!   is a problem the author can fix and fails `--strict`, and machine speed
 //!   is not one (the default CLI log level hides INFO; `MOSS_LOG_LEVEL=info`
 //!   shows it). The budgets are
-//!   initial guesses meant to be tuned as real timing data accrues (see
-//!   `PHASE_BUDGETS_MS` below), so an overrun is a performance note, not a
+//!   initial guesses meant to be tuned as real timing data accrues (the
+//!   phase rows of `record::BUILD`), so an overrun is a performance note, not a
 //!   build failure, and it must never read as one — to a person scanning the
 //!   log, or to a tool that treats a WARN or ERROR line as something to fix.
 //!   It is still a real signal, not the noise the started/completed pair was,
@@ -103,121 +103,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Per-phase build-time budgets in milliseconds.
-///
-/// A phase elapsed >= budget logs INFO; >= 2x budget logs INFO, worded harder. Phases not
-/// listed here are unbudgeted (no threshold logging) — add a row when adding
-/// a new `PhaseTrace::start(...)` call site.
-///
-/// These are INITIAL values to tune as real-world timing data accrues.
-/// Seeds: the observed timings in this module's doc examples
-/// (scan ~312ms, process_hooks ~13.4s, native_process_spawn ~1ms) plus
-/// generous headroom for network-bound phases (link-card fetches, plugin
-/// process-hook syncs such as the Matters import legitimately run tens of
-/// seconds).
-const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
-    // Whole-pipeline envelope; every sub-phase below nests inside it.
-    ("run_pipeline", 120_000),
-    // Network-bound: a build that exits fetches its link cards; the fetch stops at 60 s.
-    ("link_meta_build_fetch", 30_000),
-    // Filesystem walk + metadata extraction. Observed ~312ms on a typical site.
-    ("scan", 2_000),
-    // Blocking await of plugin process hooks (content download/import).
-    // Observed ~13.4s for a Matters sync; generous — the pathology this
-    // catches is the multi-minute hang class, not a slow-but-working sync.
-    ("process_hooks_await", 60_000),
-    // Non-blocking spawn — observed ~1ms. Anything slower means the spawn
-    // path grew blocking work, which violates the minimal-blocking principle.
-    ("native_process_spawn", 100),
-    // Render + encode of the whole site.
-    ("build", 30_000),
-    ("media_prelude", 5_000),
-    ("video_handling", 30_000),
-    ("background_asset_copy", 10_000),
-    ("stage_source_html", 10_000),
-    ("search_read", 2_000),
-    ("search_key", 500),
-    ("search_index", 10_000),
-    // The bundle's own IO, inside `search_index` (`search_lay` also inside
-    // `search_read` when a held bundle is served).
-    ("search_publish", 2_000),
-    ("search_gc", 2_000),
-    ("search_lay", 2_000),
-    ("seal_wait", 10_000),
-    ("seal_persist", 10_000),
-    ("seal_promote", 10_000),
-    // The seal's own passes, inside `seal_persist`: drop outputs whose blob is
-    // gone and repair the pages that named them, keep addresses the build no
-    // longer writes, sweep staging, the whole-site link check, the removed
-    // addresses, and the manifest's own write.
-    ("seal_stamp", 2_000),
-    ("seal_repair", 5_000),
-    ("seal_kept", 2_000),
-    ("seal_reclaim", 2_000),
-    ("seal_link_audit", 5_000),
-    ("seal_removed", 2_000),
-    ("seal_write", 2_000),
-    // Removing what the last build left in staging that its manifest no longer names.
-    ("staging_sweep", 2_000),
-    // Waiting for another build's hold on the folder lock or the stage-write
-    // guard. `seal_promote` starts after its waits; `build` and `seal_persist`
-    // still contain theirs, so subtract `lock_wait` to read their work. The
-    // lock itself costs well under a millisecond, so the budget is a tripwire.
-    ("lock_wait", 200),
-    // A build with no events walking the folder against the last seal
-    // (`incremental_gates::ChangeProof`): one stat per file, plus a hash for
-    // each file whose stat cannot vouch for it.
-    ("change_proof", 2_000),
-    // Reading the last sealed manifest and measuring `.moss/` against its
-    // record, once per build at the entry point.
-    ("seal_read", 1_000),
-    // Native + plugin slot collection before finalization.
-    ("slot_resolution", 10_000),
-    // Filling the collected slots into every staged page.
-    ("slot_injection", 10_000),
-    ("config_reads", 2_000),
-    ("reduce", 5_000),
-    ("render_site_files", 5_000),
-    // The content graph, page map and per-folder lookups the render reads.
-    ("render_inputs", 2_000),
-    // The parse cache's session, the media size lookup and the other inputs
-    // the markdown loop needs, read before it starts.
-    ("render_parse_setup", 2_000),
-    // Reading every page's authored source again for missing references and
-    // members-only embeds, after the markdown loop.
-    ("render_source_evidence", 5_000),
-    // Decoding the bundled place-map pack and hashing the map assets, for a
-    // site with a place kind; writing the map files after the render.
-    ("place_map_decode", 2_000),
-    ("place_map_hash", 2_000),
-    ("place_map_emit", 2_000),
-    // The article map, inventory, previews, media pages and math and diagram
-    // pictures written after the home page.
-    ("render_site_records", 5_000),
-    // The redirect table and the sitemap.
-    ("render_redirects_sitemap", 5_000),
-    ("render_handoff", 5_000),
-    // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
-    // render-phase cost on image/link-heavy vaults — measured ~16-18s on a
-    // 216-page reference vault; budget set loosely above
-    // that until real-world timing data accrues across vault sizes.
-    ("render_markdown", 60_000),
-    // Loop B: HTML emission for every page (blocking.rs). Measured ~5-7s on
-    // the same 216-page vault.
-    ("render_html_pages", 20_000),
-    ("render_homepage", 2_000),
-    // Background sharing-card generation; diagnostic budget, not a preview deadline.
-    ("render_sharing_cards", 20_000),
-    // The feeds, llms.txt and sitemap.xml, written after the preview paints.
-    ("background_site_files", 5_000),
-    // Shadow mode: facade hashing + DepGraph build + cache diff over
-    // all documents. In-memory hashing/diffing only (no I/O beyond a small
-    // JSON cache load/save), so this should stay far under render_html_pages
-    // even at large vault sizes; budget is a generous placeholder pending
-    // real measurement.
-    ("shadow_facade_diff", 10_000),
-];
-
 /// Budget classification for a completed (or aborted) phase.
 ///
 /// Both non-`Ok` tiers log at INFO (see `budget_log` below) — the name
@@ -235,10 +120,7 @@ pub enum BudgetClass {
 
 /// Look up a phase's budget. `None` for unbudgeted phases.
 fn budget_ms(phase: &str) -> Option<u64> {
-    PHASE_BUDGETS_MS
-        .iter()
-        .find(|(name, _)| *name == phase)
-        .map(|&(_, ms)| ms)
+    super::record::budget_ms(phase)
 }
 
 /// Classify an elapsed duration against the phase's budget.
@@ -264,7 +146,7 @@ pub fn budget_class(phase: &str, elapsed: Duration) -> BudgetClass {
 ///
 /// Pure, like [`budget_class`], so the level and wording are unit-testable
 /// without a log-capture harness (none exists in this crate). Both overrun
-/// tiers log at `Info`: the thresholds in `PHASE_BUDGETS_MS` are initial
+/// tiers log at `Info`: the phase budgets in `record::BUILD` are initial
 /// guesses awaiting real timing data, so an overrun is a performance note,
 /// not a failure, and must never print as a `[WARN]` or `[ERROR]` line — that reads as
 /// "the build failed" to a person scanning the log and to a coding agent
@@ -379,11 +261,16 @@ pub struct BuildTelemetry {
     pub passes: usize,
     pub phases: Vec<PhaseSample>,
     pub counts: Vec<(&'static str, usize)>,
+    /// The process's CPU so far when the build started.
+    pub cpu_at_start_ms: Option<u64>,
 }
 
 impl Default for BuildTelemetry {
     fn default() -> Self {
-        Self { started_at: chrono::Utc::now(), nested_started_at: None, passes: 0, phases: Vec::new(), counts: Vec::new() }
+        Self {
+            started_at: chrono::Utc::now(), nested_started_at: None, passes: 0, phases: Vec::new(), counts: Vec::new(),
+            cpu_at_start_ms: super::record::usage().map(|u| u.cpu_ms),
+        }
     }
 }
 
@@ -523,8 +410,48 @@ fn store_count(name: &'static str, value: usize, merge: fn(&mut usize, usize)) {
     }
 }
 
+/// The build's record: what the log line and the profile both say.
+pub fn build_summary(
+    t: &BuildTelemetry,
+    total: Duration,
+    outcome: &str,
+    trigger: &crate::build::BuildTrigger,
+    reason: Option<crate::build::BuildReason>,
+) -> super::record::Record {
+    use crate::build::BuildTrigger;
+    let mut record = super::record::Record::new(&super::record::BUILD);
+    record.word("outcome", outcome);
+    record.word("trigger", super::record::trigger_word(trigger));
+    if let BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) = trigger {
+        record.count("changed", paths.len() as u64);
+    }
+    if let Some(reason) = reason {
+        record.word("reason", &reason.to_string());
+    }
+    add_time_and_counts(&mut record, t, total);
+    if let (Some(start), Some(now)) = (t.cpu_at_start_ms, super::record::usage()) {
+        record.count("cpu_ms", now.cpu_ms.saturating_sub(start));
+    }
+    if let Some(mb) = super::record::footprint_mb() {
+        record.count("footprint_mb", mb);
+    }
+    for p in &t.phases {
+        record.ms(p.name, i64::try_from(p.ms).unwrap_or(i64::MAX));
+    }
+    record
+}
+
+/// What every timed record carries after its words: total, unattributed time
+/// and counts.
+fn add_time_and_counts(record: &mut super::record::Record, t: &BuildTelemetry, total: Duration) {
+    record.ms("total", i64::try_from(total.as_millis()).unwrap_or(i64::MAX));
+    record.ms("unattributed", unattributed_ms(&t.phases, total));
+    for &(name, v) in &t.counts {
+        record.count(name, v as u64);
+    }
+}
+
 /// The `build.summary` line, apart from the logging so its shape is testable.
-/// `unattributed` is signed: below zero, phases on the main lane overlapped.
 pub fn format_build_summary(
     t: &BuildTelemetry,
     total: Duration,
@@ -532,60 +459,8 @@ pub fn format_build_summary(
     trigger: &crate::build::BuildTrigger,
     reason: Option<crate::build::BuildReason>,
 ) -> String {
-    use crate::build::BuildTrigger;
-    use std::fmt::Write;
-    // `changed` counts the watcher's paths for this build, after its filter; a
-    // path the OS reported twice counts twice, so it is a size hint.
-    let trigger = match trigger {
-        BuildTrigger::Full => "trigger=full".to_string(),
-        BuildTrigger::Unobserved => "trigger=unobserved".to_string(),
-        BuildTrigger::ImagesSettled { .. } => "trigger=images-settled".to_string(),
-        BuildTrigger::VideosSettled => "trigger=videos-settled".to_string(),
-        BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
-        BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
-    };
-    let mut line = format!("build.summary outcome={outcome} {trigger}");
-    if let Some(reason) = reason {
-        let _ = write!(line, " reason={reason}");
-    }
-    let _ = write!(line, " total={}ms unattributed={}ms", total.as_millis(), unattributed_ms(&t.phases, total));
-    for (name, v) in &t.counts {
-        let _ = write!(line, " {name}={v}");
-    }
-    for p in &t.phases {
-        let _ = write!(line, " {}={}ms", p.name, p.ms);
-    }
-    line
+    build_summary(t, total, outcome, trigger, reason).line()
 }
-
-/// Log the single `build.summary` INFO line for one `run_pipeline` call:
-/// every phase and count the collector saw, plus the caller-supplied total
-/// wall time and outcome. Replaces the old per-phase started/completed INFO
-/// pairs — see the module doc.
-pub fn log_build_summary(
-    collector: &PhaseCollector,
-    total: Duration,
-    outcome: &str,
-    trigger: &crate::build::BuildTrigger,
-    reason: Option<crate::build::BuildReason>,
-) {
-    let line = collector.lock().map(|t| format_build_summary(&t, total, outcome, trigger, reason))
-        .unwrap_or_else(|_| format_build_summary(&BuildTelemetry::default(), total, outcome, trigger, reason));
-    log::info!(target: "build", "{line}");
-}
-
-/// Counts every build record carries, so a build that did none of the work says 0
-/// instead of dropping the key.
-const BUILD_COUNTS: &[&str] = &[
-    "pages_rendered", "pages_carried", "slot_html_scanned", "slot_html_rewritten",
-    "background_assets_copied", "background_assets_hits", "background_assets_misses",
-    "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
-    "images_unchanged", "images_dispatched", "images_joined", "image_variants_stat_only", "image_variants_blob_checks",
-    "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
-    "proved_from_seal", "unchanged_at_entry",
-];
-/// The video counts, which also make up a detached encode's own record.
-const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];
 
 /// A profile record of `kind`, build or deploy: the fields every record opens
 /// with, then `fields`.
@@ -599,58 +474,21 @@ pub(crate) fn profile_record_of(kind: &str, fields: serde_json::Value) -> serde_
     record
 }
 
-fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], total: Duration, outcome: &str) -> serde_json::Value {
-    let mut counts: std::collections::BTreeMap<_, _> = keys.iter().flat_map(|k| k.iter()).map(|&k| (k, 0)).collect();
-    counts.extend(t.counts.iter().copied());
-    let mut record = profile_record_of(kind, serde_json::json!({
-        "started_at": t.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "total_ms": total.as_millis(), "unattributed_ms": unattributed_ms(&t.phases, total), "outcome": outcome,
-        "passes": t.passes, "phases": t.phases, "counts": counts,
-    }));
-    #[cfg(unix)]
-    if let Some(usage) = process_usage() {
-        let bytes_per_unit = if cfg!(target_os = "macos") { 1.0 } else { 1024.0 };
-        record["peak_rss_mb"] = serde_json::json!(usage.ru_maxrss as f64 * bytes_per_unit / (1024.0 * 1024.0));
+/// The profile's record: the record's own fields, and what only the profile
+/// keeps (when it started, its passes, each phase sample, peak memory).
+fn profile_record(t: &BuildTelemetry, record: &super::record::Record) -> serde_json::Value {
+    let mut fields = record.json();
+    fields.insert("started_at".into(), t.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true).into());
+    fields.insert("passes".into(), t.passes.into());
+    fields.insert("phases".into(), serde_json::json!(t.phases));
+    if let Some(usage) = super::record::usage() {
+        fields.insert("peak_rss_mb".into(), usage.peak_rss_mb.into());
     }
-    record
+    profile_record_of(record.kind().name, fields.into())
 }
 
-#[cfg(unix)]
-fn process_usage() -> Option<libc::rusage> {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    // SAFETY: getrusage fills the struct when it returns 0.
-    (unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } == 0).then(|| unsafe { usage.assume_init() })
-}
-
-/// User plus system CPU time of the whole process so far.
-fn process_cpu() -> Option<Duration> {
-    #[cfg(unix)]
-    {
-        let tv = |t: libc::timeval| Duration::new(t.tv_sec as u64, t.tv_usec as u32 * 1000);
-        process_usage().map(|u| tv(u.ru_utime) + tv(u.ru_stime))
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
-}
-
-fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) -> serde_json::Value {
-    use crate::build::BuildTrigger;
-    let (kind, changed) = match trigger {
-        BuildTrigger::Full => ("full", 0),
-        BuildTrigger::Unobserved => ("unobserved", 0),
-        BuildTrigger::ImagesSettled { .. } => ("images-settled", 0),
-        BuildTrigger::VideosSettled => ("videos-settled", 0),
-        BuildTrigger::Structural(paths) => ("structural", paths.len()),
-        BuildTrigger::ContentOnly(paths) => ("content", paths.len()),
-    };
-    let mut record = profile_record(t, "build", &[BUILD_COUNTS, VIDEO_COUNTS], total, outcome);
-    record["trigger"] = serde_json::json!({ "kind": kind, "changed": changed });
-    if let Some(reason) = reason {
-        record["reason"] = serde_json::json!(reason.to_string());
-    }
-    record
+fn process_cpu_ms() -> Option<u64> {
+    super::record::usage().map(|u| u.cpu_ms)
 }
 
 /// The profile is trimmed to its newest half past this size (about a thousand builds).
@@ -694,12 +532,17 @@ fn profile_path(source: &std::path::Path) -> Option<std::path::PathBuf> {
     source.is_dir().then(|| crate::moss_paths::MossPaths::new(source).profile())
 }
 
-pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) {
+/// Logs one `run_pipeline` call's `build.summary` line and appends its
+/// profile record, both from one record of the build.
+pub(crate) fn finish_build(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) {
+    let outcome = if result.is_ok() { "ok" } else { "error" };
+    let t = collector.lock().unwrap_or_else(|e| e.into_inner());
+    let summary = build_summary(&t, total, outcome, trigger, reason);
+    log::info!(target: "build", "{}", summary.line());
     let Some(path) = profile_path(source) else { return };
-    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, trigger, reason));
-    let written = record.map_err(|e| std::io::Error::other(e.to_string()))
-        .and_then(|record| append_record(&path, &record));
-    if let Err(e) = written { log::debug!("could not append build profile: {e}"); }
+    if let Err(e) = append_record(&path, &profile_record(&t, &summary)) {
+        log::debug!("could not append build profile: {e}");
+    }
 }
 
 /// Work a build starts but does not wait for (a video encode the app's watcher
@@ -713,7 +556,10 @@ pub(crate) fn run_detached<T>(profile: std::path::PathBuf, body: impl FnOnce() -
         body()
     };
     if let Ok(t) = collector.lock() {
-        if let Err(e) = append_record(&profile, &profile_record(&t, "video_encode", &[VIDEO_COUNTS], started.elapsed(), outcome(&result))) {
+        let mut record = super::record::Record::new(&super::record::VIDEO_ENCODE);
+        record.word("outcome", outcome(&result));
+        add_time_and_counts(&mut record, &t, started.elapsed());
+        if let Err(e) = append_record(&profile, &profile_record(&t, &record)) {
             log::debug!("could not append encode profile: {e}");
         }
     }
@@ -724,7 +570,7 @@ pub(crate) fn run_detached<T>(profile: std::path::PathBuf, body: impl FnOnce() -
 pub struct PhaseTrace {
     name: &'static str,
     started: Instant,
-    cpu_started: Option<Duration>,
+    cpu_started: Option<u64>,
     collector: Option<PhaseCollector>,
     pass: usize,
     open: Arc<OpenPhase>,
@@ -748,7 +594,7 @@ impl PhaseTrace {
         Self {
             name,
             started: Instant::now(),
-            cpu_started: collector.as_ref().and_then(|_| process_cpu()),
+            cpu_started: collector.as_ref().and_then(|_| process_cpu_ms()),
             collector,
             pass,
             open,
@@ -769,7 +615,7 @@ impl Drop for PhaseTrace {
         }
         record_phase(&self.collector, PhaseSample {
             pass: self.pass, name: self.name, ms: elapsed.as_millis(), beside: self.beside,
-            cpu_ms: self.cpu_started.zip(process_cpu()).map(|(start, now)| now.saturating_sub(start).as_millis()),
+            cpu_ms: self.cpu_started.zip(process_cpu_ms()).map(|(start, now)| u128::from(now.saturating_sub(start))),
             parent: parent.as_ref().map(|p| p.name), id: self.open.id, parent_id: parent.as_ref().map(|p| p.id),
         });
         // Budget overrun logging. Observability only: never panics, never
@@ -807,9 +653,9 @@ mod tests {
         let collector: PhaseCollector = Arc::new(Mutex::new(BuildTelemetry::default()));
         let refused = Err("no such folder".to_string());
         let gone = dir.path().join("gone");
-        append_profile(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full, None);
+        finish_build(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full, None);
         assert!(!gone.exists(), "a refused build makes no folder to keep its record in");
-        append_profile(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full, None);
+        finish_build(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full, None);
         assert!(crate::moss_paths::MossPaths::new(dir.path()).profile().exists(), "a folder keeps the record");
     }
 
@@ -845,7 +691,9 @@ mod tests {
                 record_count("search_pages", 3);
             })).await.unwrap();
         }).await;
-        let record = build_record(&collector.lock().unwrap(), Duration::from_millis(42), "ok", &crate::build::BuildTrigger::ContentOnly(vec!["page.md".into()]), None);
+        let t = collector.lock().unwrap();
+        let summary = build_summary(&t, Duration::from_millis(42), "ok", &crate::build::BuildTrigger::ContentOnly(vec!["page.md".into()]), None);
+        let record = profile_record(&t, &summary);
         assert_eq!(record["schema"], 1);
         assert_eq!(record["kind"], "build");
         assert_eq!(record["moss_version"], crate::system::app_version());
@@ -853,7 +701,12 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(record["started_at"].as_str().unwrap()).unwrap();
         assert_eq!(record["total_ms"], 42);
         assert_eq!(record["outcome"], "ok");
-        assert_eq!(record["trigger"], serde_json::json!({"kind": "content", "changed": 1}));
+        assert_eq!(record["trigger"], "content");
+        assert_eq!(record["counts"]["changed"], 1);
+        assert_eq!(record["counts"]["pages_rendered"], 0, "an always count the build never set");
+        for (name, n) in record["counts"].as_object().unwrap() {
+            assert!(summary.line().contains(&format!(" {name}={n}")), "the line and the profile agree on {name}: {}", summary.line());
+        }
         assert_eq!(record["passes"], 2);
         assert_eq!(record["phases"][0]["pass"], 1);
         assert_eq!(record["phases"][1]["pass"], 2);
@@ -1046,6 +899,13 @@ mod tests {
             assert_eq!(record["kind"], "build");
             assert_eq!(record["outcome"], "ok");
             let phases = record["phases"].as_array().unwrap();
+            let counts = record["counts"].as_object().unwrap();
+            for name in phases.iter().map(|p| p["name"].as_str().unwrap()) {
+                assert!(super::super::record::BUILD.key(name).is_some(), "build.summary leaves out {name}, which record::BUILD lacks");
+            }
+            assert_eq!(counts.get("unlisted"), None, "a name the build records is missing from record::BUILD: {record}");
+            #[cfg(unix)]
+            assert!(counts["cpu_ms"].is_u64(), "{record}");
             // The fixture has no search index, so search_index and its counts are covered by the serializer test.
             for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "background_site_files", "seal_persist", "seal_promote"] {
                 assert!(phases.iter().any(|p| p["name"] == name), "missing {name}: {record}");
@@ -1147,22 +1007,10 @@ mod tests {
 
     #[test]
     fn budget_class_unbudgeted_phase_is_always_ok() {
-        // A phase with no row in PHASE_BUDGETS_MS has no thresholds.
         assert_eq!(
             budget_class("no_such_phase", Duration::from_secs(3600)),
             BudgetClass::Ok
         );
-    }
-
-    #[test]
-    fn every_budgeted_phase_is_unique() {
-        // A duplicate row would make the lookup silently prefer the first
-        // entry; keep the table a proper map.
-        let mut names: Vec<&str> = PHASE_BUDGETS_MS.iter().map(|&(n, _)| n).collect();
-        names.sort_unstable();
-        let before = names.len();
-        names.dedup();
-        assert_eq!(before, names.len(), "duplicate phase name in PHASE_BUDGETS_MS");
     }
 
     #[test]
@@ -1260,9 +1108,9 @@ mod tests {
     async fn a_phase_records_at_least_the_cpu_it_spent() {
         let ((), collector) = with_collector(async {
             let _p = PhaseTrace::start("spins");
-            let start = process_cpu().unwrap();
+            let start = process_cpu_ms().unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
-            while process_cpu().unwrap() < start + Duration::from_millis(50) && Instant::now() < deadline {
+            while process_cpu_ms().unwrap() < start + 50 && Instant::now() < deadline {
                 std::hint::black_box(0u64);
             }
         })
@@ -1332,6 +1180,12 @@ mod tests {
         assert!(!telemetry.phases.iter().any(|p| p.name == "unbridged_blocking"));
     }
 
+    /// A line without the process's CPU and memory, which differ run to run.
+    fn without_usage(line: String) -> String {
+        let usage = |t: &str| t.starts_with("cpu_ms=") || t.starts_with("footprint_mb=");
+        super::super::record::without_zero_fill(&line).split(' ').filter(|t| !usage(t)).collect::<Vec<_>>().join(" ")
+    }
+
     fn telemetry(phases: &[(u64, &'static str, u128, Option<u64>)], counts: &[(&'static str, usize)]) -> BuildTelemetry {
         let phases = phases.iter().map(|&(id, name, ms, parent_id)| PhaseSample { pass: 1, name, ms, cpu_ms: None, parent: None, beside: false, id, parent_id }).collect();
         BuildTelemetry { phases, counts: counts.to_vec(), ..BuildTelemetry::default() }
@@ -1341,20 +1195,48 @@ mod tests {
     fn format_build_summary_includes_every_phase_and_count() {
         let t = telemetry(&[(0, "scan", 12, None), (1, "build", 340, None)], &[("pages", 7)]);
         let edits = crate::build::BuildTrigger::ContentOnly(vec!["a.md".into(), "b.md".into()]);
-        let line = format_build_summary(&t, Duration::from_millis(400), "ok", &edits, None);
+        let line = without_usage(format_build_summary(&t, Duration::from_millis(400), "ok", &edits, None));
         assert_eq!(line, "build.summary outcome=ok trigger=content changed=2 total=400ms unattributed=48ms pages=7 scan=12ms build=340ms");
     }
 
     #[test]
     fn format_build_summary_with_nothing_recorded_still_reports_outcome_and_total() {
-        let line = format_build_summary(&BuildTelemetry::default(), Duration::from_millis(5), "error", &crate::build::BuildTrigger::Full, None);
+        let line = without_usage(format_build_summary(&BuildTelemetry::default(), Duration::from_millis(5), "error", &crate::build::BuildTrigger::Full, None));
         assert_eq!(line, "build.summary outcome=error trigger=full total=5ms unattributed=5ms");
     }
 
     #[test]
     fn a_build_summary_names_why_it_was_asked_for_and_shows_overlapping_phases_below_zero() {
-        let t = telemetry(&[(0, "scan", 70, None), (1, "render", 60, None)], &[]);
-        let line = format_build_summary(&t, Duration::from_millis(100), "ok", &crate::build::BuildTrigger::Full, Some(crate::build::BuildReason::setting("math")));
-        assert_eq!(line, "build.summary outcome=ok trigger=full reason=setting:math total=100ms unattributed=-30ms scan=70ms render=60ms");
+        let t = telemetry(&[(0, "scan", 70, None), (1, "render_markdown", 60, None)], &[]);
+        let line = without_usage(format_build_summary(&t, Duration::from_millis(100), "ok", &crate::build::BuildTrigger::Full, Some(crate::build::BuildReason::setting("math"))));
+        assert_eq!(line, "build.summary outcome=ok trigger=full reason=setting:math total=100ms unattributed=-30ms scan=70ms render_markdown=60ms");
+    }
+
+    #[test]
+    fn a_phase_taken_twice_writes_one_key_with_their_sum() {
+        let t = telemetry(&[(0, "lock_wait", 3, None), (1, "lock_wait", 4, None)], &[]);
+        let line = without_usage(format_build_summary(&t, Duration::from_millis(10), "ok", &crate::build::BuildTrigger::Full, None));
+        assert_eq!(line, "build.summary outcome=ok trigger=full total=10ms unattributed=3ms lock_wait=7ms");
+    }
+
+    #[test]
+    fn a_build_summary_carries_the_cpu_the_process_used_during_the_build() {
+        let t = BuildTelemetry::default();
+        // Spins on CPU spent, not wall time, so a descheduled runner cannot starve it.
+        if let Some(start) = t.cpu_at_start_ms {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while process_cpu_ms().unwrap() < start + 60 && Instant::now() < deadline {
+                std::hint::black_box(0u64);
+            }
+        }
+        let summary = build_summary(&t, Duration::from_millis(10), "ok", &crate::build::BuildTrigger::Full, None);
+        if cfg!(unix) {
+            let since_start = process_cpu_ms().unwrap() - t.cpu_at_start_ms.unwrap();
+            let Some(super::super::record::Value::Count(cpu)) = summary.get("cpu_ms") else { panic!("{}", summary.line()) };
+            assert!((60..=since_start).contains(cpu), "{} with {since_start}ms since the start", summary.line());
+        }
+        if cfg!(target_os = "macos") {
+            assert!(matches!(summary.get("footprint_mb"), Some(super::super::record::Value::Count(mb)) if *mb > 0), "{}", summary.line());
+        }
     }
 }
