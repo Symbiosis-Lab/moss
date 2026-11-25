@@ -1625,7 +1625,9 @@ export class PreviewManager {
         // From here a cloud download is part of the preview updating.
         if (status.url) this.progressPanel?.noteSiteServed();
 
-        this.loadPreview(status.url);
+        // The server root must not replace a page of this site the preview
+        // shows, nor the page it is leaving that page for.
+        if (!this.navigationManager.onSite(status.url)) this.loadPreview(status.url);
         if (this.pendingTargetFile) {
           this.navigateToTarget(this.pendingTargetFile);
           this.pendingTargetFile = null;

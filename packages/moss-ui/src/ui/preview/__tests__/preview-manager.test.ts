@@ -106,6 +106,10 @@ vi.mock('../navigation-manager', () => ({
     navigateToPage(urlPath: string) { this.beginNavigation(this.resolveFullUrl(urlPath)); }
     reset() { mockNavState.resetCalled = true; }
     isNavigationPending() { return mockNavState.requestedUrl != null; }
+    onSite(url: string) {
+      const at = mockNavState.activePage?.url;
+      return !!at && new URL(at).origin === new URL(url).origin;
+    }
     // Capture the rename 404-retry observer so tests can drive it directly.
     setNavigationResultListener(cb: ((info: { url: string; notFound: boolean }) => void) | null) {
       mockNavState.navResultListener = cb;
@@ -1190,6 +1194,41 @@ describe('PreviewManager', () => {
       (previewManager as any).handleProgressUpdate(update);
 
       expect(loadPreviewSpy).not.toHaveBeenCalled();
+    });
+
+    describe('a served site arriving after the preview has a page of it', () => {
+      const served: ProgressUpdate = {
+        step: 'serving', message: 'Server started', percentage: 100, completed: true, port: 3000, is_empty: false,
+      };
+      test('keeps a page the preview is leaving a page of the site for', () => {
+        mockNavState.activePage = { url: 'http://localhost:3000/', sourceFile: null };
+        mockNavState.requestedUrl = 'http://localhost:3000/pictures/';
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).not.toHaveBeenCalled();
+      });
+
+      test('keeps a page the preview shows', () => {
+        mockNavState.activePage = { url: 'http://localhost:3000/pictures/', sourceFile: null };
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).not.toHaveBeenCalled();
+      });
+
+      test('loads the site over a page asked for while the site had failed', () => {
+        (previewManager as any).renderStatus({ type: 'error', message: 'x', verdict: 'reported' });
+        previewManager.navigateToPage('pictures/');
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).renderStatus({ type: 'ready', url: 'http://localhost:8080' });
+        expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:8080');
+      });
+
+      test("loads the site over a page of another server", () => {
+        mockNavState.activePage = { url: 'http://localhost:4000/pictures/', sourceFile: null };
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:3000');
+      });
     });
 
     // Empty-folder onboarding lives in the editor action-panel folder-mode, not in
@@ -2911,6 +2950,20 @@ describe('PreviewManager', () => {
       // early-returns on an already-visible overlay, and nothing else repaints.
       expect(mockOverlay.classList.contains('home-gate-active')).toBe(false);
       expect(mockOverlay.classList.contains('visible')).toBe(false);
+    });
+
+    test('the gate lifting over nothing of the site on screen loads it', async () => {
+      await setup();
+      const load = vi.spyOn(previewManager as any, 'loadPreview').mockImplementation(() => {});
+      cloudSync.ingest({ phase: 'home_waiting', downloaded: 1, total: 4, remaining: 3 });
+      (previewManager as any).handleProgressUpdate({
+        step: 'serving', message: 'Server started', percentage: 100, completed: true, port: 3000, is_empty: false,
+      });
+      expect(load).not.toHaveBeenCalled();
+
+      cloudSync.ingest({ phase: 'home_ready', downloaded: 4, total: 4, remaining: 0 });
+
+      expect(load).toHaveBeenCalledWith('http://localhost:3000');
     });
 
     test('a resolved target stays in the iframe when its seal clears the gate', async () => {

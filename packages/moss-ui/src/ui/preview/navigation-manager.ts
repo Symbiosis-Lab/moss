@@ -96,6 +96,12 @@ function tryParseUrl(url: string): URL | null {
   try { return new URL(url); } catch { return null; }
 }
 
+function sameOrigin(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = a ? tryParseUrl(a) : null;
+  const y = b ? tryParseUrl(b) : null;
+  return !!x && !!y && x.origin === y.origin;
+}
+
 /**
  * Navigation event from preview webview
  */
@@ -299,6 +305,8 @@ export class NavigationManager {
 
   getRequestRevision(): number { return this.pageRequest.current(); }
   isNavigationPending(): boolean { return this.requestedUrl !== null; }
+  /** A page the preview shows is on `url`'s origin; a page it loads from there is that site's too. */
+  onSite(url: string): boolean { return sameOrigin(this.activePage?.url, url); }
 
   /** Public read access for identity validation and testing. */
   getActivePage(): ActivePage | null {
@@ -733,9 +741,7 @@ export class NavigationManager {
 
   /** Only a URL on the preview's own origin starts a navigation. */
   private onPreviewOrigin(url: unknown): url is string {
-    const target = typeof url === "string" ? tryParseUrl(url) : null;
-    const base = this.iframe?.src ? tryParseUrl(this.iframe.src) : null;
-    return !!target && !!base && target.origin === base.origin;
+    return typeof url === "string" && sameOrigin(url, this.iframe?.src);
   }
 
   /**

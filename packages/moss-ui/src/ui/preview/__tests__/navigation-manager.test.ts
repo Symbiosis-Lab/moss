@@ -2669,6 +2669,18 @@ describe("NavigationManager request intent", () => {
 
 });
 
+describe("NavigationManager.onSite", () => {
+  test("is the shown page's origin; a request with nothing shown is not on any site", () => {
+    const manager = new NavigationManager(document.createElement("iframe"));
+    manager.beginNavigation("http://localhost:8080/posts/");
+    expect(manager.onSite("http://localhost:8080")).toBe(false);
+    (manager as any).handleNavigationUpdate({ url: "http://localhost:8080/posts/", notFound: false });
+    expect(manager.onSite("http://localhost:8080")).toBe(true);
+    expect(manager.onSite("http://localhost:9090")).toBe(false);
+    manager.destroy();
+  });
+});
+
 describe("NavigationManager navigation deadline", () => {
   const origin = "http://localhost:8080";
   const echoAt = (m: NavigationManager, path: string) =>
