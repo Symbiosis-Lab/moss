@@ -1193,29 +1193,18 @@ footer.container p {
 */
 
 /*
- * Footer flex layout when it contains a moss subscribe form.
- *
- * A footer becomes a flex row (links left, subscribe form right-anchored)
- * whenever it DIRECTLY contains a `.moss-subscribe` block — whether moss
- * auto-injected it (no footer.md) OR the author placed `:::subscribe` inside
- * footer.md. Both cases now emit the SAME `<div class="moss-subscribe">`
- * (the unified hosted subscribe form), so keying the layout on its presence
- * covers them uniformly.
- *
- * This replaces the retired `data-moss-shape="default"` attribute — which was
- * stamped only for moss-owned footers, so an authored footer.md `:::subscribe`
- * read as a left-aligned block — AND the even older
- * `:has(> p.footer-default + form)` adjacency selector that misfired on the
- * form-only and link-list-only cases. Keying on `.moss-subscribe` presence
- * handles link+form, form-only, and authored-footer.md alike; a footer with
- * NO subscribe form stays naturally block-stacked (the selector never matches).
+ * A footer becomes a flex row when it directly contains a `.moss-subscribe`
+ * form (moss's own or a footer.md `:::subscribe`, which emit the same block)
+ * or a sentence followed by a `:::buttons` block. Any other footer stays
+ * block-stacked: neither selector matches.
  *
  * `flex-start` keeps the link list at the start edge; the form's own
  * `margin-inline-start: auto` — declared in email.css so it wins the @layer
  * cascade over the base `.moss-subscribe` margin (see the note there) — does
  * the right-anchoring.
  */
-footer.container:has(> .moss-subscribe) {
+footer.container:has(> .moss-subscribe),
+footer.container:has(> p + .moss-buttons) {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -1234,8 +1223,21 @@ footer.container:has(> .moss-subscribe) {
  * row so the divider spans the width and the link list + form wrap below it.
  */
 footer.container:has(> .moss-subscribe)::before,
-footer.container:has(> .moss-subscribe) > .moss-colophon {
+footer.container:has(> .moss-subscribe) > .moss-colophon,
+footer.container:has(> p + .moss-buttons)::before {
   flex-basis: 100%;
+}
+
+/* Every other child takes a row of its own; a subscribe form and the child
+   before it are left out so the links stay beside the form. */
+footer.container:has(> p + .moss-buttons) > :not(p:has(+ .moss-buttons), p + .moss-buttons, .moss-subscribe, :has(+ .moss-subscribe)) {
+  flex-basis: 100%;
+}
+footer.container > p:has(+ .moss-buttons) {
+  flex: 1 1 10rem;
+}
+footer.container > p + .moss-buttons {
+  margin-block: 0;
 }
 
 /*

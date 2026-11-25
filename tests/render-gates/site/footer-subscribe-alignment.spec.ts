@@ -220,3 +220,49 @@ test.describe('subscribed state keeps the button end', () => {
     }
   }
 });
+
+// A sentence followed by a `:::buttons` block in footer.md is the same
+// invitation as a sentence beside the subscribe form, and lays out the same
+// way: one row, the buttons at the end, the colophon on its own row below.
+const footerPage = (children) => `${head(false)}<body>
+<main id="main-content"><article class="container"><p>Body.</p></article></main>
+<footer class="container">${children}
+<div class="moss-colophon"><a href="#">Published with moss</a></div></footer>
+</body></html>`;
+const buttonsPage = (sentence, before = '') => footerPage(`${before}<p>${sentence}</p>
+<div class="moss-buttons"><a href="#" class="moss-btn" data-role="primary">Subscribe</a></div>`);
+
+test.describe('footer sentence and buttons share a row', () => {
+  for (const width of [390, 1280]) {
+    test(`at ${width}px the sentence and the buttons read as one row, the buttons at the end`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.setContent(buttonsPage('Get the newsletter first, once a month, with what is on next.'));
+      const sentence = await rect(page, 'footer.container > p');
+      const buttons = await rect(page, 'footer.container > .moss-buttons');
+      const button = await rect(page, 'footer.container .moss-btn');
+      const colophon = await rect(page, 'footer.container > .moss-colophon');
+      const container = await rect(page, 'footer.container');
+      expect(button.top, 'same row').toBeLessThan(sentence.bottom);
+      expect(sentence.top, 'same row').toBeLessThan(button.bottom);
+      expect(sentence.right, 'the sentence ends before the buttons').toBeLessThanOrEqual(buttons.left);
+      const padding = await page.locator('footer.container').evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
+      expect(Math.abs(container.right - padding - buttons.right), 'the buttons end at the footer content edge').toBeLessThanOrEqual(2);
+      expect(colophon.top, 'the colophon has its own row').toBeGreaterThanOrEqual(Math.max(sentence.bottom, buttons.bottom) - 1);
+    });
+  }
+
+  test('a subscribe form in the same footer keeps its own row with its links', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.setContent(buttonsPage('Or follow the programme.', footer.replace('<footer class="container">', '').replace('</footer>', '')));
+    const links = await rect(page, '.footer-default');
+    const form = await rect(page, '.moss-subscribe');
+    expect(Math.abs(middle(links) - middle(form)), 'the links and the form share a row').toBeLessThanOrEqual(14);
+  });
+
+  test('a footer with only paragraphs stays stacked', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.setContent(footerPage('<p>One.</p><p>Two.</p>'));
+    const [one, two] = await page.locator('footer.container > p').evaluateAll((els) => els.map((el) => el.getBoundingClientRect()));
+    expect(two.top, 'below, not beside').toBeGreaterThanOrEqual(one.bottom);
+  });
+});
