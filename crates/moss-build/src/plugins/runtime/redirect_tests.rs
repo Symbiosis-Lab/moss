@@ -138,7 +138,7 @@ async fn redirect_policy_stops_uploads_before_the_second_port() {
     use super::download::{do_http_request_full, FetchMethod, Redirect};
     for (policy, expected) in [(Redirect::Error, None), (Redirect::Manual, Some(302)), (Redirect::Follow, Some(200))] {
         let server = RedirectServer::new(302);
-        let result = do_http_request_full(server.url.clone(), FetchMethod::Post { body: "payload".into() }, None, Some(2000), policy).await;
+        let result = do_http_request_full(server.url.clone(), FetchMethod::Post { body: "payload".into() }, None, Some(2000), policy, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await;
         let (body, requests) = server.finish();
         assert_eq!(body, "payload");
         assert_eq!(requests, usize::from(policy == Redirect::Follow));
@@ -149,7 +149,7 @@ async fn redirect_policy_stops_uploads_before_the_second_port() {
     }
     for status in [300, 301, 303, 304, 307, 308, 399] {
         let server = RedirectServer::new(status);
-        let result = do_http_request_full(server.url.clone(), FetchMethod::Post { body: "payload".into() }, None, Some(2000), Redirect::Error).await;
+        let result = do_http_request_full(server.url.clone(), FetchMethod::Post { body: "payload".into() }, None, Some(2000), Redirect::Error, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await;
         let (_, requests) = server.finish();
         assert_eq!(requests, 0);
         assert!(result.err().unwrap().contains("redirect refused"), "{status}");

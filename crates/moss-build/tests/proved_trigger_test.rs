@@ -697,6 +697,10 @@ fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json:
 }
 
 fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger) -> (serde_json::Value, std::sync::Arc<Heard>) {
+    serve_with(root, cell, trigger, moss_build::build::PluginMode::Skip)
+}
+
+fn serve_with(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger, plugins: moss_build::build::PluginMode) -> (serde_json::Value, std::sync::Arc<Heard>) {
     use moss_build::build::{run_pipeline, PipelineConfig};
     let heard = std::sync::Arc::new(Heard::default());
     let folder = root.to_string_lossy().into_owned();
@@ -709,7 +713,7 @@ fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: Bui
     rt.block_on(run_pipeline(PipelineConfig {
         root: moss_build::vault_root::VaultRoot::resolve(root),
         progress: std::sync::Arc::new(Ear(heard.clone())),
-        plugins: moss_build::build::PluginMode::Skip,
+        plugins,
         watch: false,
         start_server: true,
         host,
@@ -1037,4 +1041,34 @@ fn a_publish_of_the_sealed_generation_leaves_the_last_seal_standing() {
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert!(rendered_everything(&record), "{record}");
     assert_publishes_a_full_render(&site);
+}
+
+/// The app opening a folder runs its plugins' import as the person's run; any
+/// other build's run is a build's, which reaches no network.
+#[test]
+fn the_folder_opening_runs_the_import_as_the_person_s_and_a_build_as_a_build_s() {
+    let site = Site::new();
+    site.write(
+        ".moss/plugins/importer/manifest.json",
+        r#"{"name":"importer","version":"1.0.0","entry":"main.js","global_name":"Importer","capabilities":["process"]}"#,
+    );
+    site.write(
+        ".moss/plugins/importer/main.js",
+        r#"var Importer = (() => ({ async process(ctx) { await globalThis.__TAURI__.core.invoke("write_plugin_file", { relativePath: "trigger", content: ctx.trigger }); return { success: true }; } }))();"#,
+    );
+    let heard = site.root().join(".moss/plugins/importer/trigger");
+    let trigger_of_the_run = || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !heard.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        fs::read_to_string(&heard).unwrap_or_default()
+    };
+
+    serve_with(site.root(), &new_cell(), BuildTrigger::Full, moss_build::build::PluginMode::NonBlocking);
+    assert_eq!(trigger_of_the_run(), "settings_manual");
+
+    fs::remove_file(&heard).unwrap();
+    build_with(site.root(), BuildTrigger::Full, moss_build::build::PluginMode::Blocking, None);
+    assert_eq!(trigger_of_the_run(), "background");
 }

@@ -4,7 +4,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::host_fns::dispatch_command_test_stub;
+    use crate::engine::host_fns::dispatch_command_test_stub_declaring;
     use crate::engine::QuickJsEngine;
 
     const SYNTHETIC_BUNDLE: &str = r#"
@@ -42,7 +42,7 @@ mod tests {
         // Host dispatch task: answer html_to_markdown WITHOUT an AppHandle (test stub).
         tokio::spawn(async move {
             while let Some(req) = dispatch_rx.recv().await {
-                let r = dispatch_command_test_stub("/tmp/p", req.plugin.as_deref(), &req.cmd, &req.args_json).await;
+                let r = dispatch_command_test_stub_declaring("/tmp/p", req.plugin.as_deref().unwrap_or_default(), &["127.0.0.1"], &req.cmd, &req.args_json).await;
                 let _ = req.reply.send(r);
             }
         });
@@ -97,7 +97,8 @@ mod tests {
         let (engine, mut dispatch_rx) = crate::engine::QuickJsEngine::new(None);
         tokio::spawn(async move {
             while let Some(req) = dispatch_rx.recv().await {
-                let _ = req.reply.send(Err("no cmd".into()));
+                let r = crate::engine::host_fns::dispatch_command_test_stub_declaring("/tmp/p", "p", &["api.github.com"], &req.cmd, &req.args_json).await;
+                let _ = req.reply.send(r);
             }
         });
         let ctx = serde_json::json!({ "token": token }).to_string();
@@ -259,7 +260,7 @@ mod tests {
             "timeoutMs": 5000
         })
         .to_string();
-        let reply = dispatch_command_test_stub("/tmp/none", None, "fetch_url", &args)
+        let reply = crate::engine::host_fns::dispatch_command_test_stub_reaching_local("/tmp/none", "fetch_url", &args)
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
@@ -294,7 +295,7 @@ mod tests {
         let (engine, mut dispatch_rx) = QuickJsEngine::new(None);
         tokio::spawn(async move {
             while let Some(req) = dispatch_rx.recv().await {
-                let r = dispatch_command_test_stub("/tmp/p", req.plugin.as_deref(), &req.cmd, &req.args_json).await;
+                let r = dispatch_command_test_stub_declaring("/tmp/p", req.plugin.as_deref().unwrap_or_default(), &["127.0.0.1"], &req.cmd, &req.args_json).await;
                 let _ = req.reply.send(r);
             }
         });

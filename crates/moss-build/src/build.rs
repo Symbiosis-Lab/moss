@@ -93,7 +93,7 @@ pub mod coordinator;
 pub mod manifest;
 pub mod progress;
 pub mod ports;
-pub(crate) mod process_hooks;
+pub mod process_hooks;
 pub use process_hooks::spawn_process_hooks;
 pub mod seal_phase;
 pub mod ship;
@@ -1076,6 +1076,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 config.host.plugins.clone(),
                 &*config.host.spawner,
                 project_info.clone(),
+                // A detached run is the app opening the folder: its import.
+                if detach_process { crate::plugins::TriggerContext::SettingsManual } else { crate::plugins::TriggerContext::Background },
             ))
         } else { None };
 

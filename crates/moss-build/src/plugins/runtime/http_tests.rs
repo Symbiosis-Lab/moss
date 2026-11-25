@@ -26,7 +26,7 @@ async fn both_adapters_strip_credentials_on_cross_origin_hops() {
         let url = first.url.clone();
         let expected_type = match adapter {
             "fetch" => {
-                let result = do_http_request_full(url, FetchMethod::Get, Some(headers()), Some(2000), Redirect::Follow).await.unwrap();
+                let result = do_http_request_full(url, FetchMethod::Get, Some(headers()), Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap();
                 assert_eq!(result.status, 200);
                 "text/plain"
             }
@@ -36,7 +36,7 @@ async fn both_adapters_strip_credentials_on_cross_origin_hops() {
                     "bytes" => (HttpMethod::PostBytes { body: b"payload".to_vec(), content_type: "multipart/form-data; boundary=fixture".into() }, "multipart/form-data; boundary=fixture"),
                     _ => (HttpMethod::Get, "text/plain"),
                 };
-                assert_eq!(do_http_request(url, method, Some(headers()), Some(2000), "fixture").await.unwrap().status, 200);
+                assert_eq!(do_http_request(url, method, Some(headers()), Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap().status, 200);
                 content_type
             }
         };
@@ -62,8 +62,8 @@ async fn same_origin_keeps_headers_and_resolves_relative_locations() {
     for helper in [false, true] {
         let server = Server::new(|i, _| if i == 0 { reply(302, Some("../done"), "") } else { reply(200, None, "ok") });
         let url = format!("{}/nested/start", server.url);
-        if helper { do_http_request(url, HttpMethod::Get, Some(headers()), Some(2000), "fixture").await.unwrap(); }
-        else { do_http_request_full(url, FetchMethod::Get, Some(headers()), Some(2000), Redirect::Follow).await.unwrap(); }
+        if helper { do_http_request(url, HttpMethod::Get, Some(headers()), Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap(); }
+        else { do_http_request_full(url, FetchMethod::Get, Some(headers()), Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap(); }
         let requests = server.finish();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].line, "GET /done HTTP/1.1");
@@ -86,7 +86,7 @@ async fn redirect_methods_do_not_start_forwarding_upload_bodies() {
             };
             let mut h = headers();
             if matches!(verb, "POST" | "PUT") { h.insert("Transfer-Encoding".into(), "chunked".into()); }
-            let result = do_http_request_full(first.url.clone(), method, Some(h), Some(2000), Redirect::Follow).await.unwrap();
+            let result = do_http_request_full(first.url.clone(), method, Some(h), Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap();
             let initial = first.finish();
             let next = second.finish();
             assert_eq!(initial[0].headers["content-type"], "text/plain", "fetch permits overrides");
@@ -106,7 +106,7 @@ async fn redirect_methods_do_not_start_forwarding_upload_bodies() {
             let target = second.url.clone();
             let first = Server::new(move |_, _| reply(status, Some(&target), ""));
             let method = if bytes { HttpMethod::PostBytes { body: b"payload".to_vec(), content_type: "multipart/form-data; boundary=fixture".into() } } else { HttpMethod::Post { body: "payload".into() } };
-            let result = do_http_request(first.url.clone(), method, Some(headers()), Some(2000), "fixture").await.unwrap();
+            let result = do_http_request(first.url.clone(), method, Some(headers()), Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap();
             assert_eq!(result.status, if status < 307 { 200 } else { status });
             assert_eq!(first.finish()[0].body, "payload");
             assert_eq!(second.finish().len(), usize::from(status < 307));
@@ -126,8 +126,8 @@ async fn returning_to_an_origin_or_url_userinfo_cannot_restore_credentials() {
         *back.lock().unwrap() = format!("{url}/back");
         let mut h = headers();
         h.remove("Authorization");
-        if helper { do_http_request(url, HttpMethod::Get, Some(h), Some(2000), "fixture").await.unwrap(); }
-        else { do_http_request_full(url, FetchMethod::Get, Some(h), Some(2000), Redirect::Follow).await.unwrap(); }
+        if helper { do_http_request(url, HttpMethod::Get, Some(h), Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap(); }
+        else { do_http_request_full(url, FetchMethod::Get, Some(h), Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap(); }
         let first = first.finish();
         let second = second.finish();
         assert_eq!(first.len(), 2);
@@ -145,7 +145,7 @@ async fn redirect_limits_locations_and_opt_outs_match_the_contract() {
     for status in [300, 301, 304, 307, 398, 399] {
         for policy in [Redirect::Error, Redirect::Manual, Redirect::Follow] {
             let server = Server::new(move |_, _| reply(status, None, "redirect body"));
-            let result = do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), policy).await;
+            let result = do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), policy, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await;
             assert_eq!(server.finish().len(), 1);
             if policy == Redirect::Error { assert!(result.err().unwrap().contains("redirect refused")); }
             else { let response = result.unwrap(); assert_eq!(response.status, status); assert_eq!(response.body, if status == 304 { b"".as_slice() } else { b"redirect body".as_slice() }); }
@@ -155,16 +155,16 @@ async fn redirect_limits_locations_and_opt_outs_match_the_contract() {
         for final_status in [200, 300, 302, 304, 307, 398, 399] {
             let server = Server::new(move |i, _| if i < 4 { reply(302, Some("/next"), "") } else { reply(final_status, None, "done") });
             let result = if helper {
-                do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture").await.map(|r| r.status)
-            } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow).await.map(|r| r.status) };
+                do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status)
+            } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status) };
             assert_eq!(server.finish().len(), 5);
             if (300..399).contains(&final_status) { assert!(result.unwrap_err().contains("max redirects (5)")); }
             else { assert_eq!(result.unwrap(), final_status); }
         }
         let server = Server::new(|_, _| reply(302, Some("ftp://example.org/"), ""));
         let result = if helper {
-            do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture").await.map(|r| r.status)
-        } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow).await.map(|r| r.status) };
+            do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status)
+        } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status) };
         assert!(result.unwrap_err().contains("scheme"));
         assert_eq!(server.finish().len(), 1);
     }
@@ -178,8 +178,8 @@ async fn one_timeout_covers_the_entire_redirect_chain() {
             if i == 0 { reply(302, Some("/next"), "") } else { reply(200, None, "ok") }
         });
         let result = if helper {
-            do_http_request(server.url.clone(), HttpMethod::Get, None, Some(170), "fixture").await.map(|r| r.status)
-        } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(170), Redirect::Follow).await.map(|r| r.status) };
+            do_http_request(server.url.clone(), HttpMethod::Get, None, Some(170), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status)
+        } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(170), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| r.status) };
         assert!(result.is_err(), "each hop must not get another 170ms");
         assert_eq!(server.finish().len(), 2);
     }
@@ -192,14 +192,14 @@ async fn final_status_head_and_body_errors_keep_their_response_contract() {
             for truncated in [false, true] {
                 let server = Server::new(move |_, _| format!("HTTP/1.1 {status} X\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\nok", if truncated { 10 } else { 2 }));
                 let result = if helper {
-                    do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture").await.map(|r| (r.status, r.ok))
-                } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow).await.map(|r| (r.status, r.ok)) };
+                    do_http_request(server.url.clone(), HttpMethod::Get, None, Some(2000), "fixture", crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| (r.status, r.ok))
+                } else { do_http_request_full(server.url.clone(), FetchMethod::Get, None, Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.map(|r| (r.status, r.ok)) };
                 server.finish();
                 if status == 200 && truncated { assert!(result.unwrap_err().contains("body")); }
                 else { assert_eq!(result.unwrap(), (status, status == 200)); }
             }
             let server = Server::new(move |_, _| format!("HTTP/1.1 {status} X\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n"));
-            let response = do_http_request_full(server.url.clone(), FetchMethod::Head, None, Some(2000), Redirect::Follow).await.unwrap();
+            let response = do_http_request_full(server.url.clone(), FetchMethod::Head, None, Some(2000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap();
             server.finish();
             assert_eq!(response.status, status);
             assert!(response.body.is_empty());

@@ -36,6 +36,8 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("expand", moss_build::cli::expand::run),
     // Lives beside the cloud-wait loop it shares with `build`, not in `cli/` (file budget).
     ("fetch", moss_build::build::cloud_readiness::fetch::run),
+    // Lives beside the build's process-hook spawn, not in `cli/` (file budget).
+    ("sync", moss_build::build::process_hooks::sync),
     // Lives under `deploy/history/`, not `cli/` (file budget — see the
     // publish-history design's "Placement and budgets").
     ("history", moss_build::deploy::history::cli::run),

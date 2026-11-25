@@ -22,6 +22,7 @@ use crate::tasks::{
 use crate::config::environment::HostingEnvironment;
 
 use super::download;
+use super::hosts::AllowedHosts;
 
 // ============================================================================
 // Wire types (moved from commands.rs — the SDK-facing result/input shapes)
@@ -107,7 +108,11 @@ pub struct BinaryExecutionResult {
 
 /// Fetch a URL using Rust (bypasses WebKit CORS restrictions).
 pub async fn fetch_url(url: String, timeout_ms: Option<u64>) -> Result<FetchResult, String> {
-    download::do_http_request(url, download::HttpMethod::Get, None, timeout_ms, "fetch_url").await
+    fetch_url_to(url, timeout_ms, AllowedHosts::unchecked_app_panel()).await
+}
+
+pub(crate) async fn fetch_url_to(url: String, timeout_ms: Option<u64>, allowed: AllowedHosts) -> Result<FetchResult, String> {
+    download::do_http_request(url, download::HttpMethod::Get, None, timeout_ms, "fetch_url", allowed).await
 }
 
 /// HTTP POST request with JSON body.
@@ -117,14 +122,17 @@ pub async fn http_post(
     headers: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
 ) -> Result<FetchResult, String> {
-    download::do_http_request(
-        url,
-        download::HttpMethod::Post { body },
-        headers,
-        timeout_ms,
-        "http_post",
-    )
-    .await
+    http_post_to(url, body, headers, timeout_ms, AllowedHosts::unchecked_app_panel()).await
+}
+
+pub(crate) async fn http_post_to(
+    url: String,
+    body: String,
+    headers: Option<HashMap<String, String>>,
+    timeout_ms: Option<u64>,
+    allowed: AllowedHosts,
+) -> Result<FetchResult, String> {
+    download::do_http_request(url, download::HttpMethod::Post { body }, headers, timeout_ms, "http_post", allowed).await
 }
 
 /// HTTP GET request with optional headers.
@@ -133,8 +141,16 @@ pub async fn http_get(
     headers: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
 ) -> Result<FetchResult, String> {
-    download::do_http_request(url, download::HttpMethod::Get, headers, timeout_ms, "http_get")
-        .await
+    http_get_to(url, headers, timeout_ms, AllowedHosts::unchecked_app_panel()).await
+}
+
+pub(crate) async fn http_get_to(
+    url: String,
+    headers: Option<HashMap<String, String>>,
+    timeout_ms: Option<u64>,
+    allowed: AllowedHosts,
+) -> Result<FetchResult, String> {
+    download::do_http_request(url, download::HttpMethod::Get, headers, timeout_ms, "http_get", allowed).await
 }
 
 /// HTTP POST with a `multipart/form-data` body (ordered text fields + file
@@ -146,6 +162,17 @@ pub async fn http_post_multipart(
     files: Vec<MultipartFilePart>,
     headers: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
+) -> Result<FetchResult, String> {
+    http_post_multipart_to(url, text_fields, files, headers, timeout_ms, AllowedHosts::unchecked_app_panel()).await
+}
+
+pub(crate) async fn http_post_multipart_to(
+    url: String,
+    text_fields: Vec<MultipartTextField>,
+    files: Vec<MultipartFilePart>,
+    headers: Option<HashMap<String, String>>,
+    timeout_ms: Option<u64>,
+    allowed: AllowedHosts,
 ) -> Result<FetchResult, String> {
     use base64::Engine;
 
@@ -168,6 +195,7 @@ pub async fn http_post_multipart(
         headers,
         timeout_ms,
         "http_post_multipart",
+        allowed,
     )
     .await
 }

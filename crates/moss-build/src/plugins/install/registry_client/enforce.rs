@@ -571,6 +571,21 @@ pub fn carried(folder: &Path) -> Vec<(PathBuf, Option<String>)> {
         .collect()
 }
 
+/// The names of the plugins in `folder` that the installed check refuses only
+/// because the folder is not trusted.
+pub fn waiting_on_trust(folder: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder.join(".moss").join("plugins")) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| canonical(&entry.path()))
+        .filter_map(|dir| Some((crate::plugins::bundled::read_installed_manifest(&dir)?, dir)))
+        .filter(|(manifest, dir)| matches!(verdict(manifest, dir), Some(Refusal::Untrusted)))
+        .map(|(manifest, _)| manifest.name)
+        .collect();
+    names.sort();
+    names
+}
+
 /// What the registry's last accepted index says about a plugin directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]

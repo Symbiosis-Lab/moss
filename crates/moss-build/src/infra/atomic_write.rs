@@ -44,6 +44,17 @@ pub fn write_private_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(
 }
 
 fn write_with_permissions(path: &Path, contents: impl AsRef<[u8]>, private: bool) -> Result<(), String> {
+    use std::io::Write;
+    replace_with(path, private, |f, tmp| f.write_all(contents.as_ref()).map_err(|e| format!("failed to write {}: {e}", tmp.display())))
+}
+
+/// [`write_atomic`] with the bytes written by `fill`. When `fill` fails,
+/// `path` keeps what it held.
+pub fn write_atomic_with<T>(path: &Path, fill: impl FnOnce(&mut std::fs::File) -> Result<T, String>) -> Result<T, String> {
+    replace_with(path, false, |f, _| fill(f))
+}
+
+fn replace_with<T>(path: &Path, private: bool, fill: impl FnOnce(&mut std::fs::File, &Path) -> Result<T, String>) -> Result<T, String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
@@ -69,8 +80,7 @@ fn write_with_permissions(path: &Path, contents: impl AsRef<[u8]>, private: bool
     // a zero-length or torn file where an intact old one used to be — which is
     // the failure the rename was chosen to prevent. `state.toml` is the case
     // that pays for it: it holds deploy state nothing regenerates.
-    {
-        use std::io::Write;
+    let filled = {
         // allow:raw_write writes a sibling temp file then renames, so a dataless destination is replaced, never truncated; callers are app-data and vault state, never .moss/build.nosync/
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -83,12 +93,14 @@ fn write_with_permissions(path: &Path, contents: impl AsRef<[u8]>, private: bool
         let _ = private;
         let mut f = options.open(&tmp)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
-        f.write_all(contents.as_ref())
-            .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
-        f.sync_all()
-            .map_err(|e| format!("failed to flush {}: {e}", tmp.display()))?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| {
+        let filled = fill(&mut f, &tmp)
+            .and_then(|filled| f.sync_all().map(|()| filled).map_err(|e| format!("failed to flush {}: {e}", tmp.display())));
+        if filled.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        filled?
+    };
+    std::fs::rename(&tmp, path).map(|()| filled).map_err(|e| {
         // A failed rename leaves the temp file orphaned; nothing else will
         // ever look at it, so remove it rather than accumulating one per
         // failure.

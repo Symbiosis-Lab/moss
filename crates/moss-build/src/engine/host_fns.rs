@@ -76,8 +76,9 @@ impl DispatchBridge {
                 reply,
             })
             .map_err(|_| "dispatch bridge closed".to_string())?;
-        rx.await
-            .map_err(|_| "host dropped dispatch reply".to_string())?
+        let reply = rx.await.map_err(|_| "host dropped dispatch reply".to_string())?;
+        super::budgets::paused();
+        reply
     }
 }
 
@@ -325,11 +326,11 @@ fn caller_plugin(
 /// How far a host call may reach into the folder.
 enum Reach<'a> {
     /// The plugin is running a hook the person started.
-    Folder,
+    Folder(&'a str),
     /// Any other call from this plugin: a build's run, or one with no run
     /// registered at all (a timer that outlived its hook, a path that skipped
     /// the run gate). It writes only its own storage (`write_plugin_file`) and
-    /// its own comment-data file, and runs no program.
+    /// its own comment-data file, runs no program and reaches no network.
     Confined(&'a str),
     /// moss could not tell which plugin called.
     Unidentified,
@@ -339,21 +340,90 @@ enum Reach<'a> {
 /// one is registered, reaches the folder.
 fn reach<'a>(host: &EngineHost<'a>) -> Reach<'a> {
     match host.plugin {
-        Some(plugin) if host.asked_by == Some(AskedBy::Person) && host.state.hooks.running_for(plugin) == Some(AskedBy::Person) => Reach::Folder,
+        Some(plugin) if host.asked_by == Some(AskedBy::Person) && host.state.hooks.running_for(plugin) == Some(AskedBy::Person) => Reach::Folder(plugin),
         Some(plugin) => Reach::Confined(plugin),
         None => Reach::Unidentified,
     }
 }
 
+/// The hosts the calling plugin may reach: its discovered declaration, and the
+/// host of each setting it names, read only from the `config.toml` moss writes
+/// for the person, never from the plugin's own `config.json`.
+fn allowed_hosts(host: &EngineHost<'_>) -> crate::plugins::runtime::hosts::AllowedHosts {
+    use crate::plugins::runtime::hosts::{AllowedHosts, Refusal};
+    let plugin = match reach(host) {
+        Reach::Folder(plugin) => plugin,
+        Reach::Confined(plugin) if host.asked_by == Some(AskedBy::Build) => return AllowedHosts::refused(Refusal::Building(plugin.into())),
+        Reach::Confined(plugin) => return AllowedHosts::refused(Refusal::OutsideARun(plugin.into())),
+        Reach::Unidentified => return AllowedHosts::refused(Refusal::Unidentified),
+    };
+    let settings = std::path::Path::new(host.project_path).join(".moss/plugins").join(plugin).join("config.toml");
+    let settings = settings.is_file().then(|| crate::plugins::discovery::read_plugin_config_file(&settings).ok()).flatten().unwrap_or_default();
+    AllowedHosts::for_plugin(
+        plugin,
+        host.declared.and_then(|d| d.network.as_ref()),
+        |key| settings.get(key).and_then(|v| v.as_str()).map(str::to_string),
+        || typed_site_host(host.project_path),
+    )
+}
+
+/// The host of the site address the person typed in `.moss/config.toml`. Never
+/// the address a publish reported, which plugin code can choose.
+fn typed_site_host(project_path: &str) -> Option<String> {
+    let address = crate::build::site_config::read_project_config(project_path).ok()?.site_address().ok()??;
+    let url = crate::build::site_url::SiteUrl::parse(&address).ok()?;
+    url.is_deployed().then(|| url.host_name().to_string())
+}
+
+/// The engine's `fetch` global (fetch_shim.rs).
+async fn dispatch_fetch(host: &EngineHost<'_>, args: &serde_json::Value) -> std::result::Result<String, String> {
+    use crate::plugins::runtime::download::{do_http_request_full, FetchMethod, Redirect};
+    use base64::Engine as _;
+    let url = req_str(args, "url")?;
+    let body = || args.get("body").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let method = match args.get("method").and_then(|v| v.as_str()).unwrap_or("GET").to_uppercase().as_str() {
+        "GET" => FetchMethod::Get,
+        "HEAD" => FetchMethod::Head,
+        "POST" => FetchMethod::Post { body: body() },
+        "PUT" => FetchMethod::Put { body: body() },
+        "DELETE" => FetchMethod::Delete,
+        other => return Err(format!("Unsupported method: {other}")),
+    };
+    let redirect = match args.get("redirect").and_then(|v| v.as_str()) {
+        None | Some("follow") => Redirect::Follow,
+        Some("error") => Redirect::Error,
+        Some("manual") => Redirect::Manual,
+        Some(_) => return Err("redirect must be follow, error or manual".into()),
+    };
+    let r = do_http_request_full(url, method, opt_headers(args)?, Some(30_000), redirect, allowed_hosts(host)).await?;
+    reply_json(&serde_json::json!({
+        "status": r.status,
+        "ok": r.ok,
+        "headers": r.headers,
+        "body_base64": base64::engine::general_purpose::STANDARD.encode(r.body),
+    }))
+}
+
+/// The calling plugin, when it runs a hook the person started; otherwise a
+/// refusal saying it `does` that only then, and what it `tried`.
+fn need_person_run<'a>(host: &EngineHost<'a>, does: &str, tried: &str) -> std::result::Result<&'a str, String> {
+    match reach(host) {
+        Reach::Folder(plugin) => Ok(plugin),
+        Reach::Confined(plugin) => Err(format!(
+            "{plugin} {does} only when you start it yourself, and it isn't running a hook you started. It tried to {tried}.")),
+        Reach::Unidentified => Err(crate::plugins::runtime::hosts::unidentified(tried)),
+    }
+}
+
 fn refuse_confined_write(host: &EngineHost<'_>, relative_path: &str) -> std::result::Result<(), String> {
     match reach(host) {
-        Reach::Folder => Ok(()),
+        Reach::Folder(_) => Ok(()),
         Reach::Confined(plugin) if crate::vault::fs::PluginPath::shared_social_data(plugin, relative_path).is_ok() => Ok(()),
         Reach::Confined(plugin) => Err(format!(
             "{plugin} writes into the folder only when you start it yourself; it isn't running a hook you started, \
              so it may write only its own storage and its comment data. It tried to write {relative_path}."
         )),
-        Reach::Unidentified => Err(format!("a plugin moss could not identify tried to write {relative_path}; refusing")),
+        Reach::Unidentified => Err(crate::plugins::runtime::hosts::unidentified(&format!("write {relative_path}"))),
     }
 }
 
@@ -392,14 +462,14 @@ async fn dispatch_command_core(
         "fetch_url" => {
             let url = req_str(&args, "url")?;
             let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
-            let r = crate::plugins::runtime::portable::fetch_url(url, timeout_ms).await?;
+            let r = crate::plugins::runtime::portable::fetch_url_to(url, timeout_ms, allowed_hosts(&host)).await?;
             reply_json(&r) // snake_case FetchResult — the SDK reads body_base64
         }
         "http_get" => {
             let url = req_str(&args, "url")?;
             let headers = opt_headers(&args)?;
             let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
-            let r = crate::plugins::runtime::portable::http_get(url, headers, timeout_ms).await?;
+            let r = crate::plugins::runtime::portable::http_get_to(url, headers, timeout_ms, allowed_hosts(&host)).await?;
             reply_json(&r)
         }
         "http_post" => {
@@ -407,9 +477,10 @@ async fn dispatch_command_core(
             let body = req_str(&args, "body")?; // pre-stringified JSON (http.ts:185)
             let headers = opt_headers(&args)?;
             let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
-            let r = crate::plugins::runtime::portable::http_post(url, body, headers, timeout_ms).await?;
+            let r = crate::plugins::runtime::portable::http_post_to(url, body, headers, timeout_ms, allowed_hosts(&host)).await?;
             reply_json(&r)
         }
+        "fetch" => dispatch_fetch(&host, &args).await,
         "http_post_multipart" => {
             // Multipart upload (text fields + base64 file parts). camelCase keys
             // match the SDK wire format (http.ts: textFields/files/contentBase64).
@@ -422,7 +493,7 @@ async fn dispatch_command_core(
                     .map_err(|e| format!("bad files: {e}"))?;
             let headers = opt_headers(&args)?;
             let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
-            let r = crate::plugins::runtime::portable::http_post_multipart(url, text_fields, files, headers, timeout_ms).await?;
+            let r = crate::plugins::runtime::portable::http_post_multipart_to(url, text_fields, files, headers, timeout_ms, allowed_hosts(&host)).await?;
             reply_json(&r)
         }
         "download_asset" => {
@@ -434,8 +505,7 @@ async fn dispatch_command_core(
             // webview command (AppState); here the per-manager project_path (D1).
             let filename = args.get("filename").and_then(|v| v.as_str()).map(str::to_string);
             let headers = opt_headers(&args)?;
-            let r = crate::plugins::runtime::download::download_asset_impl(
-                url, host.project_path, target_dir, timeout_ms, filename, headers).await?;
+            let r = crate::plugins::runtime::download::download_asset_to(url, host.project_path, target_dir, timeout_ms, filename, headers, allowed_hosts(&host)).await?;
             reply_json(&r)
         }
         "html_to_markdown" => {
@@ -612,12 +682,7 @@ async fn dispatch_command_core(
         }
         "execute_binary" => {
             let p = parse_execute_binary_args(&args)?;
-            match reach(&host) {
-                Reach::Folder => {}
-                Reach::Confined(plugin) => return Err(format!(
-                    "{plugin} runs programs only when you start it yourself, and it isn't running a hook you started. It tried to run {}.", p.binary_path)),
-                Reach::Unidentified => return Err(format!("a plugin moss could not identify tried to run {}; refusing", p.binary_path)),
-            }
+            need_person_run(&host, "runs programs", &format!("run {}", p.binary_path))?;
             require_binary_grant(&host, &p.binary_path)?;
             // The headless impl, not the Tauri command: the grant gate above
             // IS this seam's gate, and the command's window-label check has no
@@ -658,6 +723,7 @@ async fn dispatch_command_core(
         }
         "open_system_browser" => {
             let app = need_app(&host, "open_system_browser")?;
+            need_person_run(&host, "opens the browser", "open the browser")?;
             let url = crate::plugins::runtime::browser_sign_in::check_browser_address(&req_str(&args, "url")?)?;
             app.open_system_browser(url.into()).await?;
             Ok("null".into())
@@ -665,16 +731,16 @@ async fn dispatch_command_core(
         // Without an app nothing can open the browser and wait for it to come back.
         "browser_sign_in_start" => {
             need_app(&host, "browser_sign_in_start").map_err(|_| "Sign in from the moss app".to_string())?;
-            let plugin = caller_plugin(&host, "browser_sign_in_start")?;
-            let channel = host.declared.and_then(|d| d.title.clone()).unwrap_or_else(|| plugin.clone());
-            reply_json(&serde_json::json!({ "redirectUri": host.state.hooks.sign_ins.start(&plugin, &channel).await? }))
+            let plugin = need_person_run(&host, "signs in", "sign in")?;
+            let channel = host.declared.and_then(|d| d.title.clone()).unwrap_or_else(|| plugin.to_string());
+            reply_json(&serde_json::json!({ "redirectUri": host.state.hooks.sign_ins.start(plugin, &channel).await? }))
         }
         "browser_sign_in_wait" => {
             let app = need_app(&host, "browser_sign_in_wait").map_err(|_| "Sign in from the moss app".to_string())?;
-            let plugin = caller_plugin(&host, "browser_sign_in_wait")?;
+            let plugin = need_person_run(&host, "signs in", "sign in")?;
             // The person is in their browser: the watchdog waits for them, as for any question moss asks.
-            let _waiting = host.state.hooks.begin_person_wait(&plugin);
-            let params = host.state.hooks.sign_ins.wait(&plugin, &req_str(&args, "url")?, |url| app.open_system_browser(url)).await?;
+            let _waiting = host.state.hooks.begin_person_wait(plugin);
+            let params = host.state.hooks.sign_ins.wait(plugin, &req_str(&args, "url")?, |url| app.open_system_browser(url)).await?;
             reply_json(&serde_json::json!({ "params": params }))
         }
         // Bridged 2026-08-28: a Tauri command since onboarding, but never an
@@ -687,9 +753,10 @@ async fn dispatch_command_core(
             Ok("null".into())
         }
         "fill_browser_panel" => {
-            let (app, plugin) = (need_app(&host, "fill_browser_panel")?, caller_plugin(&host, "fill_browser_panel")?);
+            let app = need_app(&host, "fill_browser_panel")?;
+            let plugin = need_person_run(&host, "fills the browser panel", "fill the browser panel")?;
             let fill = args.get("fill").cloned().ok_or("missing 'fill'")?;
-            reply_json(&app.fill_browser_panel(&plugin, host.project_path, fill).await?)
+            reply_json(&app.fill_browser_panel(plugin, host.project_path, fill).await?)
         }
         "resolve_git_path" => {
             let r = crate::plugins::runtime::portable::resolve_git_path_impl().await?;
@@ -794,6 +861,57 @@ pub async fn dispatch_command_test_stub(
     .await
 }
 
+/// As [`dispatch_command_test_stub`], for a plugin named `local` that
+/// declares `127.0.0.1`, the address the local test servers bind.
+#[cfg(test)]
+pub async fn dispatch_command_test_stub_reaching_local(
+    project_path: &str,
+    cmd: &str,
+    args_json: &str,
+) -> std::result::Result<String, String> {
+    dispatch_command_test_stub_declaring(project_path, "local", &["127.0.0.1"], cmd, args_json).await
+}
+
+/// As [`dispatch_command_test_stub_for_person`], for `plugin` declaring `hosts`.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn dispatch_command_test_stub_declaring(
+    project_path: &str,
+    plugin: &str,
+    hosts: &[&str],
+    cmd: &str,
+    args_json: &str,
+) -> std::result::Result<String, String> {
+    dispatch_command_test_stub_asked_by(AskedBy::Person, project_path, plugin, Some(hosts), cmd, args_json).await
+}
+
+/// As [`dispatch_command_test_stub_declaring`], from a run `asked_by` began;
+/// `hosts: None` is a manifest with no `network` field.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn dispatch_command_test_stub_asked_by(
+    asked_by: AskedBy,
+    project_path: &str,
+    plugin: &str,
+    hosts: Option<&[&str]>,
+    cmd: &str,
+    args_json: &str,
+) -> std::result::Result<String, String> {
+    let state = HostState::standalone();
+    let _run = match asked_by {
+        AskedBy::Person => Some(state.hooks.begin_person_run(plugin).await),
+        AskedBy::Build => state.hooks.try_begin_build_run(plugin),
+    };
+    let declared = Declared {
+        network: hosts.map(|hosts| crate::plugins::types::NetworkDecl { hosts: hosts.iter().map(|h| h.to_string()).collect(), ..Default::default() }),
+        ..Default::default()
+    };
+    dispatch_command_core(
+        EngineHost { app: None, state: &state, project_path, plugin: Some(plugin), asked_by: Some(asked_by), declared: Some(&declared) },
+        cmd,
+        args_json,
+    )
+    .await
+}
+
 /// [`dispatch_command_test_stub`] as a call from `plugin`'s run that a person
 /// started, which reaches the whole folder.
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -803,21 +921,7 @@ pub async fn dispatch_command_test_stub_for_person(
     cmd: &str,
     args_json: &str,
 ) -> std::result::Result<String, String> {
-    let state = HostState::standalone();
-    let _run = state.hooks.begin_person_run(plugin).await;
-    dispatch_command_core(
-        EngineHost {
-            app: None,
-            state: &state,
-            project_path,
-            plugin: Some(plugin),
-            asked_by: Some(AskedBy::Person),
-            declared: None,
-        },
-        cmd,
-        args_json,
-    )
-    .await
+    dispatch_command_test_stub_asked_by(AskedBy::Person, project_path, plugin, Some(&["127.0.0.1"]), cmd, args_json).await
 }
 
 #[cfg(test)]
@@ -1207,7 +1311,7 @@ mod tests {
             "headers": { "x-access-token": "tok" },
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub("/tmp/none", None, "http_post", &args).await.unwrap();
+        let reply = dispatch_command_test_stub_reaching_local("/tmp/none", "http_post", &args).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         // Wire-shape parity with the webview path (and mock-tauri's served shape):
         // snake_case keys, base64 body.
@@ -1227,7 +1331,7 @@ mod tests {
             .create_async().await;
         for cmd in ["fetch_url", "http_get"] {
             let args = serde_json::json!({ "url": format!("{}/x", server.url()), "timeoutMs": 5000 }).to_string();
-            let reply = dispatch_command_test_stub("/tmp/none", None, cmd, &args).await.unwrap();
+            let reply = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &args).await.unwrap();
             let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
             assert_eq!(v["status"], serde_json::json!(200), "{cmd}");
             use base64::Engine as _;
@@ -1323,6 +1427,34 @@ mod tests {
         }
     }
 
+    /// A download streams to disk. One byte past its limit, or a body cut off
+    /// midway, is refused, and the file already there is kept as it was.
+    #[tokio::test]
+    async fn a_failed_download_keeps_the_file_it_would_replace() {
+        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let proj = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        std::fs::create_dir_all(proj.path().join("media")).unwrap();
+        std::fs::write(proj.path().join("media/a.bin"), b"good").unwrap();
+        let mut server = mockito::Server::new_async().await;
+        server.mock("GET", "/big.bin").with_status(200).with_chunked_body(|w| {
+            let chunk = vec![0u8; 1 << 20];
+            for _ in 0..512 { std::io::Write::write_all(w, &chunk)?; }
+            std::io::Write::write_all(w, &[0])
+        }).create_async().await;
+        server.mock("GET", "/cut.bin").with_status(200).with_chunked_body(|w| {
+            std::io::Write::write_all(w, &[1u8; 4096])?;
+            Err(std::io::Error::other("cut"))
+        }).create_async().await;
+        let args = |path: &str| serde_json::json!({ "url": format!("{}{path}", server.url()), "targetDir": "media", "filename": "a.bin", "timeoutMs": 60000 }).to_string();
+
+        let pp = proj.path().to_str().unwrap();
+        let err = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args("/big.bin")).await.unwrap_err();
+        assert!(err.contains("at most 512 MB"), "{err}");
+        dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args("/cut.bin")).await.unwrap_err();
+        assert_eq!(std::fs::read(proj.path().join("media/a.bin")).unwrap(), b"good");
+        assert_eq!(std::fs::read_dir(proj.path().join("media")).unwrap().count(), 1, "no partial file is left");
+    }
+
     /// `download_asset` writes only inside the site folder: a target directory
     /// that is absolute, names `.moss/`, or is a Windows drive path is refused
     /// before anything is fetched, and nothing lands outside.
@@ -1364,8 +1496,8 @@ mod tests {
         let get = |path: &str, headers: serde_json::Value| serde_json::json!({
             "url": format!("{}{}", server.url(), path), "headers": headers, "timeoutMs": 5000
         }).to_string();
-        dispatch_command_test_stub("/tmp/none", None, "http_get", &get("/ua", serde_json::json!({}))).await.unwrap();
-        dispatch_command_test_stub("/tmp/none", None, "http_get", &get("/own", serde_json::json!({ "User-Agent": "custom/1" }))).await.unwrap();
+        dispatch_command_test_stub_reaching_local("/tmp/none", "http_get", &get("/ua", serde_json::json!({}))).await.unwrap();
+        dispatch_command_test_stub_reaching_local("/tmp/none", "http_get", &get("/own", serde_json::json!({ "User-Agent": "custom/1" }))).await.unwrap();
         ua.assert_async().await;
         own.assert_async().await;
     }
@@ -1537,7 +1669,7 @@ mod tests {
             "headers": { "x-access-token": "tok", "apollo-require-preflight": "true" },
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub("/tmp/none", None, "http_post_multipart", &args)
+        let reply = dispatch_command_test_stub_reaching_local("/tmp/none", "http_post_multipart", &args)
             .await
             .expect("http_post_multipart must be bridged (not 'unknown command')");
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
@@ -1719,9 +1851,28 @@ mod tests {
         desk.seen("panel-opened").last().map(|p| p["url"].as_str().map(str::to_string))
     }
 
+    /// The caller holds a person run for "mastodon" on `state`.
     async fn browser_call(desk: &ScriptedPerson, state: &HostState, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
-        let host = EngineHost { app: Some(desk), state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: None, declared: None };
+        let host = EngineHost { app: Some(desk), state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: Some(AskedBy::Person), declared: None };
         dispatch_command_core(host, cmd, &args.to_string()).await
+    }
+
+    /// Each way a plugin reaches the browser can carry data out in a URL, so a
+    /// build's run, or a call outside any run, reaches none of them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_browser_is_reached_only_from_a_run_the_person_started() {
+        let desk = ScriptedPerson::default();
+        let state = HostState::standalone();
+        let _build = state.hooks.try_begin_build_run("leaky");
+        let args = serde_json::json!({ "url": "https://example.com/?d=secret", "fill": {} }).to_string();
+        for asked_by in [Some(AskedBy::Build), None] {
+            for cmd in ["open_system_browser", "browser_sign_in_start", "browser_sign_in_wait", "fill_browser_panel"] {
+                let host = EngineHost { app: Some(&desk), state: &state, project_path: "/tmp/none", plugin: Some("leaky"), asked_by, declared: None };
+                let err = dispatch_command_core(host, cmd, &args).await.unwrap_err();
+                assert!(err.contains("only when you start it yourself"), "{cmd}: {err}");
+            }
+        }
+        assert!(browser(&desk).is_empty(), "nothing may reach the browser: {:?}", browser(&desk));
     }
 
     /// A plugin can hand the system browser a web page and nothing else, on
@@ -1729,6 +1880,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_system_browser_opens_only_web_pages() {
         let (desk, state) = (ScriptedPerson::default(), HostState::standalone());
+        let _run = state.hooks.begin_person_run("mastodon").await;
         for refused in ["file:///etc/passwd", "javascript:alert(1)", "moss://open?path=/"] {
             assert!(browser_call(&desk, &state, "open_system_browser", serde_json::json!({ "url": refused })).await.is_err(), "{refused}");
             browser_call(&desk, &state, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
@@ -1744,6 +1896,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fill_browser_panel_reaches_the_app_as_the_calling_plugin() {
         let (desk, state) = (ScriptedPerson::default(), HostState::standalone());
+        let _run = state.hooks.begin_person_run("mastodon").await;
         let fill = serde_json::json!({ "editor": { "body": ".editor" }, "parts": [{ "html": "<p>a</p>" }] });
         let reply = browser_call(&desk, &state, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
         assert_eq!(reply, r#"{"filled":true}"#);
@@ -1756,6 +1909,7 @@ mod tests {
     async fn a_superseded_sign_in_rejects_with_the_text_moss_api_reads_as_cancelled() {
         use crate::plugins::runtime::browser_sign_in::CANCELLED;
         let (desk, state) = (std::sync::Arc::new(ScriptedPerson::default()), HostState::standalone());
+        let _run = state.hooks.begin_person_run("mastodon").await;
         browser_call(&desk, &state, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
         let waiting = {
             let (desk, state) = (desk.clone(), state.clone());
@@ -2038,5 +2192,81 @@ mod tests {
             !headless.hooks.is_hook_awaiting("github", "deploy"),
             "headless, an awaiting hook must stay killable — a CI build cannot wait on a prompt"
         );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_reaches_only_the_hosts_it_declares() {
+        let mut server = mockito::Server::new_async().await;
+        let port = server.socket_address().port();
+        let _ok = server.mock("GET", "/x").with_status(200).create_async().await;
+        let _bounce = server.mock("GET", "/bounce").with_status(302)
+            .with_header("location", &format!("http://localhost:{port}/x")).create_async().await;
+        let get = |path: &str| serde_json::json!({ "url": format!("{}{path}", server.url()) }).to_string();
+        for cmd in ["fetch_url", "http_get"] {
+            let err = dispatch_command_test_stub_declaring("/tmp/none", "social", &["api.example.com"], cmd, &get("/x")).await.unwrap_err();
+            assert_eq!(err, "social tried to reach 127.0.0.1, which it does not list in its manifest.", "{cmd}");
+            let err = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/bounce")).await.unwrap_err();
+            assert_eq!(err, "local tried to reach localhost, which it does not list in its manifest.", "{cmd}");
+            let err = dispatch_command_test_stub_asked_by(AskedBy::Person, "/tmp/none", "old", None, cmd, &get("/x")).await.unwrap_err();
+            assert!(err.contains("old does not list the hosts it contacts"), "{cmd}: {err}");
+        }
+        let post = serde_json::json!({ "url": format!("{}/x", server.url()), "body": "{}" }).to_string();
+        let err = dispatch_command_test_stub_declaring("/tmp/none", "social", &["api.example.com"], "http_post", &post).await.unwrap_err();
+        assert!(err.contains("which it does not list in its manifest"), "{err}");
+        let err = dispatch_command_test_stub_declaring("/tmp/none", "social", &["api.example.com"], "fetch", &get("/x")).await.unwrap_err();
+        assert_eq!(err, "social tried to reach 127.0.0.1, which it does not list in its manifest.");
+        let elsewhere = serde_json::json!({ "url": format!("http://localhost:{port}/x"), "targetDir": "assets", "timeoutMs": 5000 }).to_string();
+        let err = dispatch_command_test_stub_for_person("/tmp/none", "p", "download_asset", &elsewhere).await.unwrap_err();
+        assert_eq!(err, "p tried to reach localhost, which it does not list in its manifest.");
+    }
+
+    #[tokio::test]
+    async fn a_build_reaches_no_network() {
+        let args = serde_json::json!({ "url": "https://api.example.com/x", "body": "{}" }).to_string();
+        for cmd in ["fetch_url", "http_get", "http_post", "http_post_multipart", "fetch"] {
+            let err = dispatch_command_test_stub_asked_by(AskedBy::Build, "/tmp/none", "social", Some(&["api.example.com"]), cmd, &args).await.unwrap_err();
+            assert_eq!(err, "social tried to reach api.example.com during a build; plugins reach the network only when you Sync or Publish.", "{cmd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plugin_reads_at_most_32_mb_in_one_response() {
+        let cap = 32usize << 20;
+        let mut server = mockito::Server::new_async().await;
+        let _at = server.mock("GET", "/at").with_body(vec![b'a'; cap]).create_async().await;
+        let _over = server.mock("GET", "/over").with_body(vec![b'a'; cap + 1]).create_async().await;
+        let get = |path: &str| serde_json::json!({ "url": format!("{}{path}", server.url()) }).to_string();
+        for cmd in ["http_get", "fetch"] {
+            dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/at")).await.unwrap();
+            let err = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/over")).await.unwrap_err();
+            assert_eq!(err, "127.0.0.1 sent more than 32 MB; local can read at most 32 MB in one response.", "{cmd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plugin_declaring_its_site_reaches_only_the_address_the_person_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        // allow:raw_write a test fixture in a temporary folder
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_url = \"https://chosen-by-plugin.example\"\n").unwrap();
+        let pp = dir.path().to_str().unwrap();
+        let state = HostState::standalone();
+        let _run = state.hooks.begin_person_run("deploy").await;
+        let declared = Declared { network: Some(crate::plugins::types::NetworkDecl { site: true, ..Default::default() }), ..Default::default() };
+        let host = EngineHost { app: None, state: &state, project_path: pp, plugin: Some("deploy"), asked_by: Some(AskedBy::Person), declared: Some(&declared) };
+        let reach = |u: &str| allowed_hosts(&host).check(&u.parse().unwrap());
+        assert_eq!(reach("https://chosen-by-plugin.example/").unwrap_err(), "deploy tried to reach chosen-by-plugin.example, which it does not list in its manifest.");
+        std::fs::write(dir.path().join(".moss/config.toml"), "[site]\nurl = \"https://blog.example.org\"\n").unwrap(); // allow:raw_write a test fixture in a temporary folder
+        assert_eq!(reach("https://blog.example.org/"), Ok(()));
+        assert!(reach("https://chosen-by-plugin.example/").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_plugin_cannot_write_the_settings_that_grant_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let pp = dir.path().to_str().unwrap();
+        let w = serde_json::json!({ "relativePath": "config.toml", "content": "server = \"evil.example\"" }).to_string();
+        let err = dispatch_command_test_stub(pp, Some("social"), "write_plugin_file", &w).await.unwrap_err();
+        assert!(err.contains("cannot write config.toml"), "{err}");
     }
 }

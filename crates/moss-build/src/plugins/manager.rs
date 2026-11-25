@@ -402,8 +402,8 @@ impl PluginManager {
 
     /// Execute process capability (pre-processing before generation)
     ///
-    /// Runs before build to prepare source files
-    /// Non-critical - continues on failure with warning
+    /// Runs before build to prepare source files. Every hook runs; the error
+    /// names the plugins whose hook failed.
     ///
     /// Note: This executes hooks inline (not in a background task) so callers can
     /// await completion. The caller (spawn_process_hooks) handles the
@@ -432,6 +432,7 @@ impl PluginManager {
         }
 
         // Execute hooks sequentially (inline, not spawned)
+        let mut failed = Vec::new();
         for plugin in &self.find_plugins_by_capability(&Capability::Process) {
             let plugin_context = context_for_plugin(&context.project_path, context, plugin);
 
@@ -460,6 +461,7 @@ impl PluginManager {
                 Ok(_) => {}
                 Err(e) => {
                     log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
+                    failed.push(plugin.manifest.name.clone());
                     if !has_login {
                         let advisory = Self::plugin_hook_failure_advisory(&plugin.manifest.name, &e);
                         self.host.reporter.report(
@@ -477,7 +479,8 @@ impl PluginManager {
             }
         }
 
-        Ok(())
+        // One error for every hook that failed, so a caller counts it once.
+        if failed.is_empty() { Ok(()) } else { Err(failed.join(", ")) }
     }
 
     /// Execute process hook for a single named plugin

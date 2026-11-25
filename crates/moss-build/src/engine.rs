@@ -45,6 +45,7 @@
 //! (parked-while-deliver) are the acceptance gates for this decision.
 
 pub mod app_host;
+pub mod budgets;
 pub(crate) mod fetch_shim;
 pub mod host_fns;
 pub(crate) mod loader;
@@ -101,7 +102,9 @@ impl<F: std::future::Future> std::future::Future for GenScoped<F> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<F::Output> {
         CURRENT_GEN.with(|c| c.set(Some(self.gen)));
+        budgets::paused();
         let r = self.inner.as_mut().poll(cx);
+        budgets::paused();
         CURRENT_GEN.with(|c| c.set(None));
         r
     }
@@ -159,6 +162,7 @@ struct PendingSpawn {
     dispatch_tx: mpsc::UnboundedSender<DispatchRequest>,
     app: Option<SharedAppHost>,
     kill: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    budgets: budgets::Budgets,
 }
 
 /// Handle to a JavaScript engine running on its own OS thread.
@@ -192,6 +196,11 @@ impl QuickJsEngine {
     /// and in tests, where `__TAURI__.event.emit` becomes a no-op and
     /// dispatch routes through the injected `HostState` instead.
     pub fn new(app: Option<SharedAppHost>) -> (Self, mpsc::UnboundedReceiver<DispatchRequest>) {
+        Self::with_budgets(app, budgets::Budgets::default())
+    }
+
+    /// [`Self::new`] with other limits than the defaults.
+    pub fn with_budgets(app: Option<SharedAppHost>, budgets: budgets::Budgets) -> (Self, mpsc::UnboundedReceiver<DispatchRequest>) {
         let (jobs, rx) = mpsc::unbounded_channel::<Job>();
         let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<DispatchRequest>();
         let dispatch_tx_for_thread = dispatch_tx.clone();
@@ -205,6 +214,7 @@ impl QuickJsEngine {
             dispatch_tx: dispatch_tx_for_thread,
             app,
             kill: kill_for_thread,
+            budgets,
         })));
         (Self { jobs, dispatch_tx, kill, pending_spawn }, dispatch_rx)
     }
@@ -227,7 +237,7 @@ impl QuickJsEngine {
             let n = ENGINE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             std::thread::Builder::new()
                 .name(format!("moss-plugin-engine-{n}"))
-                .spawn(move || engine_thread_main(p.rx, p.dispatch_tx, p.app, p.kill))
+                .spawn(move || engine_thread_main(p.rx, p.dispatch_tx, p.app, p.kill, p.budgets))
                 .expect("failed to spawn moss-plugin-engine thread");
         }
     }
@@ -398,6 +408,62 @@ async fn teardown_one(pr: &PluginRuntime) {
     pr.hub.borrow_mut().listeners.clear();
 }
 
+/// D3 hygiene: retire poisoned runtimes (cancelled/interrupted hooks leave
+/// half-mutated JS state); the next dispatch re-inits a fresh Context. With
+/// `restart_all`, every Context is retired and its memory collected.
+async fn retire_poisoned(
+    runtime: &AsyncRuntime,
+    plugins: &mut HashMap<String, PluginRuntime>,
+    retired: &mut Vec<PluginRuntime>,
+    restart_all: bool,
+) {
+    let poisoned_names: Vec<String> = plugins
+        .iter()
+        .filter(|(_, pr)| restart_all || pr.poisoned.get())
+        .map(|(n, _)| n.clone())
+        .collect();
+    for name in poisoned_names {
+        if let Some(pr) = plugins.remove(&name) {
+            if pr.in_flight.get() > 0 {
+                retired.push(pr);
+            } else {
+                teardown_one(&pr).await;
+            }
+        }
+    }
+    drain_retired(retired).await;
+    if restart_all {
+        runtime.run_gc().await;
+    }
+}
+
+/// The budget counters when a plugin's code was handed control.
+#[derive(Clone, Copy)]
+struct Seen {
+    refusals: u64,
+    trips: u64,
+}
+
+impl Seen {
+    fn now() -> Self {
+        Self { refusals: budgets::refusals(), trips: budgets::trips() }
+    }
+}
+
+/// What stopped `plugin`'s code if a budget did: an allocation refused since
+/// `seen` (the loop then restarts every plugin), or the pause limit, when a
+/// trip came since `seen` and the code itself failed with the interrupt
+/// (`stopped`). A pause marks `poisoned`, the plugin's Context, to retire.
+fn over_budget(plugin: &str, budgets: budgets::Budgets, poisoned: Option<&Cell<bool>>, seen: Seen, stopped: bool) -> Option<String> {
+    if budgets::refusals() != seen.refusals {
+        return Some(budgets::memory_message(plugin, budgets.memory));
+    }
+    (stopped && budgets::trips() != seen.trips).then(|| {
+        poisoned.inspect(|p| p.set(true));
+        budgets::pause_message(plugin, budgets.pause)
+    })
+}
+
 /// Tear down retirees whose last in-flight hook has finished (checked at the top
 /// of every job-loop iteration — sufficient, since counts only change on this
 /// thread between iterations).
@@ -428,6 +494,7 @@ fn engine_thread_main(
     dispatch_tx: mpsc::UnboundedSender<DispatchRequest>,
     app_for_engine: Option<SharedAppHost>,
     kill: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    budgets: budgets::Budgets,
 ) {
     let tokio_rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -443,7 +510,7 @@ fn engine_thread_main(
     let local = tokio::task::LocalSet::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         local.block_on(&tokio_rt, async move {
-            engine_loop(rx, dispatch_tx, app_for_engine, kill).await;
+            engine_loop(rx, dispatch_tx, app_for_engine, kill, budgets).await;
         });
     }));
     if result.is_err() {
@@ -461,8 +528,9 @@ async fn engine_loop(
     dispatch_tx: mpsc::UnboundedSender<DispatchRequest>,
     app_for_engine: Option<SharedAppHost>,
     kill: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    budgets: budgets::Budgets,
 ) {
-    let runtime = match AsyncRuntime::new() {
+    let runtime = match AsyncRuntime::new_with_alloc(budgets::Capped::new(budgets.memory)) {
         Ok(r) => r,
         Err(e) => {
             drain_with_error_async(&mut rx, format!("rquickjs AsyncRuntime init failed: {e}")).await;
@@ -496,10 +564,13 @@ async fn engine_loop(
                     HOOK_TOKENS.with(|t| {
                         t.borrow().get(&g).is_some_and(|tok| tok.is_cancelled())
                     })
-                })
+                }) || budgets::over_pause(budgets.pause)
             })))
             .await;
     }
+
+    // Running out of memory anywhere restarts every Context.
+    let mut refusals_seen = budgets::refusals();
 
     // NO resident drive() task — see the module-level "drive-loop resolution" note.
     // Instead each loop iteration `select!`s over `rx.recv()` AND `runtime.drive()`,
@@ -520,23 +591,8 @@ async fn engine_loop(
     let mut next_hook_gen: u64 = 0;
 
     loop {
-        // D3 hygiene: retire poisoned runtimes (cancelled/interrupted hooks leave
-        // half-mutated JS state); next dispatch re-inits a fresh Context.
-        let poisoned_names: Vec<String> = plugins
-            .iter()
-            .filter(|(_, pr)| pr.poisoned.get())
-            .map(|(n, _)| n.clone())
-            .collect();
-        for name in poisoned_names {
-            if let Some(pr) = plugins.remove(&name) {
-                if pr.in_flight.get() > 0 {
-                    retired.push(pr);
-                } else {
-                    teardown_one(&pr).await;
-                }
-            }
-        }
-        drain_retired(&mut retired).await;
+        budgets::paused();
+        retire_poisoned(&runtime, &mut plugins, &mut retired, budgets::refused_since(&mut refusals_seen)).await;
         let job = tokio::select! {
             // `drive()` returns Poll::Pending after each tick (never Ready while the
             // runtime is alive), releasing the lock so a parked hook task can progress.
@@ -547,6 +603,10 @@ async fn engine_loop(
                 None => break, // all job-sender handles dropped
             },
         };
+        // Code may have run out of memory while the loop waited.
+        if budgets::refused_since(&mut refusals_seen) {
+            retire_poisoned(&runtime, &mut plugins, &mut retired, true).await;
+        }
         match job {
             Job::DispatchHook {
                 plugin,
@@ -592,6 +652,7 @@ async fn engine_loop(
                 // Get-or-create the per-plugin Context, installing every shim + the
                 // bundle ONCE on first sight.
                 if !plugins.contains_key(&plugin) {
+                    let seen = Seen::now();
                     let ctx = match AsyncContext::full(&runtime).await {
                         Ok(c) => c,
                         Err(e) => {
@@ -613,6 +674,7 @@ async fn engine_loop(
                     // Clone for the init block: project_path is also used by run_hook
                     // later in this arm, so the outer binding must stay alive.
                     let project_path_for_init = project_path.clone();
+                    let init_stopped = Cell::new(false);
                     let init: Result<(), String> = async_with!(ctx => |ctx| {
                         // Real bundles + moss-api address globals via `window.`
                         // (sdk-bundles probe R1). A bare alias — the SDK only ever
@@ -631,7 +693,7 @@ async fn engine_loop(
                             .map_err(|e| format!("install_timers error: {e}"))?;
                         self::url_shim::install_url(&ctx)
                             .map_err(|e| format!("install_url error: {e}"))?;
-                        self::fetch_shim::install_fetch(&ctx, pr.ended.clone())
+                        self::fetch_shim::install_fetch(&ctx, bridge.for_plugin(&plugin, asked_by), pr.ended.clone())
                             .map_err(|e| format!("install_fetch error: {e}"))?;
                         self::host_fns::install_invoke(&ctx, bridge.clone(), &plugin, asked_by, pr.ended.clone())
                             .map_err(|e| format!("install_invoke error: {e}"))?;
@@ -657,6 +719,7 @@ async fn engine_loop(
                         if let Err(e) = self::loader::load_bundle(&ctx, &bundle, &global_name) {
                             if matches!(e, rquickjs::Error::Exception) {
                                 let caught = ctx.catch();
+                                init_stopped.set(budgets::is_interrupt(&caught));
                                 return Err(thrown_text(&caught));
                             }
                             return Err(format!("{e}"));
@@ -665,7 +728,7 @@ async fn engine_loop(
                         // throw = init failure through the cleanup below. Inline
                         // await is sound: WithFuture::poll pumps the schedular
                         // (rquickjs context/async/future.rs, verified).
-                        if let Err(e) = self::loader::call_onload(&ctx, &project_path_for_init).await {
+                        if let Err(e) = self::loader::call_onload(&ctx, &project_path_for_init, &init_stopped).await {
                             return Err(format!("onload error: {e}"));
                         }
                         Ok::<(), String>(())
@@ -673,6 +736,7 @@ async fn engine_loop(
                     .await
                     .map_err(|e| format!("plugin {plugin} init error: {e}"));
                     if let Err(e) = init {
+                        let e = over_budget(&plugin, budgets, None, seen, init_stopped.get()).unwrap_or(e);
                         teardown_one(&pr).await;
                         let _ = reply.send(Err(e));
                         continue;
@@ -687,6 +751,7 @@ async fn engine_loop(
                 // an eviction arriving mid-hook sees in_flight > 0 and retires.
                 let in_flight = pr.in_flight.clone();
                 let poisoned = pr.poisoned.clone();
+                let seen = Seen::now();
                 in_flight.set(in_flight.get() + 1);
                 // Per-hook generation (condition 6, D3): assign a unique gen and
                 // register the cancel token so the interrupt handler can reach it.
@@ -702,9 +767,10 @@ async fn engine_loop(
                 // `idle()` would park HOLDING the runtime lock and starve this very task.
                 tokio::task::spawn_local(async move {
                     use futures::FutureExt;
+                    let stopped = Cell::new(false);
                     let hook_fut = std::panic::AssertUnwindSafe(GenScoped::new(
                         gen,
-                        run_hook(&ctx, &plugin, &hook_for_task, &context_json, &project_path, &moss_dir),
+                        run_hook(&ctx, &plugin, &hook_for_task, &context_json, &project_path, &moss_dir, &stopped),
                     ))
                     .catch_unwind();
                     let result = tokio::select! {
@@ -719,11 +785,17 @@ async fn engine_loop(
                         // reaches this select — the interrupt handler unwinds it first,
                         // then this arm fires on the next re-poll.
                         _ = cancel.cancelled() => Err(format!("hook {hook_for_task} cancelled by host")),
-                        r = hook_fut => r.unwrap_or_else(|panic| {
+                        r = budgets::polled_again_on_trips(hook_fut) => r.unwrap_or_else(|panic| {
                             let msg = panic_text(&*panic);
                             log::error!(target: "plugin", "hook {hook_for_task} PANICKED: {msg}");
                             Err(format!("hook {hook_for_task} panicked: {msg}"))
                         }),
+                    };
+                    let result = match result {
+                        // A cancel landing mid-spin unwinds through the same interrupt.
+                        Err(_) if cancel.is_cancelled() => Err(format!("hook {hook_for_task} cancelled by host")),
+                        Err(e) => Err(over_budget(&plugin, budgets, Some(&poisoned), seen, stopped.get()).unwrap_or(e)),
+                        ok => ok,
                     };
                     if cancel.is_cancelled() {
                         // D3 hygiene: half-mutated JS state — retire this Context at
@@ -743,6 +815,7 @@ async fn engine_loop(
                 payload_json,
             } => {
                 if let Some(pr) = plugins.get(&plugin) {
+                    let seen = Seen::now();
                     let ctx = pr.ctx.clone();
                     let hub = pr.hub.clone();
                     // Deliver INLINE (not on a spawn_local task): `runtime.drive()` only
@@ -759,8 +832,12 @@ async fn engine_loop(
                     }))
                     .catch_unwind()
                     .await;
+                    let stopped = matches!(delivered, Ok(Ok(true)));
                     if let Err(panic) = delivered {
                         log::error!(target: "plugin", "event '{name}' for {plugin} PANICKED: {}", panic_text(&*panic));
+                    }
+                    if let Some(stop) = over_budget(&plugin, budgets, Some(&pr.poisoned), seen, stopped) {
+                        log::warn!(target: "plugin", "{stop}");
                     }
                 }
             }
@@ -819,6 +896,7 @@ async fn run_hook(
     context_json: &str,
     project_path: &str,
     moss_dir: &str,
+    stopped: &Cell<bool>,
 ) -> Result<String, String> {
     // async_with! returns Result<T, rquickjs::Error>. rquickjs::Error::Exception
     // renders as the opaque "Exception generated by QuickJS" — unhelpful for plugin
@@ -855,6 +933,7 @@ async fn run_hook(
                     // (engine-kill-respawn probe Facts §1).
                     if matches!(e, rquickjs::Error::Exception) {
                         let caught = ctx.catch();
+                        stopped.set(budgets::is_interrupt(&caught));
                         return Err(thrown_text(&caught));
                     }
                     return Err(format!("{e}"));
@@ -872,6 +951,7 @@ async fn run_hook(
                     // message; same pattern used at bundle eval time, engine.rs:351-358).
                     if matches!(e, rquickjs::Error::Exception) {
                         let caught = ctx.catch();
+                        stopped.set(budgets::is_interrupt(&caught));
                         return Err(thrown_text(&caught));
                     }
                     return Err(format!("{e}"));

@@ -136,6 +136,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. moss's own cache (`.moss/cache/`) is left in the cloud, since a build downloads what it needs again: exclude it from a copy (`rsync --exclude .moss/cache`). Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file but the cache is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
         },
         CliCommandInfo {
+            name: "sync",
+            args: "<folder> [--allow-plugins]",
+            description: "Run the process hooks of the plugins in a site once, as the moss app does when the folder opens or Sync is pressed (an import of new posts, for example), then exit without building. A build reaches no network, so this is where plugins fetch for someone who builds from the command line; the next `moss build` reads what they wrote. Plugins that came with the folder run only once the folder is trusted in the moss app, or with --allow-plugins; without either, it exits 1 naming them and runs none. Exits 1 when a plugin's hook fails, naming it, and 2 on bad arguments.",
+        },
+        CliCommandInfo {
             name: "doctor",
             args: "--math [<folder>] | --surface [<folder>] [--all] [--json]",
             description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, theme selectors keyed on a page address (they break when the page is renamed), and the class names the theme invents that moss does not write, each marked as used in pages or nowhere (`theme_own_classes` in --json). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
@@ -241,6 +246,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("import", "moss import https://studio.example/ ~/Sites/studio/ --export studio.WordPress.xml"),
     ("fetch", "moss fetch ~/blog/                  # Download every cloud-only file; exit 1 if the provider is not delivering"),
+    ("sync", "moss sync ~/blog/                   # Run the plugins' imports once, without building"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors, theme-invented classes"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),

@@ -141,7 +141,7 @@ fn site(port: u16, idempotent: bool, folder_names_channel: bool) -> Site {
         ".moss/plugins/fixture/manifest.json",
         &serde_json::json!({
             "name": "fixture", "version": "0.0.1", "display_name": "Fixture", "description": "", "author": "",
-            "entry": "main.bundle.js", "global_name": "FixturePlugin", "domains": ["example.social"],
+            "entry": "main.bundle.js", "global_name": "FixturePlugin", "domains": ["example.social"], "network": {"hosts": ["127.0.0.1"]},
             "contributes": {"channel": {"syndication": {"forms": ["short", "thread", "teaser"], "max_chars": 300, "idempotent": idempotent}}}
         })
         .to_string(),

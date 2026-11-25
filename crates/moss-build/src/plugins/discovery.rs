@@ -398,7 +398,7 @@ fn read_plugin_config_json(
 }
 
 /// Read plugin config from a standalone TOML file in the plugin folder
-fn read_plugin_config_file(
+pub(crate) fn read_plugin_config_file(
     config_path: &Path,
 ) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
     use std::collections::HashMap;

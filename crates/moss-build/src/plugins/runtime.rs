@@ -10,6 +10,7 @@ pub mod browser_sign_in;
 pub mod download;
 pub mod portable;
 mod http;
+pub mod hosts;
 
 #[cfg(test)]
 pub(crate) mod redirect_tests;

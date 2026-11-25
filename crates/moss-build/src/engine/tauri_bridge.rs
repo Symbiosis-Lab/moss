@@ -196,7 +196,8 @@ pub fn install_event<'js>(
 //
 // Consumed by the host-side delivery path (engine `Job::DeliverEvent`) + the
 // acceptance gate.
-pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, plugin: &str, name: &str, payload_json: &str) -> Result<()> {
+/// Whether a listener failed with moss's interrupt.
+pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, plugin: &str, name: &str, payload_json: &str) -> Result<bool> {
     // Snapshot the callbacks for `name` and DROP the borrow before invoking any —
     // a handler may call back into listen()/unlisten and re-borrow the hub.
     // `restore` CONSUMES the Persistent, so clone the stored ones (Function<'static>
@@ -207,6 +208,7 @@ pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, plugin: &str, name: &
         .get(name)
         .cloned()
         .unwrap_or_default();
+    let mut stopped = false;
     for (_, cb) in cbs {
         let one = (|| -> Result<()> {
             let f: Function = cb.restore(ctx)?;
@@ -219,11 +221,12 @@ pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, plugin: &str, name: &
         if let Err(e) = one {
             // Clear any pending exception so the NEXT listener runs clean, then log.
             let thrown = ctx.catch();
+            stopped |= super::budgets::is_interrupt(&thrown);
             let why = thrown.as_exception().and_then(|x| x.message()).unwrap_or_else(|| e.to_string());
             log::warn!(target: "plugin", "{plugin}: event '{name}' listener failed: {why}");
         }
     }
-    Ok(())
+    Ok(stopped)
 }
 
 // The emit-side helpers — `emit_to_panel`, `plugin_toast_payload`, the

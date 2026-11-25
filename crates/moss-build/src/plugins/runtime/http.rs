@@ -16,6 +16,29 @@ pub(super) enum Body {
     Bytes(Vec<u8>),
 }
 
+/// The most one response read into plugin code may hold. A download streams
+/// to disk under its own limit.
+pub(super) const MAX_RESPONSE: u64 = 32 << 20;
+
+/// A request's time limit: the plugin's own, at most five minutes.
+pub(super) fn timeout_ms(asked: Option<u64>) -> u64 {
+    asked.unwrap_or(30_000).min(300_000)
+}
+
+/// Read `response`'s body into `body`, refusing past [`MAX_RESPONSE`]. Bytes
+/// read before an error stay in `body`.
+pub(super) fn read_capped(response: ureq::Response, allowed: &super::hosts::AllowedHosts, body: &mut Vec<u8>) -> Result<(), String> {
+    use std::io::Read;
+    let host = url::Url::parse(response.get_url()).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+    response.into_reader().take(MAX_RESPONSE + 1).read_to_end(body).map_err(|e| format!("Failed to read response body: {e}"))?;
+    if body.len() as u64 > MAX_RESPONSE {
+        body.truncate(MAX_RESPONSE as usize);
+        let plugin = allowed.plugin().unwrap_or("the plugin");
+        return Err(format!("{host} sent more than 32 MB; {plugin} can read at most 32 MB in one response."));
+    }
+    Ok(())
+}
+
 fn validate(url: &url::Url) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!("Invalid URL scheme '{}': only http/https allowed", url.scheme()));
@@ -38,12 +61,13 @@ fn clear_userinfo(url: &mut url::Url) {
 
 /// Follow at most four hops, matching the pinned client's redirects(5) boundary.
 /// Credentials are removed from the evolving header set, never copied back in.
-pub(super) fn request(address: &str, mut method: &str, mut body: Option<Body>, headers: HashMap<String, String>, timeout: Duration, policy: Redirect) -> Result<ureq::Response, String> {
+pub(super) fn request(address: &str, mut method: &str, mut body: Option<Body>, headers: HashMap<String, String>, timeout: Duration, policy: Redirect, allowed: &super::hosts::AllowedHosts) -> Result<ureq::Response, String> {
     use base64::Engine;
     let started = Instant::now();
     if address.is_empty() { return Err("URL cannot be empty".into()); }
     let mut url: url::Url = address.parse().map_err(|e| format!("Invalid URL: {e}"))?;
     validate(&url)?;
+    allowed.check(&url)?;
     let mut headers: HashMap<_, _> = headers.into_iter().map(|(k, v)| (k.to_ascii_lowercase(), v)).collect();
     headers.entry("user-agent".into()).or_insert_with(crate::system::user_agent);
     // Materialize initial URL credentials once so ureq cannot regenerate them
@@ -83,6 +107,7 @@ pub(super) fn request(address: &str, mut method: &str, mut body: Option<Body>, h
             _ => return Ok(response),
         };
         validate(&next)?;
+        allowed.check(&next)?;
         if !same_origin(&url, &next) { strip_cross_origin(&mut headers); }
         clear_userinfo(&mut next);
         // Every followable request is now bodyless; let ureq supply framing.
@@ -98,6 +123,13 @@ pub(super) fn request(address: &str, mut method: &str, mut body: Option<Body>, h
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_waits_as_long_as_its_plugin_asks_up_to_five_minutes() {
+        assert_eq!(timeout_ms(None), 30_000);
+        assert_eq!(timeout_ms(Some(90_000)), 90_000);
+        assert_eq!(timeout_ms(Some(3_600_000)), 300_000);
+    }
 
     #[test]
     fn origins_compare_scheme_normalized_host_and_effective_port() {

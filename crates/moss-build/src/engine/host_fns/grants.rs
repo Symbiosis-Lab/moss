@@ -58,6 +58,8 @@ pub struct Declared {
     /// `contributes.jobs`: the verb/noun a plugin proposes for each job id, so
     /// the lifecycle arm can stamp a task's receipt without asking the app.
     pub jobs: std::collections::HashMap<String, crate::plugins::contributions::JobDescriptor>,
+    /// The manifest's `network` field, as discovered.
+    pub network: Option<crate::plugins::types::NetworkDecl>,
 }
 
 impl GrantRegistry {
@@ -93,6 +95,7 @@ impl GrantRegistry {
                             .and_then(|c| c.jobs.as_ref())
                             .map(|jobs| jobs.descriptors.clone())
                             .unwrap_or_default(),
+                        network: p.manifest.network.clone(),
                     },
                 )
             })

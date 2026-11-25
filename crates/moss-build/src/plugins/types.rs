@@ -149,6 +149,25 @@ pub struct PluginManifest {
     /// NOT gated — a caller signs only with its own scoped key.
     #[serde(default)]
     pub requires: Option<Vec<String>>,
+
+    /// The hosts the plugin's code may reach. `None` reaches nothing, so a
+    /// manifest written before the field existed is refused, not trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkDecl>,
+}
+
+/// A manifest's `network` field: what [`crate::plugins::runtime::hosts`] allows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkDecl {
+    /// Exact hosts, or `*.domain` for any name below `domain`.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    /// Settings whose value is an address the person typed; its host is allowed.
+    #[serde(default)]
+    pub setting_hosts: Vec<String>,
+    /// The site's own published host.
+    #[serde(default)]
+    pub site: bool,
 }
 
 impl PluginManifest {

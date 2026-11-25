@@ -204,6 +204,14 @@ fn alloc_timer(ctx: &Ctx<'_>) -> Result<(u64, CancellationToken)> {
     }
 }
 
+/// A timer callback that hit the pause limit is stopped; say so, since its
+/// error has no caller to reach.
+fn report_timer_stop(ctx: &Ctx<'_>) {
+    if super::budgets::is_interrupt(&ctx.catch()) {
+        log::warn!(target: "plugin", "a plugin's timer ran without pausing past its limit and was stopped");
+    }
+}
+
 fn set_timeout_fn<'js>(
     ctx: Ctx<'js>,
     cb: rquickjs::Function<'js>,
@@ -211,11 +219,13 @@ fn set_timeout_fn<'js>(
 ) -> Result<u64> {
     let (id, token) = alloc_timer(&ctx)?;
     let ms = ms.0.unwrap_or(0.0).max(0.0);
+    let cb_ctx = ctx.clone();
     ctx.spawn(async move {
         tokio::select! {
             _ = token.cancelled() => {}
             _ = tokio::time::sleep(Duration::from_secs_f64(ms / 1000.0)) => {
-                let _ = cb.call::<_, ()>(());
+                super::budgets::paused();
+                if cb.call::<_, ()>(()).is_err() { report_timer_stop(&cb_ctx); }
             }
         }
     });
@@ -235,6 +245,7 @@ fn set_interval_fn<'js>(
 ) -> Result<u64> {
     let (id, token) = alloc_timer(&ctx)?;
     let ms = ms.0.unwrap_or(0.0).max(1.0);
+    let cb_ctx = ctx.clone();
     ctx.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs_f64(ms / 1000.0));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -243,7 +254,8 @@ fn set_interval_fn<'js>(
             tokio::select! {
                 _ = token.cancelled() => break,
                 _ = interval.tick() => {
-                    if cb.call::<_, ()>(()).is_err() { break; }
+                    super::budgets::paused();
+                    if cb.call::<_, ()>(()).is_err() { report_timer_stop(&cb_ctx); break; }
                 }
             }
         }

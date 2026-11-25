@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::portable::{DownloadAssetResult, BinaryExecutionResult, FetchResult};
+use super::hosts::AllowedHosts;
 
 // ============================================================================
 // Download Concurrency Control
@@ -53,11 +54,12 @@ pub(super) async fn do_http_request(
     headers: Option<std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
     tag: &'static str,
+    allowed: super::hosts::AllowedHosts,
 ) -> Result<FetchResult, String> {
     use base64::Engine;
     use std::time::Duration;
 
-    let timeout_ms_val = timeout_ms.unwrap_or(30_000);
+    let timeout_ms_val = super::http::timeout_ms(timeout_ms);
     let timeout = Duration::from_millis(timeout_ms_val);
     let result = tokio::task::spawn_blocking(move || {
         let (method, body, content_type) = match method {
@@ -71,9 +73,8 @@ pub(super) async fn do_http_request(
             headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
             headers.insert("Content-Type".into(), content_type);
         }
-        let response = super::http::request(&url, method, body, headers, timeout, Redirect::Follow)?;
-        let response = if response.status() >= 400 { Err(ureq::Error::Status(response.status(), response)) } else { Ok(response) };
-        process_ureq_response(response, &url, timeout_ms_val)
+        let response = super::http::request(&url, method, body, headers, timeout, Redirect::Follow, &allowed)?;
+        read_response(response, |r, body| super::http::read_capped(r, &allowed, body))
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?;
@@ -139,60 +140,38 @@ pub(super) fn build_multipart_body(
     (body, content_type)
 }
 
-/// Process ureq response or error into a standardized result tuple.
-///
-/// Shared helper for `fetch_url`, `http_post`, and `download_asset`.  Extracts
-/// status, ok flag, content-type, and body bytes from successful responses, and
-/// converts transport errors into descriptive strings.
-pub fn process_ureq_response(
-    response: Result<ureq::Response, ureq::Error>,
-    url: &str,
-    timeout_ms: u64,
+/// `response`'s status, ok flag, content type and body, read with `read`. An
+/// error status keeps whatever body could be read.
+fn read_response(
+    response: ureq::Response,
+    read: impl Fn(ureq::Response, &mut Vec<u8>) -> Result<(), String>,
 ) -> Result<(u16, bool, Option<String>, Vec<u8>), String> {
-    use std::io::Read;
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            let ok = status >= 200 && status < 300;
-            let content_type = resp.header("content-type").map(|s| s.to_string());
-
-            let mut bytes = Vec::new();
-            resp.into_reader()
-                .read_to_end(&mut bytes)
-                .map_err(|e| format!("Failed to read response body: {}", e))?;
-
-            Ok((status, ok, content_type, bytes))
-        }
-        Err(ureq::Error::Status(status, resp)) => {
-            let ok = false;
-            let content_type = resp.header("content-type").map(|s| s.to_string());
-            let mut bytes = Vec::new();
-            let _ = resp.into_reader().read_to_end(&mut bytes);
-            Ok((status, ok, content_type, bytes))
-        }
-        Err(ureq::Error::Transport(e)) => {
-            use std::error::Error as StdError;
-
-            let msg = if e.kind() == ureq::ErrorKind::Io {
-                if let Some(io_err) = e.source().and_then(|e| e.downcast_ref::<std::io::Error>()) {
-                    if io_err.kind() == std::io::ErrorKind::TimedOut {
-                        format!("Request timeout after {}ms: {}", timeout_ms, url)
-                    } else {
-                        format!("IO error: {}", e)
-                    }
-                } else {
-                    format!("IO error: {}", e)
-                }
-            } else if e.kind() == ureq::ErrorKind::ConnectionFailed {
-                format!("Connection failed: {}", e)
-            } else {
-                format!("Request failed: {}", e)
-            };
-            log::warn!("HTTP request failed ({:?})", e.kind());
-            Err(msg)
-        }
+    let status = response.status();
+    let content_type = response.header("content-type").map(|s| s.to_string());
+    let mut bytes = Vec::new();
+    if status >= 400 {
+        let _ = read(response, &mut bytes);
+    } else {
+        read(response, &mut bytes)?;
     }
+    Ok((status, (200..300).contains(&status), content_type, bytes))
+}
+
+/// The most one download may write.
+const MAX_DOWNLOAD: u64 = 512 << 20;
+
+/// Stream `response` into `path`, refusing past [`MAX_DOWNLOAD`]. A refused
+/// or broken download leaves whatever `path` held.
+fn save_capped(response: ureq::Response, path: &Path, allowed: &AllowedHosts) -> Result<u64, String> {
+    use std::io::Read;
+    let host = url::Url::parse(response.get_url()).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+    crate::infra::atomic_write::write_atomic_with(path, |file| {
+        let n = std::io::copy(&mut response.into_reader().take(MAX_DOWNLOAD + 1), file).map_err(|e| format!("Failed to write file: {}", e))?;
+        if n > MAX_DOWNLOAD {
+            return Err(format!("{host} sent more than 512 MB; {} can download at most 512 MB in one file.", allowed.plugin().unwrap_or("the plugin")));
+        }
+        Ok(n)
+    })
 }
 
 // ============================================================================
@@ -283,6 +262,7 @@ pub(super) fn derive_filename(url: &url::Url, content_type: Option<&str>) -> Str
 }
 
 /// Inner implementation of `download_asset` — testable without `tauri::State`.
+/// Unchecked: the desktop app's panel door (see [`AllowedHosts::unchecked_app_panel`]).
 pub async fn download_asset_impl(
     url: String,
     project_path: &str,
@@ -290,6 +270,19 @@ pub async fn download_asset_impl(
     timeout_ms: Option<u64>,
     filename: Option<String>,
     headers: Option<HashMap<String, String>>,
+) -> Result<DownloadAssetResult, String> {
+    download_asset_to(url, project_path, target_dir, timeout_ms, filename, headers, AllowedHosts::unchecked_app_panel()).await
+}
+
+/// `download_asset`, reaching only `allowed`.
+pub(crate) async fn download_asset_to(
+    url: String,
+    project_path: &str,
+    target_dir: String,
+    timeout_ms: Option<u64>,
+    filename: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    allowed: AllowedHosts,
 ) -> Result<DownloadAssetResult, String> {
     use std::time::Duration;
 
@@ -317,7 +310,7 @@ pub async fn download_asset_impl(
         ));
     }
 
-    let timeout_ms_val = timeout_ms.unwrap_or(30_000);
+    let timeout_ms_val = super::http::timeout_ms(timeout_ms);
     let timeout_duration = Duration::from_millis(timeout_ms_val);
 
     let _permit = DOWNLOAD_SEMAPHORE
@@ -327,71 +320,25 @@ pub async fn download_asset_impl(
 
     log::debug!("download_asset: starting request (permit acquired)");
 
-    let url_clone = url.clone();
-    let url_for_timeout_msg = url.clone();
-    let result = tokio::time::timeout(timeout_duration, async {
-        let url_inner = url_clone.clone();
-        let timeout_for_ureq = timeout_duration;
-
-        tokio::task::spawn_blocking(move || {
-            let agent = crate::system::proxy::proxied_ureq_agent(&url_inner, timeout_for_ureq);
-            let mut request = agent.get(&url_inner).set("User-Agent", &crate::system::user_agent());
-            for (key, value) in headers.iter().flatten() {
-                request = request.set(key, value);
-            }
-            let response = request.call();
-            process_ureq_response(response, &url_inner, timeout_ms_val)
-        })
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
-    })
+    let project = project_path.to_string();
+    let shown_url = url.clone();
+    let result = tokio::time::timeout(timeout_duration, tokio::task::spawn_blocking(move || {
+        let response = super::http::request(&url, "GET", None, headers.unwrap_or_default(), timeout_duration, Redirect::Follow, &allowed)?;
+        let status = response.status();
+        let content_type = response.header("content-type").map(|s| s.to_string());
+        if !(200..300).contains(&status) {
+            return Ok(DownloadAssetResult { status, ok: false, content_type, bytes_written: 0, actual_path: String::new() });
+        }
+        let filename = filename.unwrap_or_else(|| derive_filename(&parsed_url, content_type.as_deref()));
+        let relative_path = format!("{}/{}", target_dir.trim_end_matches('/'), filename);
+        let file_path = crate::vault::fs::PluginPath::sandboxed(&relative_path)?.resolve_under(Path::new(&project))?;
+        let bytes_written = save_capped(response, &file_path, &allowed)?;
+        log::debug!("download_asset: saved {bytes_written} bytes to {relative_path}");
+        Ok(DownloadAssetResult { status, ok: true, content_type, bytes_written, actual_path: relative_path })
+    }))
     .await
-    .map_err(|_| {
-        format!(
-            "Download timeout after {}ms: {}",
-            timeout_duration.as_millis(),
-            url_for_timeout_msg
-        )
-    })?;
-
-    let (status, ok, content_type, bytes) = result?;
-
-    if !ok {
-        return Ok(DownloadAssetResult {
-            status,
-            ok,
-            content_type,
-            bytes_written: 0,
-            actual_path: String::new(),
-        });
-    }
-
-    let bytes_len = bytes.len() as u64;
-
-    let filename = filename.unwrap_or_else(|| derive_filename(&parsed_url, content_type.as_deref()));
-    let relative_path = format!("{}/{}", target_dir.trim_end_matches('/'), filename);
-
-    let file_path = crate::vault::fs::PluginPath::sandboxed(&relative_path)?.resolve_under(Path::new(project_path))?;
-    if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-    // allow:raw_write downloaded asset lands in the plugin's target dir under the project root, not .moss/build.nosync/ — freshly created path, no evicted destination
-    fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
-
-    log::debug!(
-        "download_asset: saved {} bytes to {}",
-        bytes_len,
-        relative_path
-    );
-
-    Ok(DownloadAssetResult {
-        status,
-        ok,
-        content_type,
-        bytes_written: bytes_len,
-        actual_path: relative_path,
-    })
+    .map_err(|_| format!("Download timeout after {}ms: {shown_url}", timeout_duration.as_millis()))?;
+    result.map_err(|e| format!("Task error: {}", e))?
 }
 
 // ============================================================================
@@ -425,9 +372,10 @@ pub(crate) async fn do_http_request_full(
     req_headers: Option<std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
     redirect: Redirect,
+    allowed: super::hosts::AllowedHosts,
 ) -> Result<FetchFull, String> {
     use std::time::Duration;
-    let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
+    let timeout = Duration::from_millis(super::http::timeout_ms(timeout_ms));
     tokio::task::spawn_blocking(move || {
         let (method, body) = match method {
             FetchMethod::Get => ("GET", None),
@@ -440,16 +388,15 @@ pub(crate) async fn do_http_request_full(
         if body.is_some() && !headers.keys().any(|k| k.eq_ignore_ascii_case("content-type")) {
             headers.insert("Content-Type".into(), "application/json".into());
         }
-        let r = super::http::request(&url, method, body, headers, timeout, redirect)?;
+        let r = super::http::request(&url, method, body, headers, timeout, redirect, &allowed)?;
         let status = r.status();
         let ok = (200..300).contains(&status);
         let headers = r.headers_names().into_iter().filter_map(|name| r.header(&name).map(|value| (name.to_lowercase(), value.to_string()))).collect();
         let mut body = Vec::new();
         if method != "HEAD" {
-            use std::io::Read;
-            let read = r.into_reader().read_to_end(&mut body);
+            let read = super::http::read_capped(r, &allowed, &mut body);
             // Keep HTTP errors as responses, including any body bytes read.
-            if status < 400 { read.map_err(|e| format!("read body: {e}"))?; }
+            if status < 400 { read?; }
         }
         Ok(FetchFull { status, ok, headers, body })
     })
@@ -462,15 +409,15 @@ mod fetch_full_tests {
     use super::*;
     #[tokio::test]
     async fn rejects_empty_and_bad_scheme() {
-        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
-        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
+        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None, Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.is_err());
+        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None, Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.is_err());
     }
     // A live HEAD against a stable endpoint proves HEAD + header capture (network).
     // Gate behind MOSS_NET_TESTS so CI without network still passes.
     #[tokio::test]
     async fn head_and_headers_when_net_available() {
         if std::env::var("MOSS_NET_TESTS").is_err() { return; }
-        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000), Redirect::Follow).await.unwrap();
+        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000), Redirect::Follow, crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel()).await.unwrap();
         assert!(r.status > 0);
         assert!(r.headers.keys().all(|k| k == &k.to_lowercase()));
     }
@@ -698,6 +645,7 @@ mod tests {
                     Some(headers),
                     Some(60_000),
                     "test_multipart",
+                    crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel(),
                 )
                 .await
                 .expect("request transport ok");
