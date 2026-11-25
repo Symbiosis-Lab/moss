@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::facade::debug_hash;
 use crate::build::folder_embed::{
-    effective_group, resolve_children_config, select_children_by_slug,
+    card_excerpt, effective_group, is_rich, resolve_children_config_by, select_children_by_slug,
 };
 use crate::build::types::ParsedDocument;
 use crate::types::content::{MediaMetadata, ProjectStructure};
@@ -138,9 +138,10 @@ impl ListingGroups {
         // One projection per document, not per (document, group) pair: the
         // projection is a function of the document and the corpus, never of
         // the group that lists it.
+        use rayon::prelude::*;
         let all_refs: Vec<&ParsedDocument> = documents.iter().collect();
-        let projections: HashMap<&str, String> = documents
-            .iter()
+        let projections: HashMap<&str, Projected> = documents
+            .par_iter()
             .map(|doc| (doc.url_path.as_str(), project_child(doc, &all_refs, project, math)))
             .collect();
 
@@ -171,7 +172,7 @@ impl ListingGroups {
                     documents,
                     project,
                 );
-                (id, digest_of(&members, &projections, math))
+                (id, digest_of(&members, &projections))
             })
             .collect();
 
@@ -181,13 +182,12 @@ impl ListingGroups {
 
 fn digest_of(
     members: &[&ParsedDocument],
-    projections: &HashMap<&str, String>,
-    math: bool,
+    projections: &HashMap<&str, Projected>,
 ) -> GroupDigest {
     let membership: Vec<&str> = members.iter().map(|d| d.url_path.as_str()).collect();
     let contents: Vec<Option<&String>> = members
         .iter()
-        .map(|d| projections.get(d.url_path.as_str()))
+        .map(|d| projections.get(d.url_path.as_str()).map(|p| &p.hash))
         .collect();
 
     // The member-derived half of the listing plan (rule 1, second
@@ -196,10 +196,15 @@ fn digest_of(
     // host's facade; what the host cannot see in its own fingerprint is how
     // its children's `weight:`/`date:`/richness resolve the plan for it.
     //
-    // `resolve_children_config` reads `resolve_page_description(.., content)`
-    // to decide "rich" — a body-derived input, and the reason the plan half
+    // Richness reads `resolve_page_description(.., content)`, taken once per
+    // child in its projection — a body-derived input, and the reason the plan half
     // exists at all rather than falling out of the projection.
-    let (style, group) = resolve_children_config(members, None, None, math);
+    let (style, group) = resolve_children_config_by(members, None, None, |d| {
+        projections
+            .get(d.url_path.as_str())
+            .expect("every member was projected from the same documents")
+            .rich
+    });
     // A default folder declares no `sort:`, so `resolve_folder_sort` reduces
     // to `infer_axis` over the members — exactly the child-derived half.
     let sort = moss_core::sort::resolve_folder_sort(&ParsedDocument::default(), members);
@@ -257,12 +262,19 @@ struct ChildProjection<'a> {
     url_path: &'a str,
 }
 
+/// One child's [`ChildProjection`] hash, and whether it is rich
+/// ([`is_rich_child`]), read from the same excerpt.
+struct Projected {
+    hash: String,
+    rich: bool,
+}
+
 fn project_child(
     doc: &ParsedDocument,
     all_refs: &[&ParsedDocument],
     project: &ProjectStructure,
     math: bool,
-) -> String {
+) -> Projected {
     let mut stripped = doc.clone();
     stripped.content = String::new();
     stripped.html_content = String::new();
@@ -291,13 +303,11 @@ fn project_child(
     let (date_display, date_raw, date_explicit) =
         crate::build::components::extract_date_from_doc(doc, &project.root_path);
 
-    debug_hash(&ChildProjection {
+    let resolved_excerpt = card_excerpt(doc, math);
+    let rich = is_rich(doc, &resolved_excerpt);
+    let hash = debug_hash(&ChildProjection {
         stripped,
-        resolved_excerpt: crate::build::page::meta::resolve_page_description(
-            crate::build::components::child_list::explicit_card_text(doc).as_deref(),
-            &doc.content,
-            math,
-        ),
+        resolved_excerpt,
         child_count: article_count,
         leads,
         folder_latest_date,
@@ -305,7 +315,8 @@ fn project_child(
         date_raw,
         date_explicit,
         url_path: &doc.url_path,
-    })
+    });
+    Projected { hash, rich }
 }
 
 /// The demoted predicate. It used to answer "render it"; it now answers

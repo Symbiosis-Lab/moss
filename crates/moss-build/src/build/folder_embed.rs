@@ -266,6 +266,34 @@ pub(crate) fn resolve_children_config(
     group_override: Option<&moss_core::Resolved<String>>,
     math: bool,
 ) -> (moss_core::Resolved<String>, moss_core::Resolved<String>) {
+    resolve_children_config_by(docs, style_override, group_override, |d| is_rich_child(d, math))
+}
+
+/// The first-paragraph (or explicit) description a listing card shows.
+pub(crate) fn card_excerpt(d: &ParsedDocument, math: bool) -> Option<String> {
+    crate::build::page::meta::resolve_page_description(
+        crate::build::components::child_list::explicit_card_text(d).as_deref(), &d.content, math)
+}
+
+/// Rich: a cover, or an excerpt that [`card_excerpt`] resolved.
+pub(crate) fn is_rich(d: &ParsedDocument, excerpt: &Option<String>) -> bool {
+    d.cover.is_some() || excerpt.is_some()
+}
+
+/// A child with a cover or a description, which a listing can show as a card.
+pub(crate) fn is_rich_child(d: &ParsedDocument, math: bool) -> bool {
+    is_rich(d, &card_excerpt(d, math))
+}
+
+/// [`resolve_children_config`] for a caller that already knows which children
+/// are rich: the description is a first-paragraph excerpt, so asking it again
+/// for each group a child is listed in costs a scan of its body each time.
+pub(crate) fn resolve_children_config_by(
+    docs: &[&ParsedDocument],
+    style_override: Option<&moss_core::Resolved<String>>,
+    group_override: Option<&moss_core::Resolved<String>>,
+    is_rich: impl Fn(&ParsedDocument) -> bool,
+) -> (moss_core::Resolved<String>, moss_core::Resolved<String>) {
     let style = match style_override {
         Some(r) => r.clone(),
         None => {
@@ -274,9 +302,7 @@ pub(crate) fn resolve_children_config(
             // so is a rich page beside at most 3 bare ones; what summary cannot
             // survive is a screenful of them. Boundary pinned by
             // bulk_style_tests.
-            let rich = docs.iter().filter(|d| d.cover.is_some()
-                || crate::build::page::meta::resolve_page_description(
-                    crate::build::components::child_list::explicit_card_text(d).as_deref(), &d.content, math).is_some()).count();
+            let rich = docs.iter().filter(|d| is_rich(d)).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
             let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
