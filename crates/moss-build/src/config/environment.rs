@@ -88,12 +88,12 @@ impl HostingEnvironment {
     }
 
     /// The address of one of moss's own hosted services, for a plugin that
-    /// names the service rather than the address. `None` where the service
-    /// does not run, so nothing is published that would point at the wrong
-    /// one: commerce runs only as its test server so far.
+    /// names the service rather than the address. `None` for a service moss
+    /// does not run. Commerce runs only as its test server so far, so every
+    /// environment, a published site's included, reaches that one.
     pub fn service_url(&self, service: &str) -> Option<&'static str> {
         match (service, self) {
-            ("commerce", Self::Staging | Self::Local) => Some("https://commerce-staging.mosspub.com"),
+            ("commerce", _) => Some("https://commerce-staging.mosspub.com"),
             _ => None,
         }
     }
@@ -147,6 +147,17 @@ mod tests {
             assert_eq!(parse_env_name(env.name()), Some(env));
         }
         assert_eq!(parse_env_name("nonsense"), None);
+    }
+
+    /// A published site's plugin reaches commerce too: it runs only as its
+    /// test server, so a production folder that names it would otherwise
+    /// have no commerce at all.
+    #[test]
+    fn every_environment_reaches_the_one_commerce() {
+        for env in [HostingEnvironment::Production, HostingEnvironment::Staging, HostingEnvironment::Local] {
+            assert_eq!(env.service_url("commerce"), Some("https://commerce-staging.mosspub.com"));
+            assert_eq!(env.service_url("nonsense"), None);
+        }
     }
 
     #[test]
