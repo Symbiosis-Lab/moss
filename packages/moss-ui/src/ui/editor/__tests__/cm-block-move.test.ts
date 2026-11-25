@@ -49,6 +49,11 @@ describe('blockUnitAt: the innermost block, as whole lines', () => {
     ['a caret on a continuation line', '- a\n  wrap¦ped\n- b', '- a\n  wrapped'],
     ['a fence, fence to fence', 'intro\n\n```js\nlet a¦;\n\nlet b;\n```\n\nouter', '```js\nlet a;\n\nlet b;\n```'],
     ['a $$ block', 'p\n\n$$\nx¦^2\n$$\n\nq', '$$\nx^2\n$$'],
+    ['a shortcode block, from its opening fence line', 'p\n\n:::grid 2:1¦\nA\n+++\nB\n:::\n\nq', ':::grid 2:1\nA\n+++\nB\n:::'],
+    ['a shortcode block, from its closing fence line', 'p\n\n:::hero\n# T\n\nwords\n:::¦\n\nq', ':::hero\n# T\n\nwords\n:::'],
+    ['a block in a shortcode body is a unit of that body', 'p\n\n:::callout\nbo¦dy\n\nmore\n:::\n\nq', 'body'],
+    ['a nested shortcode block is its own unit', 'p\n\n:::grid\nA\n\n::::buttons¦\n[a](b)\n::::\n:::\n\nq', '::::buttons\n[a](b)\n::::'],
+    ['a heading in a shortcode body ends its section at the fence', ':::hero\n# T¦\n\nwords\n:::\n\nafter', '# T\n\nwords'],
     ['a quote, all its > lines', 'p\n\n> one\n> tw¦o\n\nq', '> one\n> two'],
     ['a callout', 'p\n\n> [!note]\n> bo¦dy\n\nq', '> [!note]\n> body'],
     ['a table, all its rows', 'p\n\n| a | b |\n|---|---|\n| 1 | 2¦ |\n\nq', '| a | b |\n|---|---|\n| 1 | 2 |'],
@@ -95,6 +100,28 @@ describe('Alt-ArrowDown / Alt-ArrowUp', () => {
     mount('para\n\n```\nco¦de\n```');
     press('ArrowUp');
     expect(doc()).toBe('```\ncode\n```\n\npara');
+  });
+
+  test('a shortcode block moves whole from its opening fence line', () => {
+    mount('para\n\n:::grid 2:1¦\nA\n+++\nB\n:::');
+    press('ArrowUp');
+    expect(doc()).toBe(':::grid 2:1\nA\n+++\nB\n:::\n\npara');
+  });
+
+  test('a shortcode block moves whole from its closing fence line, past a heading section\'s blocks only', () => {
+    mount('# A\n\n:::hero\nwords\n:::¦\n\nafter\n\n# B');
+    press('ArrowDown');
+    expect(doc()).toBe('# A\n\nafter\n\n:::hero\nwords\n:::\n\n# B');
+    press('ArrowDown');
+    expect(doc()).toBe('# A\n\nafter\n\n:::hero\nwords\n:::\n\n# B');
+  });
+
+  test('a block in a shortcode body stays inside the fences', () => {
+    mount(':::callout\none\n\ntw¦o\n:::\n\nafter');
+    press('ArrowDown');
+    expect(doc()).toBe(':::callout\none\n\ntwo\n:::\n\nafter');
+    press('ArrowUp');
+    expect(doc()).toBe(':::callout\ntwo\n\none\n:::\n\nafter');
   });
 
   test('a table moves past a `$$` block', () => {

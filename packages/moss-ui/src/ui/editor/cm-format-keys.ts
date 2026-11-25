@@ -305,12 +305,14 @@ export function indentListItems(view: EditorView, outdent = false): boolean {
 //     a block inside an item (a fence, a quote) is part of the item;
 //   - a heading line: the heading and its section, up to the next heading of the
 //     same or a higher level;
+//   - a `:::` block, from either fence line: the block, fence to fence; a line in
+//     its body is a unit of that body;
 //   - any other top-level block (paragraph, fenced code, `$$`, quote or callout,
 //     table, rule, ...): its own lines.
 // Its siblings are the units one level up the same parent: the items of one list,
 // the sections of one heading level under the same parent heading, the blocks of
-// one section. A block never crosses a heading and an item never leaves its list,
-// so a move cannot change anything's depth.
+// one section. A block never crosses a heading or a fence and an item never leaves
+// its list, so a move cannot change anything's depth.
 
 /** Whole lines: `from` is a line start, `to` a line end. */
 export interface Span { from: number; to: number }
@@ -318,8 +320,14 @@ export interface Span { from: number; to: number }
 /** A unit and the sibling run it sits in; `key` names the run so two units can be told to share it. */
 interface Level { key: string; siblings: Span[]; at: number }
 
-/** The document's top-level blocks and headings, read once per key press. */
-interface Blocks { state: EditorState; tree: Tree; kids: SyntaxNode[]; heads: { i: number; level: number }[] }
+/** One unit of a container: a block's lines, or a whole `:::` block; `level` is a heading's level, else 0. */
+interface Item { span: Span; level: number }
+
+/** The blocks of the document, or of one `:::` body; `key` is the opening fence's line start, -1 for the document. */
+interface Container { key: number; items: Item[] }
+
+/** The document's top-level blocks grouped into containers, read once per key press. `where[i]` is the container and item of top-level node `i`. */
+interface Blocks { state: EditorState; tree: Tree; kids: SyntaxNode[]; where: { c: Container; at: number }[] }
 
 const HEADING = /^(?:ATX|Setext)Heading(\d)$/;
 const headingLevel = (c: SyntaxNode): number => Number(HEADING.exec(c.name)?.[1] ?? 0);
@@ -336,13 +344,41 @@ const linesOf = (state: EditorState, node: SyntaxNode): Span => ({
   to: state.doc.lineAt(Math.max(node.from, node.to - 1)).to,
 });
 
+/**
+ * The parser gives a `:::` block's fences as siblings of the blocks between them, so
+ * they are paired here as the build pairs them (a closing line closes the innermost
+ * open block, whatever its colon count; an unpaired fence is an ordinary block). A
+ * paired block is one item of its container, and its body is a container of its own,
+ * so nothing is moved across a fence.
+ */
 function blocksOf(state: EditorState): Blocks {
   const tree = treeUpTo(state, state.doc.length);
   const kids = childrenOf(tree.topNode);
-  return { state, tree, kids, heads: kids.map((c, i) => ({ i, level: headingLevel(c) })).filter((h) => h.level) };
+  const closeOf = new Map<number, number>();
+  const open: number[] = [];
+  kids.forEach((c, i) => {
+    if (c.name === 'ShortcodeOpenLine') open.push(i);
+    else if (c.name === 'ShortcodeCloseLine' && open.length) closeOf.set(open.pop()!, i);
+  });
+  const where: Blocks['where'] = [];
+  const fill = (c: Container, lo: number, hi: number) => {
+    for (let i = lo; i < hi; i++) {
+      const j = closeOf.get(i);
+      if (j === undefined) {
+        where[i] = { c, at: c.items.push({ span: linesOf(state, kids[i]), level: headingLevel(kids[i]) }) - 1 };
+        continue;
+      }
+      const at = c.items.push({ span: { from: linesOf(state, kids[i]).from, to: linesOf(state, kids[j]).to }, level: 0 }) - 1;
+      where[i] = where[j] = { c, at };
+      fill({ key: state.doc.lineAt(kids[i].from).from, items: [] }, i + 1, j);
+      i = j;
+    }
+  };
+  fill({ key: -1, items: [] }, 0, kids.length);
+  return { state, tree, kids, where };
 }
 
-function levelOf({ state, tree, kids, heads }: Blocks, lineFrom: number): Level | null {
+function levelOf({ state, tree, kids, where }: Blocks, lineFrom: number): Level | null {
   const line = state.doc.lineAt(lineFrom);
   const probe = indentOf(line);
   if (!line.text.slice(probe.at - line.from).trim()) return null; // a blank line is nobody's
@@ -359,27 +395,30 @@ function levelOf({ state, tree, kids, heads }: Blocks, lineFrom: number): Level 
   if (!found || found.name === 'Document') return null;
   const block: SyntaxNode = found;
   const k = kids.findIndex((c) => c.from === block.from && c.name === block.name);
-  const mine = headingLevel(block);
+  if (k < 0) return null;
+  const { c: { key: box, items }, at } = where[k];
+  const mine = items[at].level;
+  const heads = items.map((it, i) => ({ i, level: it.level })).filter((h) => h.level);
 
   if (mine) {
-    // Sections of this level under the same parent heading. A section runs to the block before the next heading of its level or a higher one.
-    const hk = heads.findIndex((h) => h.i === k);
+    // Sections of this level under the same parent heading. A section runs to the item before the next heading of its level or a higher one, and ends with its container.
+    const hk = heads.findIndex((h) => h.i === at);
     let lo = hk, hi = hk;
     while (lo > 0 && heads[lo - 1].level >= mine) lo--;
     while (hi < heads.length - 1 && heads[hi + 1].level >= mine) hi++;
     const same = heads.slice(lo, hi + 1).filter((h) => h.level === mine);
     const sections = same.map((h) => {
       const next = heads.find((o) => o.i > h.i && o.level <= mine);
-      return { from: state.doc.lineAt(kids[h.i].from).from, to: linesOf(state, kids[next ? next.i - 1 : kids.length - 1]).to };
+      return { from: items[h.i].span.from, to: items[next ? next.i - 1 : items.length - 1].span.to };
     });
-    return { key: `H${mine}@${lo}`, siblings: sections, at: same.findIndex((h) => h.i === k) };
+    return { key: `H${mine}@${box}:${lo}`, siblings: sections, at: same.findIndex((h) => h.i === at) };
   }
 
-  // A plain block: its siblings are the blocks of the same section, so it never crosses a heading.
-  let lo = k, hi = k;
-  while (lo > 0 && !headingLevel(kids[lo - 1])) lo--;
-  while (hi < kids.length - 1 && !headingLevel(kids[hi + 1])) hi++;
-  return { key: `S${kids[lo].from}`, siblings: kids.slice(lo, hi + 1).map((c) => linesOf(state, c)), at: k - lo };
+  // A plain block or a whole `:::` block: its siblings are the items of the same section, so it never crosses a heading.
+  let lo = at, hi = at;
+  while (lo > 0 && !items[lo - 1].level) lo--;
+  while (hi < items.length - 1 && !items[hi + 1].level) hi++;
+  return { key: `S${box}:${items[lo].span.from}`, siblings: items.slice(lo, hi + 1).map((it) => it.span), at: at - lo };
 }
 
 /** The whole-line span of the innermost block containing `pos`, or null on a blank line. */
