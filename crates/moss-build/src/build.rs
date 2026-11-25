@@ -2312,6 +2312,7 @@ pub(crate) fn collect_build_store(
         log::info!("generation GC failed (non-fatal): {}", e);
     }
     store_gc::record_store_size(&mp.build_dir());
+    crate::infra::folder_store::touch_use(&mp.record_dir());
     store_gc::maybe_gc_cache(mp);
     crate::infra::folder_lock::spawn_litter_sweep();
     crate::infra::folder_store::collect_gone();

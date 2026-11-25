@@ -272,7 +272,7 @@ pub async fn run_plugin_deploy_inner(
     let generation = generation.to_string();
     // The copy may wait behind another publish while builds run: pinned, the
     // generation it copies from outlives this process's own store GC.
-    let pin = crate::build::ports::deploy::pin_generation(cx.ports, sealed.generation_id());
+    let pin = crate::build::ports::deploy::pin_generation(cx.ports, cx.folder, sealed.generation_id());
     // Set if this future is dropped while the copy waits for the lock, so the
     // blocked thread takes the lock and gives it straight back.
     let cancelled = CancelOnDrop::default();

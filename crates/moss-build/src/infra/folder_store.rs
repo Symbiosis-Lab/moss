@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod budget;
+pub(crate) use budget::touch_use;
+
 const RECORD: &str = "folder.json";
 
 /// The name of `folder`'s stores, the same for every spelling of the same
@@ -420,8 +423,13 @@ pub(crate) fn collect_gone() {
             return;
         }
         if let Some(stores) = FolderStores::app() {
-            if let Err(e) = stores.collect_within(GONE_GRACE, &|| short_of_room(&stores.cache_root)) {
+            let budget = budget::store_budget(&stores.cache_root);
+            let over = || budget.is_some_and(|budget| stores.recorded_total() > budget);
+            if let Err(e) = stores.collect_within(GONE_GRACE, &|| short_of_room(&stores.cache_root) || over()) {
                 log::info!("folder store sweep stopped ({e})");
+            }
+            if let Err(e) = budget.map_or(Ok(0), |budget| stores.trim_live(budget)) {
+                log::info!("folder store trim stopped ({e})");
             }
         }
     });

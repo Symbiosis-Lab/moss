@@ -163,7 +163,7 @@ async fn push_site_inner_impl(
     // on every exit path: normal return, `?`-early-return, panic, AND the
     // stall-watchdog future-drop in `push_site_inner` (the losing `select!`
     // branch is dropped, which runs all Drop impls it captured).
-    let _pin = crate::build::ports::deploy::pin_generation(ports, sealed.generation_id());
+    let _pin = crate::build::ports::deploy::pin_generation(ports, folder_path, sealed.generation_id());
 
     // The wire manifest is exactly the sealed manifest's files() — redirect stubs
     // are now emitted during generate_blocking_content (Gap #3 fix) so the seal

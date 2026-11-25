@@ -126,9 +126,13 @@ pub trait DeployPorts: Send + Sync {
 /// out from under it. The app had this guard already; it lives here now so an
 /// implementation cannot ship without one, which is the failure a hand-placed
 /// `unpin` invites.
+///
+/// It also holds a lock on the folder, which the store budget's trim reads,
+/// since the ports' pin lives only in the process that took it.
 pub struct GenerationPin<'a> {
     ports: &'a dyn DeployPorts,
     generation_id: String,
+    _folder_pin: Option<crate::infra::folder_lock::Held>,
 }
 
 impl Drop for GenerationPin<'_> {
@@ -138,9 +142,12 @@ impl Drop for GenerationPin<'_> {
 }
 
 /// Pin a generation until the returned guard is dropped.
-pub fn pin_generation<'a>(ports: &'a dyn DeployPorts, generation_id: &str) -> GenerationPin<'a> {
+pub fn pin_generation<'a>(ports: &'a dyn DeployPorts, folder: &Path, generation_id: &str) -> GenerationPin<'a> {
+    let folder_pin = crate::infra::folder_lock::hold_publish_pin(folder)
+        .inspect_err(|e| log::warn!("publish pin on {} not held ({e})", folder.display()))
+        .ok();
     ports.pin_generation_raw(generation_id);
-    GenerationPin { ports, generation_id: generation_id.to_string() }
+    GenerationPin { ports, generation_id: generation_id.to_string(), _folder_pin: folder_pin }
 }
 
 #[cfg(test)]
@@ -184,18 +191,24 @@ mod tests {
     #[test]
     fn a_pin_is_released_however_the_publish_ends() {
         let ports = Recording::default();
+        let folder = tempfile::tempdir().unwrap();
+        let _home = crate::infra::home::thread_moss_home(&folder.path().join(".home"));
+        let pinned_on_disk = || crate::infra::folder_lock::publish_pinned(folder.path());
 
         {
-            let _pin = pin_generation(&ports, "gen042");
+            let _pin = pin_generation(&ports, folder.path(), "gen042");
             assert_eq!(*ports.pinned.lock().unwrap(), vec!["gen042".to_string()]);
+            assert!(pinned_on_disk(), "another process sees the pin");
         }
         assert!(ports.pinned.lock().unwrap().is_empty(), "normal scope exit releases");
+        assert!(!pinned_on_disk());
 
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _pin = pin_generation(&ports, "gen043");
+            let _pin = pin_generation(&ports, folder.path(), "gen043");
             panic!("publish blew up");
         }));
         assert!(unwound.is_err());
         assert!(ports.pinned.lock().unwrap().is_empty(), "unwinding releases too");
+        assert!(!pinned_on_disk());
     }
 }
