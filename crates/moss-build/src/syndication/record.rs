@@ -424,6 +424,21 @@ impl Records {
         crate::build::cloud_readiness::read_json_no_wait(&self.path(uid, channel)?)
     }
 
+    /// The channels holding a record for `uid`, sorted. By file name alone: no read, so a record
+    /// still in the cloud is never waited on.
+    pub fn channels_of(&self, uid: &str) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else { return Vec::new() };
+        let prefix = format!("{uid}.");
+        let mut out: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter_map(|n| n.strip_prefix(&prefix)?.strip_suffix(".json").map(str::to_owned))
+            .filter(|c| plain_id(c))
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Every readable record. A file that does not parse is skipped with a
     /// warning rather than treated as absent-and-due, which would repost.
     pub fn all(&self) -> Vec<CopyRecord> {

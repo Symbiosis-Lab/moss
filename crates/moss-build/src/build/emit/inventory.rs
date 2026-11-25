@@ -356,6 +356,7 @@ pub fn page_status_for_source(
     use crate::build::cloud_readiness::{probe_input, Found};
     use crate::build::manifest::published_record::load_for_no_wait;
     use crate::syndication::record::{CopyRecord, Records, State};
+    use std::collections::BTreeSet;
     /// What the last publish to the current host knew of the page.
     enum Live {
         Unknown(String),
@@ -400,13 +401,18 @@ pub fn page_status_for_source(
     };
     let records = Records::in_vault(&paths);
     let mut copies = BTreeMap::new();
-    for (uid, channel) in row.uid.iter().flat_map(|uid| row.channels.iter().map(move |c| (uid, c))) {
-        match records.get_no_wait(uid, channel) {
-            Ok(Some(CopyRecord { state: State::Posted, remote: Some(remote), .. })) => {
-                copies.insert(channel.clone(), remote.url);
+    // A copy already out stays out when the page stops naming its channel; a named channel is read even without a
+    // record file in sight, so one still in the cloud is reported as unknown.
+    for uid in row.uid.iter() {
+        let channels: BTreeSet<String> = records.channels_of(uid).into_iter().chain(row.channels.iter().cloned()).collect();
+        for channel in channels {
+            match records.get_no_wait(uid, &channel) {
+                Ok(Some(CopyRecord { state: State::Posted, remote: Some(remote), .. })) => {
+                    copies.insert(channel, remote.url);
+                }
+                Ok(_) => {}
+                Err(e) => unknown.push(format!("{channel} copy unknown: {e}")),
             }
-            Ok(_) => {}
-            Err(e) => unknown.push(format!("{channel} copy unknown: {e}")),
         }
     }
     let status = PageStatus {
@@ -629,6 +635,18 @@ mod tests {
         // Against another host, nothing of it is live there.
         let (page, _) = status(&dir, "posts/heron.md", Ok(plugin("onionpress"))).unwrap();
         assert_eq!((page.published, page.changed), (Some(false), Some(false)));
+    }
+
+    #[test]
+    fn a_copy_stays_listed_after_the_page_stops_naming_its_channel() {
+        let dir = published_site(b"# Heron\n");
+        let copy = serde_json::json!({"uid": "heron1", "channel": "threads", "state": "posted", "source_path": "posts/heron.md",
+            "url_path": "posts/heron", "remote": {"id": "2", "url": "https://threads.example/post/2"}, "updated_at": "2026-11-20T00:00:00Z"});
+        std::fs::write(dir.path().join(".moss/deploy/copies/heron1.threads.json"), copy.to_string()).unwrap();
+        let (page, unknown) = status(&dir, "posts/heron.md", Ok(moss_site("her-blog"))).unwrap();
+        assert_eq!(page.copies.get("threads").map(String::as_str), Some("https://threads.example/post/2"));
+        assert_eq!(page.channels, ["bluesky", "mastodon"]);
+        assert!(unknown.is_empty(), "{unknown:?}");
     }
 
     #[test]
