@@ -299,6 +299,10 @@ pub struct PhaseSample {
     pub pass: usize,
     pub name: &'static str,
     pub ms: u128,
+    /// CPU time the whole process spent while the phase was open, every
+    /// thread counted, so phases running at once each count the same CPU.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u128>,
     /// The phase this one ran inside; absent at the top level.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<&'static str>,
@@ -604,15 +608,31 @@ fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], tota
         "passes": t.passes, "phases": t.phases, "counts": counts,
     }));
     #[cfg(unix)]
-    {
-        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-        if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } == 0 {
-            let rss = unsafe { usage.assume_init() }.ru_maxrss as f64;
-            let bytes_per_unit = if cfg!(target_os = "macos") { 1.0 } else { 1024.0 };
-            record["peak_rss_mb"] = serde_json::json!(rss * bytes_per_unit / (1024.0 * 1024.0));
-        }
+    if let Some(usage) = process_usage() {
+        let bytes_per_unit = if cfg!(target_os = "macos") { 1.0 } else { 1024.0 };
+        record["peak_rss_mb"] = serde_json::json!(usage.ru_maxrss as f64 * bytes_per_unit / (1024.0 * 1024.0));
     }
     record
+}
+
+#[cfg(unix)]
+fn process_usage() -> Option<libc::rusage> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage fills the struct when it returns 0.
+    (unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } == 0).then(|| unsafe { usage.assume_init() })
+}
+
+/// User plus system CPU time of the whole process so far.
+fn process_cpu() -> Option<Duration> {
+    #[cfg(unix)]
+    {
+        let tv = |t: libc::timeval| Duration::new(t.tv_sec as u64, t.tv_usec as u32 * 1000);
+        process_usage().map(|u| tv(u.ru_utime) + tv(u.ru_stime))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) -> serde_json::Value {
@@ -704,6 +724,7 @@ pub(crate) fn run_detached<T>(profile: std::path::PathBuf, body: impl FnOnce() -
 pub struct PhaseTrace {
     name: &'static str,
     started: Instant,
+    cpu_started: Option<Duration>,
     collector: Option<PhaseCollector>,
     pass: usize,
     open: Arc<OpenPhase>,
@@ -727,6 +748,7 @@ impl PhaseTrace {
         Self {
             name,
             started: Instant::now(),
+            cpu_started: collector.as_ref().and_then(|_| process_cpu()),
             collector,
             pass,
             open,
@@ -747,6 +769,7 @@ impl Drop for PhaseTrace {
         }
         record_phase(&self.collector, PhaseSample {
             pass: self.pass, name: self.name, ms: elapsed.as_millis(), beside: self.beside,
+            cpu_ms: self.cpu_started.zip(process_cpu()).map(|(start, now)| now.saturating_sub(start).as_millis()),
             parent: parent.as_ref().map(|p| p.name), id: self.open.id, parent_id: parent.as_ref().map(|p| p.id),
         });
         // Budget overrun logging. Observability only: never panics, never
@@ -864,7 +887,7 @@ mod tests {
     #[test]
     fn unattributed_is_each_containers_time_outside_its_children() {
         let sample = |id, name, ms, parent_id: Option<u64>, beside| PhaseSample {
-            pass: 1, name, ms, parent: None, beside, id, parent_id,
+            pass: 1, name, ms, cpu_ms: None, parent: None, beside, id, parent_id,
         };
         let phases = [
             sample(0, "run_pipeline", 100, None, false),
@@ -1231,6 +1254,23 @@ mod tests {
         assert_eq!(telemetry.phases[0].name, "test_async_phase");
     }
 
+    /// Spins on CPU spent, not wall time, so a descheduled runner cannot starve it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_phase_records_at_least_the_cpu_it_spent() {
+        let ((), collector) = with_collector(async {
+            let _p = PhaseTrace::start("spins");
+            let start = process_cpu().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while process_cpu().unwrap() < start + Duration::from_millis(50) && Instant::now() < deadline {
+                std::hint::black_box(0u64);
+            }
+        })
+        .await;
+        let t = collector.lock().unwrap();
+        assert!(t.phases[0].cpu_ms.is_some_and(|cpu| cpu >= 50), "{:?}", t.phases);
+    }
+
     #[tokio::test]
     async fn with_collector_captures_a_count_recorded_inside_it() {
         let ((), collector) = with_collector(async {
@@ -1293,7 +1333,7 @@ mod tests {
     }
 
     fn telemetry(phases: &[(u64, &'static str, u128, Option<u64>)], counts: &[(&'static str, usize)]) -> BuildTelemetry {
-        let phases = phases.iter().map(|&(id, name, ms, parent_id)| PhaseSample { pass: 1, name, ms, parent: None, beside: false, id, parent_id }).collect();
+        let phases = phases.iter().map(|&(id, name, ms, parent_id)| PhaseSample { pass: 1, name, ms, cpu_ms: None, parent: None, beside: false, id, parent_id }).collect();
         BuildTelemetry { phases, counts: counts.to_vec(), ..BuildTelemetry::default() }
     }
 
