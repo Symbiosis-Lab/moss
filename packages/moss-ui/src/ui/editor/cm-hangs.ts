@@ -102,3 +102,6 @@ export function indicatorEndingAt(state: EditorState, pos: number): Hang | null 
   const hangs = hangsOnLine(state, pos);
   return textStartOf(hangs) === pos ? hangs[hangs.length - 1] : null;
 }
+
+/** A hung opening fence or heading `#` that starts its line: the handle for dragging its block or section. A heading after a quote's `>` or a list marker is not one. */
+export const isGrip = (h: Hang, lineFrom: number): boolean => (h.kind === 'fence-open' || h.kind === 'heading') && h.atomFrom === lineFrom;

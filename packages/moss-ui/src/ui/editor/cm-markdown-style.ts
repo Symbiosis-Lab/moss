@@ -20,7 +20,7 @@ import { EditorState, RangeSet, RangeSetBuilder, StateEffect, type Extension } f
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { t, onLocaleChange } from "../i18n/index";
-import { hangsInRanges, type Hang } from './cm-hangs';
+import { hangsInRanges, isGrip, type Hang } from './cm-hangs';
 import { headFitExtension } from './cm-head-fit';
 import { listDecorations, listHangExtension, type DecoRange, type SyntaxNode } from './cm-lists';
 import { footnoteDecorations, shortcodeBlockField, type FootnoteDeco } from '@symbiosis-lab/moss-syntax/cm6';
@@ -42,15 +42,19 @@ const indicatorLabel = (h: Pick<Hang, 'kind' | 'level'>): string =>
   h.kind === 'heading' ? t('indicator.heading', { level: String(h.level) }) : t('indicator.quote');
 
 const MARK_HANG_FENCE = Decoration.mark({ class: 'cm-hang' });
+const MARK_GRIP_FENCE = Decoration.mark({ class: 'cm-hang', attributes: { 'data-grip': '' } });
 
-/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). A fence has no line type, so its marker carries none of that. */
-const markHang = (h: Hang) =>
-  h.kind === 'heading' || h.kind === 'quote'
+/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). A fence has no line type, so its marker carries none of that. A grip (cm/grip-drag.ts) is also dragged. */
+const markHang = (h: Hang, lineFrom: number) => {
+  const grip = isGrip(h, lineFrom);
+  if (h.kind === 'fence-open') return grip ? MARK_GRIP_FENCE : MARK_HANG_FENCE;
+  return h.kind === 'heading' || h.kind === 'quote'
     ? Decoration.mark({
         class: 'cm-hang',
-        attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' },
+        attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top', ...(grip && { 'data-grip': '' }) },
       })
     : MARK_HANG_FENCE;
+};
 const LINE_HUNG = Decoration.line({ class: 'cm-hung' });
 const MARK_HANG_RUN = Decoration.mark({ class: 'cm-hang-run' });
 
@@ -177,7 +181,7 @@ export function buildMarkdownStyleDecorations(
       while (hangs[last + 1] && state.doc.lineAt(hangs[last + 1].from).from === lineFrom) last++;
       if (last > i) decos.push({ from: h.from, to: hangs[last].to, deco: MARK_HANG_RUN });
     }
-    decos.push({ from: h.from, to: h.to, deco: markHang(h) });
+    decos.push({ from: h.from, to: h.to, deco: markHang(h, lineFrom) });
   }
   return Decoration.set(decos.map((d) => d.deco.range(d.from, d.to)), true);
 }

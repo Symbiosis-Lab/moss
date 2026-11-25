@@ -19,6 +19,7 @@ import { t } from "../i18n/index";
 import { openCtxMenu, type CtxMenuEntry } from "../shared/ui/ctx-menu";
 import { flattenBlocks, ownDividerLines, shortcodeBlockField, shortcodeBlocksIn } from '@symbiosis-lab/moss-syntax/cm6';
 import { hangsOnLine, indicatorEndingAt, type Hang } from './cm-hangs';
+import { gripDragExtension } from './cm/grip-drag';
 import type { SyntaxNode } from './cm-markdown-style';
 import { columnsOf, indentOf, itemOnLine, markerColumn, type Tree } from './cm-lists';
 import { wrapSelection, detectToggle } from './selection-toolbar';
@@ -673,19 +674,30 @@ export function lineIndicatorExtension(): Extension {
       // The indicator sits outside the text, so CM6 would map a press on it to a
       // caret in the margin. Take the press instead: caret to the text start, menu
       // open on the indicator that was pressed. A read-only editor leaves it to CM6.
+      // A grip is taken by its drag gesture, which calls `press` when nothing was dragged.
       mousedown(event, view) {
-        const el = (event.target as Element | null)?.closest?.<HTMLElement>('.cm-hang[data-indicator]');
+        const el = (event.target as Element | null)?.closest?.<HTMLElement>('.cm-hang[data-indicator]:not([data-grip])');
         if (!el || event.button !== 0 || view.state.readOnly) return false;
-        const pos = view.posAtDOM(el);
-        const hangs = hangsOnLine(view.state, pos);
-        const h = hangs.find((x) => pos >= x.from && pos < x.to);
-        if (!h) return false;
         event.preventDefault();
-        view.dispatch({ selection: { anchor: hangs[hangs.length - 1].to } });
-        view.focus();
-        openIndicatorMenu(view, el, view.state.doc.lineAt(pos).from, h.kind);
+        pressIndicator(view, el);
         return true;
       },
     }),
+    gripDragExtension({
+      press: pressIndicator,
+      siblingsAt,
+      move: (view, siblings, at, gap) => { moveToGap(view, siblings, at, at, gap); },
+    }),
   ];
+}
+
+/** The caret goes to the text start of the pressed indicator's line and a heading's or quote's indicator opens the line-type menu; a fence's marker does nothing. */
+function pressIndicator(view: EditorView, el: HTMLElement): void {
+  const pos = view.posAtDOM(el);
+  const hangs = hangsOnLine(view.state, pos);
+  const h = hangs.find((x) => pos >= x.from && pos < x.to);
+  if (!h || isFence(h)) return;
+  view.dispatch({ selection: { anchor: hangs[hangs.length - 1].to } });
+  view.focus();
+  openIndicatorMenu(view, el, view.state.doc.lineAt(pos).from, h.kind);
 }
