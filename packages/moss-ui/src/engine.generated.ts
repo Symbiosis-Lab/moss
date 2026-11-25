@@ -1342,7 +1342,7 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * not the same instant, and the gap between them is where a UI can
  * truthfully-but-wrongly report a change as live — see `SitePromoted`.
  */
-{ kind: "SitePromoted"; payload: SitePromoted } | { kind: "PluginProgress"; payload: PluginProgressEvent } | { kind: "FileChanged"; payload: FileChangeEvent } | { kind: "DeployWaitingForBuild" } | 
+{ kind: "SitePromoted"; payload: SitePromoted } | { kind: "PluginProgress"; payload: PluginProgressEvent } | { kind: "FileChanged"; payload: FileChangeEvent } | 
 /**
  * What publishing right now would change on the live site, recomputed at
  * every seal and once more when a deploy discovers there is no local

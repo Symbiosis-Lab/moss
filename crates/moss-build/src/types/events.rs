@@ -274,7 +274,6 @@ pub enum MossEvent {
     SitePromoted(SitePromoted),
     PluginProgress(PluginProgressEvent),
     FileChanged(FileChangeEvent),
-    DeployWaitingForBuild,
     /// What publishing right now would change on the live site, recomputed at
     /// every seal and once more when a deploy discovers there is no local
     /// record to classify against.

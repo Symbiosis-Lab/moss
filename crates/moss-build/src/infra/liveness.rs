@@ -29,10 +29,8 @@
 //! credit itself** (`deploy::credit_upload_bytes`), never on the emit — pinned
 //! by `the_upload_progress_ticker_is_not_a_liveness_bump` in `deploy_tests.rs`.
 //!
-//! The same rule rejects `wait_for_in_flight_work`'s 500 ms
-//! `DeployWaitingForBuild` heartbeat, which is why the app's
-//! `deploy::activity::is_build_liveness_event` whitelists build-progress event
-//! kinds instead of accepting any `MossEvent`.
+//! The app-side `deploy::activity::is_build_liveness_event` likewise whitelists
+//! build-progress event kinds instead of accepting any `MossEvent`.
 //!
 //! The counter lives here rather than app-side because the seta client bumps it
 //! from every retry boundary and every uploaded chunk. Only the Tauri event

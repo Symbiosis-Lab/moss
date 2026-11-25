@@ -1541,7 +1541,7 @@ describe("ProgressPanel", () => {
 
     it("failed→waiting re-publish resets stage and clears failed status", () => {
       // Spec "Critical": after a failed publish the user presses Publish again.
-      // The fresh DeployWaitingForBuild / deploy-progress{waiting} must reset
+      // The fresh deploy-progress{waiting} must reset
       // the panel so the red "failed" status is replaced by the live progress.
       const cb = listenCallbacks.get("deploy-progress")![0];
 
@@ -1552,7 +1552,7 @@ describe("ProgressPanel", () => {
       const failedVm = panel.buildViewModel();
       expect(failedVm.status.kind).toBe("failed");
 
-      // 2. Re-publish: a waiting event arrives (DeployWaitingForBuild equivalent).
+      // 2. Re-publish: a waiting event arrives.
       cb({ stage: "waiting", current: 0, total: 0, message: "" });
 
       // 3. Stage must NOT be stuck on "failed" — it should have reset and advanced.
@@ -1635,24 +1635,14 @@ describe("ProgressPanel", () => {
       expect(panel.buildViewModel().notices).toHaveLength(0);
     });
 
-    it("DeployWaitingForBuild advances publish stage to waiting (no task)", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
-
-      expect(panel.getPublishStage()).toBe("waiting");
-      expect(panel.getActiveTasks()).toHaveLength(0);
-    });
-
     /**
-     * Regression: the stage machine's entrance is shared (DeployWaitingForBuild
-     * comes from generic build machinery) but its exit used to be written by
-     * hand inside the moss-hosted bodies only. A plugin publish — OnionPress —
-     * tripped the entrance and emitted no terminal stage at all, so the panel
-     * sat on "Waiting for build… rebuild paused" forever after a publish that
-     * had in fact succeeded. The terminal stage now comes from the publish
-     * guard, which every publish passes through.
+     * Regression: a plugin publish (OnionPress) entered the stage machine but
+     * emitted no terminal stage, so the panel sat on "Waiting for build…
+     * rebuild paused" forever after a publish that had succeeded. The terminal
+     * stage now comes from the publish guard, which every publish passes through.
      */
     it("a terminal event alone brings the panel down from waiting", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
       expect(panel.getPublishStage()).toBe("waiting");
 
       vi.useFakeTimers();
@@ -1673,7 +1663,7 @@ describe("ProgressPanel", () => {
       cb({ stage: "preparing", current: 0, total: 0, message: "" });
       expect(panel.getPublishStage()).toBe("preparing");
 
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
       expect(panel.getPublishStage()).toBe("preparing");
     });
 
@@ -1887,7 +1877,7 @@ describe("ProgressPanel", () => {
     it("says nothing about a paused rebuild while the publish waits for the build", () => {
       const condition = () =>
         container.querySelector(".moss-status-condition")?.textContent ?? "";
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
       expect(container.textContent).toContain("Preparing");
       expect(condition()).toBe("");
     });
@@ -2720,7 +2710,7 @@ describe("ProgressPanel", () => {
         payload: { task: "html_pages", message: "", current: 8, total: 12, completed: false },
       });
       // Now publish queues:
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
 
       expect(stageLabel()).toBe("Preparing…");
       expect(taskLabels()).toEqual([]);
@@ -2744,7 +2734,7 @@ describe("ProgressPanel", () => {
           record();
         };
 
-        fireMossEvent({ kind: "DeployWaitingForBuild" });
+        listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
         record();
         stage("preparing");
         stage("rebuilding", { message: "Updating search" });
@@ -3046,7 +3036,7 @@ describe("ProgressPanel", () => {
       // Prior session left publish in waiting (e.g., user closed folder
       // mid-deploy). New session starts with setStage('initial') and
       // should not show "Waiting for build…".
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
       expect(panel.getPublishStage()).toBe("waiting");
 
       panel.setStage("initial");
@@ -3172,8 +3162,8 @@ describe("ProgressPanel", () => {
       expect(panel.getPublishStage()).toBe("uploading");
     });
 
-    it("(3b) DeployWaitingForBuild (publish queued behind a build) also shows", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+    it("(3b) deploy-progress waiting (publish queued behind a build) also shows", () => {
+      listenCallbacks.get("deploy-progress")![0]({ stage: "waiting", current: 0, total: 0, message: "" });
       expect(panel.isHidden).toBe(false);
       expect(panel.getPublishStage()).toBe("waiting");
     });

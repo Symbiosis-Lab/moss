@@ -106,12 +106,9 @@ impl Drop for PublishGuard {
 ///
 /// ## The guard owns the publish's terminal stage
 ///
-/// Every publish enters the stage machine through a shared door —
-/// `MossEvent::DeployWaitingForBuild`, emitted from
-/// `build_shell::wait_for_in_flight_work`, which is generic build machinery —
-/// so the terminal stage is emitted HERE too, at the one choke point every
-/// publish passes through, instead of at each body's return sites. One
-/// entrance, one exit, both owned by shared code.
+/// Every publish passes through this guard, so the terminal stage is emitted
+/// HERE, once, instead of at each body's return sites; the body emits the
+/// stages before it.
 ///
 /// This also makes structural a carve-out that matters: a publish rejected as
 /// a duplicate must NOT emit `Failed`, because no work started and the
