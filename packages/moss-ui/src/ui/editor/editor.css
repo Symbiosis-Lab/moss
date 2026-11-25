@@ -893,6 +893,30 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   z-index: calc(var(--z-popup) - 10); /* over the document, under every menu and the find pill */
 }
 
+/* The page's copies, right-aligned on a row of their own above the pill: the
+   column right of the pill is too narrow for a sentence below about 660px.
+   Line -2 is before the band's first line, so the row is added above the one
+   the cluster and the pill name, and the band grows upward from its bottom. */
+.editor-band-status {
+  grid-row: -2 / -1;
+  grid-column: 1 / -1;
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  pointer-events: auto;
+}
+.editor-band-status .moss-inline-status {
+  display: flex;
+  min-width: 0;
+}
+.editor-band-status .moss-inline-status__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .insert-bar {
   /* The row is explicit on BOTH occupants. Auto-placement is sparse: it never
      moves the cursor backwards, so the one appended second — the cluster, which

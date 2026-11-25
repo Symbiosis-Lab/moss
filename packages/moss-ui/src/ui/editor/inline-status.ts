@@ -15,9 +15,9 @@
  *
  * Anchor:
  *   The badge anchors to the DOM node carrying
- *   `data-inline-task-anchor="<task-kind>"` (e.g., the chip bar carries
- *   `data-inline-task-anchor="save"`). Falls back to `#moss-inline-status-fallback`
- *   if no anchor is present.
+ *   `data-inline-task-anchor="<task-kind>"`: the titlebar's save status, and
+ *   for a page's copies the bottom band's right-hand column (`bandStatus`). A task whose kind no anchor
+ *   lists gets no badge in this webview.
  *
  * Multi-task aggregation:
  *   The Inline renderer paints one badge per task. We track a
@@ -38,14 +38,12 @@ import { onMossEvent } from "../utils/moss-events";
 import type { PanelTaskWire, TaskState, TaskKind } from "@symbiosis-lab/moss-ui";
 import type { Unlisten } from "../host";
 import { t } from "../i18n/index";
+import { bandPane, bandStatus } from "./editor-band";
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
 /** CSS class applied to the badge wrapper. */
 const BADGE_CLASS = "moss-inline-status";
-
-/** Container for badges that don't have a kind-specific anchor. */
-const FALLBACK_ANCHOR_ID = "moss-inline-status-fallback";
 
 /** Attribute used to find the anchor element for a given TaskKind. */
 const ANCHOR_ATTR = "data-inline-task-anchor";
@@ -136,22 +134,35 @@ const badges: Map<string, BadgeRecord> = new Map();
 
 // ── DOM layer ─────────────────────────────────────────────────────────────
 
-function findAnchor(kind: TaskKind): HTMLElement {
-  // Prefer kind-specific anchor (e.g., save chip-bar slot).
-  const explicit = document.querySelector(
-    `[${ANCHOR_ATTR}="${kind}"]`,
-  ) as HTMLElement | null;
-  if (explicit) return explicit;
-  // Fallback container for tasks without a registered anchor. Created on
-  // demand so this module works in jsdom without page-level setup.
-  let fallback = document.getElementById(FALLBACK_ANCHOR_ID);
-  if (!fallback) {
-    fallback = document.createElement("div");
-    fallback.id = FALLBACK_ANCHOR_ID;
-    fallback.className = "moss-inline-status-fallback";
-    document.body.appendChild(fallback);
-  }
-  return fallback;
+/** Kinds whose slot is created on demand rather than marked in the chrome. */
+const SLOTS: Partial<Record<TaskKind, () => HTMLElement>> = { syndicate: bandStatus };
+
+/** The chrome slot for `kind`; a kind with none gets no badge in this webview. */
+function findAnchor(kind: TaskKind): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[${ANCHOR_ATTR}="${kind}"]`) ?? SLOTS[kind]?.() ?? null;
+}
+
+/**
+ * An on-demand slot lives in the editor pane, which every surface mount
+ * empties; a badge waiting minutes for the author must come back with it.
+ */
+let paneWatch: MutationObserver | null = null;
+
+function rehome(rec: BadgeRecord): void {
+  if (rec.element.isConnected) return;
+  const anchor = findAnchor(rec.kind);
+  if (!anchor) return;
+  anchor.appendChild(rec.element);
+  rec.anchor = anchor;
+}
+
+function watchPane(): void {
+  if (paneWatch) return;
+  const pane = bandPane();
+  paneWatch = new MutationObserver(() => {
+    if (pane.isConnected) badges.forEach(rehome);
+  });
+  paneWatch.observe(pane, { childList: true });
 }
 
 function makeBadgeElement(payload: PanelTaskWire): HTMLDivElement {
@@ -219,7 +230,7 @@ export function applyTaskUpdate(payload: PanelTaskWire): void {
   // payload.window_id is a pre-existing inline-status limitation, out of scope
   // here; tracked as a follow-up.
   if (payload.kind === "save" && payload.state.state !== "failed") {
-    const anchor = document.querySelector(`[${ANCHOR_ATTR}="${payload.kind}"]`);
+    const anchor = findAnchor(payload.kind);
     for (const [id, rec] of Array.from(badges)) {
       if (rec.kind === "save" && (!anchor || rec.anchor === anchor)) {
         removeBadge(id);
@@ -228,12 +239,21 @@ export function applyTaskUpdate(payload: PanelTaskWire): void {
     return;
   }
 
+  // A task the person stopped needs no receipt: what it left behind is said
+  // where it lives (a copy's own state), not here.
+  if (payload.state.state === "cancelled") {
+    if (badges.has(taskId)) removeBadge(taskId);
+    return;
+  }
+
   let rec = badges.get(taskId);
 
   if (!rec) {
     const anchor = findAnchor(payload.kind);
+    if (!anchor) return;
     const element = makeBadgeElement(payload);
     anchor.appendChild(element);
+    if (SLOTS[payload.kind]) watchPane();
     rec = {
       taskId,
       kind: payload.kind,
@@ -255,6 +275,7 @@ export function applyTaskUpdate(payload: PanelTaskWire): void {
       }
     }
   } else {
+    rehome(rec);
     updateBadgeElement(rec.element, payload);
   }
 
@@ -319,7 +340,8 @@ export function unmountInlineStatus(): void {
   for (const id of Array.from(badges.keys())) {
     removeBadge(id);
   }
-  document.getElementById(FALLBACK_ANCHOR_ID)?.remove();
+  paneWatch?.disconnect();
+  paneWatch = null;
 }
 
 // ── Test hooks ────────────────────────────────────────────────────────────
@@ -333,6 +355,8 @@ export function __resetForTests(): void {
   for (const id of Array.from(badges.keys())) {
     removeBadge(id);
   }
+  paneWatch?.disconnect();
+  paneWatch = null;
 }
 
 /** Read-only badge count for tests. */

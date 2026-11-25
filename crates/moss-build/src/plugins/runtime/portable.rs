@@ -17,12 +17,15 @@ use crate::build::features::comment::resolve_matters_domain;
 use crate::plugins::types::{PluginHook, TriggerContext};
 use crate::tasks::{
     escape_spec_to_action, route_plugin_task, Amount, PluginTaskSignal, TaskHandle,
-    TaskId, TaskRegistry, Verb, WindowId,
+    TaskId, TaskRegistry, TaskTone, Verb, WindowId,
 };
 use crate::config::environment::HostingEnvironment;
 
 use super::download;
 use super::hosts::AllowedHosts;
+
+/// How long a plugin's inline receipt stays once its task has ended.
+const INLINE_RECEIPT_FADE: std::time::Duration = std::time::Duration::from_secs(30);
 
 // ============================================================================
 // Wire types (moved from commands.rs — the SDK-facing result/input shapes)
@@ -493,6 +496,10 @@ pub fn report_plugin_task_lifecycle(
             if !label.is_empty() {
                 handle.title(label);
             }
+            // An inline badge sits in the editor's chrome: its receipt leaves.
+            if tone == TaskTone::Inline {
+                handle.set_fade_after(Some(INLINE_RECEIPT_FADE));
+            }
             let id = handle.id;
             log::debug!(
                 target: "plugin",
@@ -768,5 +775,28 @@ mod awaiting_tests {
         ] {
             assert!(!other.is_awaiting(), "{other:?} does not hold the watchdog off");
         }
+    }
+}
+
+#[cfg(test)]
+mod fade_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::tasks::TaskScope;
+
+    fn start(registry: &Arc<TaskRegistry>, hook: PluginHook, scope: TaskScope) -> Option<std::time::Duration> {
+        let store = PluginTaskHandleStore::default();
+        let lifecycle = PluginTaskLifecycle::Started { label: "Open in X".into(), has_progress: false, cancellable: false, job: None };
+        report_plugin_task_lifecycle(registry, &store, WindowId::from("main"), "xcom", hook, TriggerContext::ManualOne, None, lifecycle).unwrap();
+        registry.tasks(&WindowId::from("main"), scope).last().and_then(|t| t.fade_after)
+    }
+
+    /// A badge in the editor's chrome must not keep its last word forever.
+    #[test]
+    fn an_inline_plugin_task_ends_in_a_receipt_that_fades() {
+        let registry = Arc::new(TaskRegistry::new());
+        assert_eq!(start(&registry, PluginHook::Syndicate, TaskScope::ActionPanel), Some(INLINE_RECEIPT_FADE));
+        assert_eq!(start(&registry, PluginHook::Process, TaskScope::Workspace), None);
     }
 }
