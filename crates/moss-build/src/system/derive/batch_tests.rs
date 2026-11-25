@@ -157,8 +157,10 @@ fn a_read_of_the_page_on_screen_takes_the_next_freed_core_before_waiting_picture
             std::thread::sleep(Duration::from_millis(10));
         }
         drop(held.pop());
+        // The read frees its core before its thread returns, so a picture may start in between;
+        // a picture that took the core first would hold it until `release`, and the batch never finishes.
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !batch.is_finished() && pictures.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        while !batch.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         let (read_done, pictures_before) = (batch.is_finished(), pictures.load(Ordering::SeqCst));
