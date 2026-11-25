@@ -686,7 +686,7 @@ describe("publish-failure clean-up — a successful 'complete' clears the red", 
     expect((panel as any).lastFailure).not.toBeNull();
 
     // Re-publish happy path: fail → start over
-    fireDeployProgress({ stage: "waiting", current: 0, total: 0, message: "" });
+    fireDeployProgress({ stage: "preparing", current: 0, total: 0, message: "" });
     vi.useFakeTimers();
     try {
       fireDeployProgress({ stage: "complete", current: 0, total: 0, message: "" });
@@ -861,7 +861,7 @@ describe("Upload ticks at 4 Hz keep a minimized panel minimized", () => {
 
     // Re-publish: a fresh `waiting` resets the failed stage to idle, so this is a
     // NEW idle→engaged edge — it must pop the panel again.
-    fireDeployProgress({ stage: "waiting", current: 0, total: 0, message: "" });
+    fireDeployProgress({ stage: "preparing", current: 0, total: 0, message: "" });
     expect(panel.isHidden).toBe(false);
     expect(panel.getRevealState()).toBe("surfaced");
 

@@ -2246,8 +2246,7 @@ export class ProgressPanel {
         const ledger = this.publish.ledger(label.text, paused);
         if (ledger) return ledger;
       }
-      // Waiting on the first build: that build runs, so nothing is paused yet.
-      return { kind: "running", verb: label.text, condition: this.currentPublishStage === "waiting" ? undefined : paused, tooltip: label.detail };
+      return { kind: "running", verb: label.text, condition: paused, tooltip: label.detail };
     }
 
     // A publish that just landed. Placed directly under the active-publish tier
@@ -2475,7 +2474,7 @@ export class ProgressPanel {
     // calling nextPublishStage, so the stage machine starts from a clean slate.
     if (
       this.currentPublishStage === "failed" &&
-      (event.kind === "waiting" || event.kind === "progress")
+      event.kind === "progress"
     ) {
       // A fresh publish supersedes the previous failure, all three recordings.
       this.lastFailure = null;
