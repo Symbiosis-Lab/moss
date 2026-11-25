@@ -1513,6 +1513,9 @@ signed_call! {
     list_site_domains_is_signed: "GET" "/api/sites/s1/domains" => |c| c.list_site_domains("s1");
     pull_site_data_is_signed: "GET" "/api/sites/s1/data" => |c| c.pull_site_data("s1");
     pull_events_is_signed: "GET" "/api/sites/s1/events?since=5&limit=10" => |c| c.pull_events("s1", 5, 10);
+    pull_subscriber_events_is_signed: "GET" "/api/sites/s1/subscriber-events?since=5&limit=10" => |c| c.pull_subscriber_events("s1", 5, 10);
+    pull_comment_records_is_signed: "GET" "/api/sites/s1/comment-records?since=5&limit=10&pending=3,4" => |c| c.pull_comment_records("s1", 5, 10, &[3, 4]);
+    pull_bookings_is_signed: "GET" "/sites/s1/bookings?since=5&limit=10" => |c| c.pull_bookings("s1", 5, 10);
 }
 
 /// A JSON body is signed as the bytes sent, so seta reads the same document.

@@ -41,6 +41,8 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("history", moss_build::deploy::history::cli::run),
     // Lives beside the comment feature, not in `cli/` (file budget).
     ("comments", moss_build::build::features::comment::cli::run),
+    // Lives beside the puller it drives, not in `cli/` (file budget).
+    ("data", moss_build::vault::read_back::cli::run),
 ];
 
 fn answers(name: &str) -> bool {

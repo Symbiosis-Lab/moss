@@ -164,42 +164,18 @@ pub struct SiteDataResponse {
     pub subscribers: Option<Vec<String>>,
 }
 
-/// A single raw analytics event row returned by GET /api/sites/{id}/events.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EventRow {
-    pub id: u64,
-    pub ts: u64,
-    pub path: String,
-    pub referrer: Option<String>,
-    pub country: Option<String>,
-    pub browser: Option<String>,
-    pub os: Option<String>,
-    pub screen: Option<String>,
-    #[serde(rename = "utmSource")]
-    pub utm_source: Option<String>,
-    #[serde(rename = "utmMedium")]
-    pub utm_medium: Option<String>,
-    pub event: Option<String>,
-    /// Daily visitor code, a hash the server computes per reader and day.
-    /// Rows written before the server carried it have none.
-    pub visitor: Option<String>,
-    #[serde(rename = "utmCampaign")]
-    pub utm_campaign: Option<String>,
-    /// `pageview`, `click`, `engage`, `out` or `download`. Absent from servers
-    /// older than row kinds; readers then take a null `event` as a pageview.
-    pub kind: Option<String>,
-    /// Engage rows only: deepest quarter of the page reached (25 to 100).
-    pub scroll: Option<u8>,
-    /// Engage rows only: time on screen as a range, such as `10-30s`.
-    pub visible: Option<String>,
-}
-
-/// Response from GET /api/sites/{id}/events (batch of raw events for delta sync).
+/// One page of a site's records from a read-back route (`?since=&limit=` →
+/// `{records, cursor, more}`). Records stay as seta wrote them, so a field
+/// it adds reaches the folder without a release of moss. The analytics route
+/// names its records `events`; comments carry `answers` for the pending ids asked about.
 #[derive(Debug, Clone, Deserialize)]
-pub struct EventsBatchResponse {
-    pub events: Vec<EventRow>,
+pub struct RecordsPage {
+    #[serde(alias = "events")]
+    pub records: Vec<serde_json::Value>,
     pub cursor: u64,
     pub more: bool,
+    #[serde(default)]
+    pub answers: Vec<serde_json::Value>,
 }
 
 impl MossSetaClient {
@@ -562,22 +538,29 @@ impl MossSetaClient {
         self.get_json(&format!("/api/sites/{}/data", urlencoding::encode(site_id))).await
     }
 
-    /// Pull a single page of raw analytics events for delta sync.
-    ///
-    /// Calls `GET /api/sites/{id}/events?since={cursor}&limit={limit}` with BIP-340
-    /// authentication. Signed over the full path including query parameters.
-    ///
-    /// # Arguments
-    /// * `site_id` - Site identifier
-    /// * `since` - Cursor (event ID) — fetch events with id > since
-    /// * `limit` - Maximum number of events to return per page
-    pub async fn pull_events(
-        &self,
-        site_id: &str,
-        since: u64,
-        limit: u32,
-    ) -> Result<EventsBatchResponse, SetaError> {
+    /// A page of the site's analytics events after `since`.
+    pub async fn pull_events(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
         self.get_json(&format!("/api/sites/{}/events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
+    /// A page of the site's subscriber stream after `since`: consent,
+    /// suppression and form entries, each with its subject's email.
+    pub async fn pull_subscriber_events(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/api/sites/{}/subscriber-events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
+    /// A page of the site's comments after `since`, with each commenter's
+    /// email, and the answers for the `pending` ids (at most 200).
+    pub async fn pull_comment_records(&self, site_id: &str, since: u64, limit: u32, pending: &[u64]) -> Result<RecordsPage, SetaError> {
+        let ids: Vec<String> = pending.iter().map(u64::to_string).collect();
+        let ask = if ids.is_empty() { String::new() } else { format!("&pending={}", ids.join(",")) };
+        self.get_json(&format!("/api/sites/{}/comment-records?since={}&limit={}{}", urlencoding::encode(site_id), since, limit, ask)).await
+    }
+
+    /// A page of the site's booking changes after `since`, from commerce:
+    /// call it on [`MossSetaClient::at`] commerce's address.
+    pub async fn pull_bookings(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/sites/{}/bookings?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
     }
 }
 

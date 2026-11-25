@@ -29,7 +29,6 @@
 //! │
 //! ├── data/                 Runtime + imported data
 //! │   ├── events.jsonl      Raw analytics event log (pulled from host)
-//! │   ├── events-cursor.json  Sync cursor
 //! │   ├── subscribers.csv   Newsletter subscriber list
 //! │   └── social/           Imported social data
 //! │       ├── matters.json
@@ -2210,6 +2209,9 @@ history/
         assert!(!ignored(".moss/redirects.json"), "the redirect history must be trackable");
         assert!(ignored(".moss/data/social/feed.json"), "comments pulled from other platforms stay local");
         assert!(ignored(".moss/data/comment-sync-state.json"));
+        for record in [".moss/data/email/events.jsonl", ".moss/data/forms/-.csv", ".moss/data/comments/comment.jsonl", ".moss/data/booking/bookings.jsonl"] {
+            assert!(ignored(record), "{record} holds contacts' details and never reaches a pushed repository");
+        }
     }
 
     /// The regression. A build must not touch the user's rule, and must not

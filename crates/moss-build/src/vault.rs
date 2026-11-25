@@ -19,9 +19,10 @@ pub mod import;
 // `.moss/config.toml`'s writer primitive and `save_environment` (amendment,
 // 2026-09-07): the door both binaries' `moss env` writes through.
 pub mod config;
-// `.moss/data/events.jsonl` and its cursor (2026-09-09, track C4e): the
-// author's analytics log, and the sync loop that is its only writer.
+// `.moss/data/events.jsonl`, the author's analytics log, and its reader.
 pub mod analytics;
+// A hosted site's records pulled home into `.moss/data/`.
+pub mod read_back;
 // `.moss/state.toml`'s `[deployment]` writers (2026-09-07, track C4b): what a
 // publish records, written the same way from either binary.
 pub mod deployment_state;

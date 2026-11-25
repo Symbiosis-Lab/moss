@@ -866,7 +866,7 @@ fn the_contract_matches_the_command_table() {
 #[test]
 fn moss_own_files_are_told_from_the_ones_an_author_edits() {
     use crate::build::scan::classify::is_moss_internal;
-    for own in [".moss", ".moss/build.nosync/http-token", ".MOSS/plugins/new.wasm", ".moss/identity/secret-key"] {
+    for own in [".moss", ".moss/build.nosync/http-token", ".MOSS/plugins/new.wasm", ".moss/identity/secret-key", ".moss/data/email/events.jsonl", ".moss/data/booking/bookings.jsonl"] {
         assert!(is_moss_internal(Path::new(own)), "{own}");
     }
     for authored in [".moss/config.toml", ".moss/theme/style.css", ".moss/places.toml", "notes/.moss-ideas.md", "a.md"] {

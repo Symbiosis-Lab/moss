@@ -623,19 +623,19 @@ async fn push_site_inner_impl(
     // belongs. Deleted at C4e rather than carried into the open binary, which
     // would have paid a network round-trip per publish for it.
 
-    // 10b. Sync raw analytics events — non-fatal, best-effort.
-    // Acquire the per-site mutex so this post-publish sync cannot race with a
-    // concurrent panel-open sync_analytics_events command on the same site.
+    // 10b. Bring the site's records home: subscribers, form entries,
+    //     comments, bookings, analytics. Non-fatal: the site is already live.
+    //     The events lock keeps this from racing the panel's own analytics
+    //     pull in the same process; the folder lock covers other processes.
     {
-        // `sync_events` is an iteration-unbounded pagination loop
-        // (SYNC_PAGE_LIMIT = 50_000, vault/analytics.rs) of un-retried 120s
-        // calls, so two pages back-to-back would outlast STALL_TIMEOUT on their
-        // own. It bumps per page, so silence here means a genuine hang and is
-        // judged like every other phase — the site being live already is not a
-        // reason to leave the user watching a publish that never returns.
+        // Each part's paging loop is unbounded and bumps liveness per page,
+        // so silence here is a genuine hang and the stall watchdog judges it.
         let _guard = events_lock.lock().await;
-        if let Err(e) = crate::vault::analytics::sync_events(&client, folder_path, &site_id).await {
-            log::warn!(target: "deploy", "events sync after publish failed: {}", e);
+        let sources = crate::vault::read_back::Sources::new(&client, &environment, &site_id);
+        for (part, pulled) in crate::vault::read_back::pull(&sources, folder_path, &crate::vault::read_back::Part::ALL).await {
+            if let Err(e) = pulled {
+                log::warn!(target: "deploy", "{} read-back after publish failed: {}", part.name(), e);
+            }
         }
     }
 

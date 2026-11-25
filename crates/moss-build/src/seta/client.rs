@@ -786,6 +786,15 @@ impl MossSetaClient {
         }
     }
 
+    /// This client, signing with the same identity, addressed to another of
+    /// moss's services (commerce signs owners the way seta does).
+    ///
+    /// # Panics
+    /// Panics if the URL violates the HTTPS or loopback HTTP transport policy.
+    pub fn at(&self, base_url: &str) -> Self {
+        Self { base_url: Self::validate_url(base_url), ..self.clone() }
+    }
+
     /// Validate and normalize a base URL using the shared transport policy.
     ///
     /// # Panics
