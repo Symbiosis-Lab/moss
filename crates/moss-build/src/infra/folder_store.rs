@@ -101,8 +101,8 @@ impl FolderStores {
     /// root, caches under the platform cache directory, both named by its
     /// identifier. A folder under the system temporary directory, and every
     /// folder a test binary opens, gets stores under the temporary directory
-    /// instead: tests build there, and a test, or the binary one spawns, must
-    /// never fill real app data.
+    /// instead. A test that runs the moss binary on a folder elsewhere gives
+    /// it its own HOME, or its stores land in real app data.
     pub fn running_for(folder: &Path) -> Option<Self> {
         let temp = std::env::temp_dir();
         if crate::infra::app_data::in_test_binary() || canonical_to_be(folder).starts_with(canonical_to_be(&temp)) {

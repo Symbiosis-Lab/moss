@@ -14,7 +14,7 @@
 import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { MOSS_BIN } from '../tests/e2e/helpers/scratch-site';
+import { MOSS_BIN, mossEnv } from '../tests/e2e/helpers/scratch-site';
 
 type Engine = 'chromium' | 'webkit' | 'firefox';
 
@@ -96,7 +96,7 @@ function toWebServerConfig(server: ScratchHttpServer | ViteHarnessServer | MossP
       url: `http://127.0.0.1:${server.port}/__moss_health/`,
       reuseExistingServer: false as const,
       timeout: 60_000,
-      env: { ...process.env, MOSS_PREVIEW_PORT_BASE: String(server.port) },
+      env: mossEnv(resolve(repoRoot, `target/test-tmp/moss-home/${server.port}`), { MOSS_PREVIEW_PORT_BASE: String(server.port) }),
     };
   }
   return {
