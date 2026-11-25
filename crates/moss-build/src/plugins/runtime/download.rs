@@ -601,6 +601,51 @@ mod tests {
         assert!(!s.contains("Content-Disposition: form-data; name=\"0\"; filename=\"evil\""));
     }
 
+    async fn get(url: String) -> Result<super::FetchResult, String> {
+        let allowed = crate::plugins::runtime::hosts::AllowedHosts::unchecked_app_panel();
+        super::do_http_request(url, super::HttpMethod::Get, None, Some(5000), "test", allowed).await
+    }
+
+    fn body(result: &super::FetchResult) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(&result.body_base64).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_status_is_ok_only_in_the_2xx_range_and_every_body_is_kept() {
+        let mut server = mockito::Server::new_async().await;
+        for (path, status) in [("/ok", 200), ("/missing", 404), ("/down", 503)] {
+            server.mock("GET", path).with_status(status).with_header("content-type", "text/plain").with_body(path).create_async().await;
+        }
+        for (path, status, ok) in [("/ok", 200, true), ("/missing", 404, false), ("/down", 503, false)] {
+            let r = get(format!("{}{path}", server.url())).await.unwrap();
+            assert_eq!((r.status, r.ok, r.content_type.as_deref()), (status, ok, Some("text/plain")), "{path}");
+            assert_eq!(body(&r), path.as_bytes(), "{path}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_connection_is_an_error_not_a_status() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let err = get(format!("http://127.0.0.1:{port}/")).await.unwrap_err();
+        assert!(err.starts_with("request failed"), "{err}");
+    }
+
+    /// A body that breaks off is the server's failure on an error status, so
+    /// the plugin gets the status and what arrived; on a success it is an error.
+    #[test]
+    fn a_broken_body_fails_only_a_success() {
+        let broken = |r: ureq::Response, body: &mut Vec<u8>| {
+            drop(r);
+            body.extend_from_slice(b"par");
+            Err("Failed to read response body: reset".to_string())
+        };
+        let error = ureq::Response::new(502, "Bad Gateway", "").unwrap();
+        assert_eq!(super::read_response(error, broken).unwrap(), (502, false, None, b"par".to_vec()));
+        let success = ureq::Response::new(200, "OK", "").unwrap();
+        assert!(super::read_response(success, broken).unwrap_err().contains("reset"));
+    }
+
     /// LIVE verification against Matters staging (server.matters.icu): proves the
     /// REAL `build_multipart_body` + ureq `PostBytes` path produces a body the
     /// Matters GraphQL `singleFileUpload` accepts, for both image (`embed`) and
