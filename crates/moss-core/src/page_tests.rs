@@ -215,6 +215,17 @@ fn render_prepares_source_and_reports_preparation_and_parser_warnings() {
 }
 
 #[test]
+fn a_fence_line_that_opens_or_closes_nothing_shows_as_written_under_a_paragraph() {
+    let page = render_page("a.md", "A paragraph.\n:::note\nThe body.\n", &site(&[]));
+    assert!(!page.body_html.contains("<dl"), "{}", page.body_html);
+    assert!(page.body_html.contains(":::note"), "{}", page.body_html);
+    assert!(page.diagnostics.iter().any(|d| d.message.contains("never closed")));
+    let stray = render_page("a.md", "A paragraph.\n:::\n", &site(&[]));
+    assert!(!stray.body_html.contains("<dl"), "{}", stray.body_html);
+    assert!(stray.diagnostics.iter().any(|d| d.message.contains("closes nothing")));
+}
+
+#[test]
 fn transclusions_use_supplied_notes_and_missing_notes_are_visible() {
     let mut inputs = site(&["a.md", "b.md"]);
     assert_eq!(embedded_notes("a.md", "![[b]]", &inputs), vec!["b.md"]);

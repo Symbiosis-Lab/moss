@@ -210,8 +210,8 @@ fn cut_markdown_like_plain(excerpt: &ExcerptText, max_chars: usize, math: bool) 
 /// - headings (`#`), thematic breaks (`---`)
 /// - code fence marker lines (```` ``` ````) — fence *interior* filtering
 ///   is a pre-existing, documented limitation, not changed here
-/// - any residual `:::` marker line (only unclosed openers / code-fence
-///   examples survive the `extract_shortcodes` pass as literal `:::` lines)
+/// - any residual `:::` marker line, escaped or not (only unclosed openers
+///   and code-fence examples survive the `extract_shortcodes` pass)
 fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool) -> ExcerptText {
     // Route the raw markdown through the SAME pre-parse pass the renderer
     // uses (moss-core `shortcode_extract::extract_shortcodes`) so the excerpt
@@ -234,7 +234,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     //   also preserving its rendered body prose;
     // - an UNCLOSED opener (the author may be mid-keystroke — moss auto-saves
     //   2s after a keystroke, so a build can run before the closer is typed)
-    //   is emitted verbatim, and the per-line `:::` filter below drops just
+    //   is emitted escaped, and the per-line `:::` filter below drops just
     //   that one marker line — matching the real parser's verbatim-emission
     //   contract for unclosed blocks.
     //
@@ -360,7 +360,7 @@ fn select_excerpt(
         } else if line.starts_with('#')
             || line.starts_with("```")
             || line.starts_with("---")
-            || line.starts_with(":::")
+            || line.strip_prefix('\\').unwrap_or(line).starts_with(":::")
         {
             // Not prose, and a boundary: `paragraphs.len()` is the index this
             // break falls after, whether or not a paragraph is mid-flush.

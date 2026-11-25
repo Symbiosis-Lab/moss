@@ -1690,12 +1690,14 @@ fn extract_with_state(
             // inside a code fence or a comment used to end the shortcode
             // early and strand the rest as prose).
             let Some(j) = find_block_end(&lines, body_start, is_inert) else {
-                // Unclosed block: emit verbatim, and say where it opened.
+                // Unclosed block: show the opener as written, and say where it
+                // opened. Its first colon is escaped: right under a paragraph
+                // the parser would otherwise read `:` as a definition marker.
                 collected.warnings.push(unclosed_opener_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
                 ));
-                output.push_str(line);
+                output.push_str(&line.replacen(':', "\\:", 1));
                 output.push('\n');
                 i += 1;
                 continue;
@@ -1843,9 +1845,12 @@ fn extract_with_state(
         // text than a miscount, so it stays quiet there; a list-item
         // continuation is NOT exempt, because the extractor reads that line
         // like any other and an author who wrote it meant a closer.
+        // A warned closer is escaped like an unclosed opener, so it shows as written.
+        let mut shown = None;
         if fence_step(trimmed) < 0 {
             let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
             if !quiet.get(i).copied().unwrap_or(false) {
+                shown = Some(line.replacen(':', "\\:", 1));
                 collected.warnings.push(stray_closer_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
@@ -1855,7 +1860,7 @@ fn extract_with_state(
                 ));
             }
         }
-        output.push_str(line);
+        output.push_str(shown.as_deref().unwrap_or(line));
         output.push('\n');
         i += 1;
     }

@@ -2048,8 +2048,8 @@ fn a_stray_closer_warns_and_names_its_line_and_the_block_before_it() {
     let w = &result.warnings[0];
     assert!(w.contains("line 6") && w.contains("closes nothing"), "{w}");
     assert!(w.contains("closed on line 3") && w.contains("started on line 1"), "{w}");
-    // Still shown as text, as before.
-    assert!(result.markdown_with_placeholders.contains("\n:::\n"));
+    // Escaped, so it still shows as text.
+    assert!(result.markdown_with_placeholders.contains("\n\\:::\n"));
 }
 
 #[test]
