@@ -90,7 +90,7 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     );
     let mut sealed = pending.seal();
 
-    let (_, rewritten) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    let (_, rewritten, _) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
     assert_eq!(rewritten, ["index.html"], "the page the preview is serving was rewritten, and the caller is told");
 
     let on_disk = std::fs::read_to_string(stage.join("index.html")).unwrap();
@@ -297,4 +297,145 @@ fn a_new_process_tail_scan_reads_no_unchanged_page() {
     let before = reads();
     repair_staged_html(&mp, &stage, &mut sealed(), HashSet::new());
     assert_eq!(reads() - before, 0, "the next process starts from the kept scan");
+}
+
+/// A sealed manifest of `key -> bytes`, each stored as a CAS blob.
+fn blob_sealed(store: &crate::build::cache::ObjectStore, entries: &[(&str, &[u8])]) -> (crate::build::manifest::SealedManifest, Vec<String>) {
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    let oids = entries
+        .iter()
+        .map(|(key, bytes)| {
+            let oid = store.store_bytes(bytes).unwrap();
+            pending.apply_message(key.to_string(), "cafefacecafeface", HashBucket::Files, Some(oid.clone()));
+            oid
+        })
+        .collect();
+    (pending.seal(), oids)
+}
+
+/// The scan's stat table is what the presence pass reads: a page whose blob
+/// the store has lost and whose stage copy is gone is dropped.
+#[test]
+fn an_evicted_scanned_page_is_dropped_from_the_scans_stat_table() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let (mut sealed, oids) = blob_sealed(&store, &[("index.html", b"<p>hi</p>")]);
+    std::fs::remove_file(store.blob_path(&oids[0])).unwrap();
+
+    let mut scan = shipped_references(&stage, &sealed, &store, None);
+    assert!(scan.ship_stats["index.html"].1.is_err(), "the scan recorded the absence");
+    let dropped = crate::build::ship::drop_absent_outputs(&stage, &mut sealed, Some(&store), std::mem::take(&mut scan.ship_stats));
+
+    assert!(dropped.contains("index.html"), "{dropped:?}");
+}
+
+/// An entry the scan does not read still gets a stat in the table, and a
+/// missing table entry is statted afresh, never called present.
+#[test]
+fn an_absent_unscanned_asset_is_dropped_and_in_the_stat_table() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.register_hashed(&ServedPath::from_source("photo.bin").unwrap(), &crate::types::content::file_entry("aaaa"), HashBucket::Files);
+    let mut sealed = pending.seal();
+
+    let mut scan = shipped_references(&stage, &sealed, &store, None);
+    assert!(scan.ship_stats["photo.bin"].1.is_err(), "unscanned entries are statted too");
+    let dropped = crate::build::ship::drop_absent_outputs(&stage, &mut sealed, Some(&store), std::mem::take(&mut scan.ship_stats));
+    assert!(dropped.contains("photo.bin"), "{dropped:?}");
+
+    let mut sealed = {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.register_hashed(&ServedPath::from_source("photo.bin").unwrap(), &crate::types::content::file_entry("aaaa"), HashBucket::Files);
+        pending.seal()
+    };
+    let dropped = crate::build::ship::drop_absent_outputs(&stage, &mut sealed, Some(&store), Default::default());
+    assert!(dropped.contains("photo.bin"), "an entry missing from the table is statted afresh: {dropped:?}");
+}
+
+/// The scan saw an unscanned asset present and it was gone before the
+/// presence pass, which trusts the scan's stat and keeps the entry. Ship
+/// counts the missing source a fault, so no generation naming it is promoted.
+#[test]
+fn an_unscanned_asset_gone_after_the_scan_is_not_promoted() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("photo.bin"), b"bytes").unwrap();
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.register_hashed(&ServedPath::from_source("photo.bin").unwrap(), &crate::types::content::file_entry("aaaa"), HashBucket::Files);
+    let mut sealed = pending.seal();
+
+    let mut scan = shipped_references(&stage, &sealed, &store, None);
+    assert!(scan.ship_stats["photo.bin"].1.is_ok(), "premise: present at the scan");
+    std::fs::remove_file(stage.join("photo.bin")).unwrap();
+    let dropped = crate::build::ship::drop_absent_outputs(&stage, &mut sealed, Some(&store), std::mem::take(&mut scan.ship_stats));
+    assert!(dropped.is_empty(), "the presence pass answers from the scan's stat: {dropped:?}");
+
+    let promotion = crate::build::ship::materialize_and_promote(&sealed, &mp, &stage, crate::build::ship::next_promotion_epoch(), None, crate::build::ship::ShipVerdict::Ship, None);
+    assert!(promotion.is_err(), "a generation short of a file its manifest names was promoted: {promotion:?}");
+    assert!(!mp.current_ptr().exists(), "current names a broken generation");
+}
+
+/// A tail can run after an overlapping build rendered over the stage: the audit
+/// reads the page from what ships, as the reference scan does.
+#[test]
+fn the_link_audit_reads_the_ship_source_not_the_stage_copy() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let shipped = r#"<a href="/gone-from-ship/">x</a>"#;
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let oid = store.store_bytes(shipped.as_bytes()).unwrap();
+    let hash = crate::build::assets::paths::compute_binary_hash(shipped.as_bytes());
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.apply_message("index.html".to_string(), &hash, HashBucket::Files, Some(oid));
+    let mut sealed = pending.seal();
+    std::fs::write(stage.join("index.html"), r#"<a href="/gone-from-stage/">x</a>"#).unwrap();
+
+    let (_, _, links) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    let dead = crate::build::manifest::link_audit::audit(&stage, &sealed, &links);
+    assert_eq!(dead.iter().map(|d| d.href.as_str()).collect::<Vec<_>>(), vec!["/gone-from-ship/"]);
+}
+
+/// A kept scan written before pages carried their links reads as none, so the
+/// page is read again and its dead link is still found.
+#[test]
+fn a_kept_scan_without_page_links_is_read_again_and_the_audit_still_finds_the_link() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let page = r#"<a href="/gone/">x</a>"#;
+    std::fs::write(stage.join("index.html"), page).unwrap();
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let oid = store.store_bytes(page.as_bytes()).unwrap();
+    let hash = crate::build::assets::paths::compute_binary_hash(page.as_bytes());
+    let sealed = || {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("index.html".to_string(), &hash, HashBucket::Files, Some(oid.clone()));
+        pending.seal()
+    };
+    repair_staged_html(&mp, &stage, &mut sealed(), HashSet::new());
+    let kept = mp.memo_dir().join("references-shipped.json");
+    let text = std::fs::read_to_string(&kept).unwrap();
+    assert!(text.starts_with("moss-memo references-shipped 2 "), "{text}");
+    std::fs::write(&kept, text.replacen("references-shipped 2 ", "references-shipped 1 ", 1)).unwrap();
+    crate::build::media::orphan_prune::new_process(&stage);
+
+    let before = crate::build::media::orphan_prune::FILES_READ.with(|n| n.get());
+    let mut sealed = sealed();
+    let (_, _, links) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    assert_eq!(crate::build::media::orphan_prune::FILES_READ.with(|n| n.get()) - before, 1);
+    let dead = crate::build::manifest::link_audit::audit(&stage, &sealed, &links);
+    assert_eq!(dead.iter().map(|d| d.href.as_str()).collect::<Vec<_>>(), vec!["/gone/"]);
 }

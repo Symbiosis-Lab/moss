@@ -42,6 +42,15 @@ fn sealed_with_one_page(stage: &std::path::Path, page_html: &[u8]) -> crate::bui
     pending.seal()
 }
 
+/// The links the seal's shipped-reference scan takes from `sealed`'s pages.
+fn links_of(stage: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> crate::build::media::orphan_prune::PageLinks {
+    let mut scan = crate::build::media::orphan_prune::Rescan::shipped(stage, None);
+    for key in sealed.files().keys().filter(|k| k.ends_with(".html")) {
+        scan.read_file(&stage.join(key), Some(key)).unwrap();
+    }
+    scan.finish().page_links
+}
+
 const VIDEO_PAGE: &[u8] =
     br#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#;
 
@@ -57,7 +66,7 @@ fn a_video_and_poster_still_pending_at_seal_time_gate_publish() {
     let assets = std::sync::Arc::new(AssetRegistry::new());
     assets.set_pending("videos/clip.mp4".into(), None, None);
 
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert_eq!(unfulfilled.len(), 2, "both the mp4 and its derived poster key must be caught");
 
     let recorded = crate::system::build_records::records()
@@ -97,7 +106,7 @@ fn a_permanently_failed_video_does_not_gate_publish() {
         crate::deploy::refuse_publish(&folder).is_ok(),
         "no verdict recorded yet must not itself refuse"
     );
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert_eq!(unfulfilled.len(), 2, "a still-Pending video must gate publish once");
     assert!(
         crate::deploy::refuse_publish(&folder).is_err(),
@@ -133,7 +142,7 @@ fn a_permanently_failed_video_does_not_gate_publish() {
         "a permanently failed encode must stop being a pending promise"
     );
 
-    let unfulfilled_again = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled_again = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert!(
         unfulfilled_again.is_empty(),
         "a failed encode's dead link must not be this build's promise"
@@ -153,7 +162,7 @@ fn no_registry_at_all_is_advisory_only() {
     let folder = format!("/promise-gate-no-registry-{}", uuid::Uuid::new_v4());
     let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
 
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, None, &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, None, &folder, &links_of(tmp.path(), &sealed));
     assert!(unfulfilled.is_empty());
     assert!(crate::deploy::refuse_publish(&folder).is_ok());
 }
@@ -173,7 +182,7 @@ fn a_promise_whose_source_is_still_in_the_cloud_names_the_file() {
     assets.set_source_passthrough("videos/clip.mp4".into(), source);
     assets.set_pending("videos/clip.mp4".into(), None, None);
 
-    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     let err = crate::deploy::refuse_publish(&folder)
         .expect_err("a promise still in the cloud must refuse the publish");
     assert!(err.contains("clip.mov"), "{err}");
@@ -193,7 +202,7 @@ fn a_follow_up_rebuild_clears_the_refusal() {
     let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
     let assets = std::sync::Arc::new(AssetRegistry::new());
     assets.set_pending("videos/clip.mp4".into(), None, None);
-    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert!(crate::deploy::refuse_publish(&folder).is_err());
 
     // Second seal: the follow-up rebuild's own registry sees the encode
@@ -212,7 +221,7 @@ fn a_follow_up_rebuild_clears_the_refusal() {
     );
     let sealed2 = pending.seal();
     let empty_assets = std::sync::Arc::new(AssetRegistry::new());
-    record_promise_gate(tmp.path(), &sealed2, Some(&empty_assets), &folder);
+    record_promise_gate(tmp.path(), &sealed2, Some(&empty_assets), &folder, &links_of(tmp.path(), &sealed2));
 
     assert!(
         crate::deploy::refuse_publish(&folder).is_ok(),

@@ -57,12 +57,13 @@ use std::path::Path;
 ///
 /// Also returns the staged pages the repair rewrote: they are bytes the
 /// preview is already serving, so the caller tells it to read them again.
+/// And the links of every page, for the link audit.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: HashSet<String>,
-) -> (crate::build::ship::ShipVerdict, Vec<String>) {
+) -> (crate::build::ship::ShipVerdict, Vec<String>, crate::build::media::orphan_prune::PageLinks) {
     let mut unshippable = failed;
     // Same object store `ship_phase` will read from, so a `staged_oid` entry
     // whose stage copy is transiently absent (evicted, mid-write, deleted by
@@ -70,12 +71,17 @@ pub(crate) fn repair_staged_html(
     // rather than being dropped from the manifest on the strength of a stage
     // path this generation was never going to read from anyway.
     let object_store = crate::build::cache::ObjectStore::for_seal(mp);
-    let scan = shipped_references(stage_dir, sealed, &object_store, Some(&mp.memo_dir()));
+    let mut scan = shipped_references(stage_dir, sealed, &object_store, Some(&mp.memo_dir()));
     // Pruned keys are not stripped: no page this generation ships names one,
     // so a strip could only rewrite a newer build's staged page.
     crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan);
     let entries = sealed.all_files().len();
-    let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
+    let lost = crate::build::ship::drop_absent_outputs(
+        stage_dir,
+        sealed,
+        Some(&object_store),
+        std::mem::take(&mut scan.ship_stats),
+    );
     if let Err(e) = object_store.save_verified() {
         log::debug!("[CAS] verified-blob index not saved: {e}");
     }
@@ -85,7 +91,13 @@ pub(crate) fn repair_staged_html(
         &scan, sealed, stage_dir,
     ));
     let rewritten = if verdict.repairs_staging() { apply_to_staging(stage_dir, sealed, &unshippable) } else { Vec::new() };
-    (verdict, rewritten)
+    // The scan read these pages before the repair rewrote them.
+    for page in &rewritten {
+        if let Ok(html) = std::fs::read_to_string(stage_dir.join(page)) {
+            scan.page_links.insert(page.clone(), crate::build::manifest::link_audit::root_relative_urls(&html));
+        }
+    }
+    (verdict, rewritten, std::mem::take(&mut scan.page_links))
 }
 
 /// The references in what this generation ships: each scannable entry read
@@ -109,20 +121,37 @@ pub(crate) fn shipped_references(
     let mut rescan = Rescan::shipped(stage_dir, memo_dir);
     for (key, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(key);
-        if crate::types::content::parse_entry(entry).0 == crate::types::content::MODE_SYMLINK && stage_path.is_dir() {
+        let scanned = is_scanned(&stage_path);
+        let (mode, _) = crate::types::content::parse_entry(entry);
+        if mode == crate::types::content::MODE_SYMLINK && stage_path.is_dir() {
+            let md = std::fs::symlink_metadata(&stage_path);
+            rescan.record_ship_stat(key, stage_path.clone(), md);
             rescan.read_tree(&stage_path);
             continue;
         }
-        if !is_scanned(&stage_path) {
-            continue;
-        }
         match resolve_ship_source(key, &stage_path, sealed, Some(object_store)) {
-            ShipRead::Held(bytes) => rescan.read_bytes(Some(key), bytes),
-            ShipRead::Blob(path) | ShipRead::Path(path) => match rescan.read_file(&path, Some(key)) {
-                Ok(()) => {}
-                Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => {}
-                Err(_) => rescan.blind(path),
-            },
+            ShipRead::Held(bytes) => {
+                if scanned {
+                    rescan.read_bytes(Some(key), bytes);
+                }
+            }
+            ShipRead::Blob(path) | ShipRead::Path(path) => {
+                // A blob is vouched for by the object store; only the stage
+                // path is presence-checked from this table.
+                let is_stage = path == stage_path;
+                if !scanned && !is_stage {
+                    continue;
+                }
+                let md = std::fs::symlink_metadata(&path);
+                let read = scanned.then(|| rescan.read_file_stat(&path, Some(key), md.as_ref().ok()));
+                match read {
+                    Some(Err(e)) if !crate::build::icloud::is_definitely_absent(&path, &e) => rescan.blind(path.clone()),
+                    _ => {}
+                }
+                if is_stage {
+                    rescan.record_ship_stat(key, path, md);
+                }
+            }
         }
     }
     rescan.finish()

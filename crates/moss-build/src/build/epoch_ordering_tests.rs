@@ -409,7 +409,16 @@ async fn tail_with(
 
 /// The tail of a serving build whose render `show_render` minted.
 async fn serving_tail(fx: &SealFixture, sealed: crate::build::manifest::SealedManifest, render: crate::build::lifecycle::Render) {
-    let guards = crate::build::SealGuards { handoff: crate::build::Handoff::Lane, sweep: crate::build::lifecycle::SealSweep::Serving(Default::default()), ..Default::default() };
+    serving_tail_with_encodes(fx, sealed, render, Default::default()).await;
+}
+
+async fn serving_tail_with_encodes(
+    fx: &SealFixture,
+    sealed: crate::build::manifest::SealedManifest,
+    render: crate::build::lifecycle::Render,
+    encodes: std::sync::Arc<crate::types::runtime::VideoConversionState>,
+) {
+    let guards = crate::build::SealGuards { handoff: crate::build::Handoff::Lane, sweep: crate::build::lifecycle::SealSweep::Serving(encodes), ..Default::default() };
     let _ = tail_with(&fx.mp, &fx.session, sealed, render.seq(), render, guards).await;
 }
 
@@ -487,6 +496,130 @@ async fn a_tail_marks_staging_swept_only_for_the_last_build_to_enter() {
     skips(50);
     serving_tail(&fx, sealed_page(&stage, b"<html><body>now</body></html>"), render).await;
     assert!(!skips(100), "the tail marked a sweep for a build that was not the last to enter");
+}
+
+fn sealed_pages(stage: &std::path::Path, pages: &[&str]) -> crate::build::manifest::SealedManifest {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    for page in pages {
+        std::fs::create_dir_all(stage.join(page).parent().unwrap()).unwrap();
+        std::fs::write(stage.join(page), page.as_bytes()).unwrap();
+        pending.register(&crate::build::served_path::ServedPath::from_source(page).unwrap(), page.as_bytes(), HashBucket::Files);
+    }
+    pending.seal()
+}
+
+/// A fixture whose first seal, the one that walks the whole stage, is done.
+async fn after_first_seal(fx: &SealFixture) {
+    let (render, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail(fx, sealed_pages(&fx.mp.staging_dir(), &["index.html", "extra/index.html"]), render).await;
+    assert!(fx.mp.staging_dir().join("extra/index.html").is_file());
+}
+
+/// A normal seal unlinks what the build removed, and walks nothing: a file no
+/// manifest names is still there afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_reclaims_what_the_build_removed_without_walking_the_stage() {
+    let fx = seal_fixture();
+    let stage = fx.mp.staging_dir();
+    after_first_seal(&fx).await;
+    std::fs::write(stage.join("unnamed.txt"), b"named by no manifest").unwrap();
+    let (render, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail(&fx, sealed_pages(&stage, &["index.html"]), render).await;
+    assert!(!stage.join("extra").exists(), "the removed page's output survived the seal");
+    assert!(stage.join("unnamed.txt").exists(), "a normal seal walked the whole stage");
+}
+
+/// A second seal in one process removes the keys the build removed and visits
+/// nothing else.
+#[test]
+fn a_second_seal_in_one_process_removes_only_the_removed_keys() {
+    let (_tmp, folder) = fixture();
+    let stage = folder.join("stage");
+    let permit = crate::build::lifecycle::permit_for_test();
+    let seal = |pages: &[&str], previous: Option<&crate::types::content::SiteHashes>| {
+        let sealed = sealed_pages(&stage, pages);
+        let removed = crate::build::pipeline::reclaim_staging(&stage, &sealed, previous, &folder, &permit);
+        (sealed.site_hashes_view().clone(), removed)
+    };
+    let (first, _) = seal(&["index.html", "a/index.html", "b/index.html"], None);
+    for stray in ["unnamed-1.txt", "unnamed-2.txt", "unnamed-3.txt"] {
+        std::fs::write(stage.join(stray), b"named by no manifest").unwrap();
+    }
+    let (_, removed) = seal(&["index.html"], Some(&first));
+    assert_eq!(removed, 2, "the second seal removed a file the build did not remove");
+    assert!(stage.join("unnamed-3.txt").exists());
+}
+
+/// Another process promoted since this one did, and may have left files the
+/// manifests cannot name: the next seal walks the whole stage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_walks_the_stage_after_another_process_promoted() {
+    let fx = seal_fixture();
+    let stage = fx.mp.staging_dir();
+    after_first_seal(&fx).await;
+    std::fs::create_dir_all(fx.mp.generations_dir()).unwrap();
+    std::fs::write(fx.mp.current_generation_marker(), "other").unwrap();
+    crate::infra::folder_lock::record_promotion(&fx.mp.generations_dir(), "other", 7).unwrap();
+    std::fs::write(stage.join("unnamed.txt"), b"left by the other process").unwrap();
+    let (render, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), render).await;
+    assert!(!stage.join("unnamed.txt").exists(), "another process's promotion owed a whole-stage walk");
+}
+
+/// A save adds a page; a second save, which deletes it, overtakes that render
+/// before it seals. The seal after leaves no stage file for the page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_after_an_overtaken_render_leaves_none_of_its_files() {
+    let fx = seal_fixture();
+    let stage = fx.mp.staging_dir();
+    after_first_seal(&fx).await;
+    let (_overtaken, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    std::fs::create_dir_all(stage.join("added")).unwrap();
+    std::fs::write(stage.join("added/index.html"), b"<h1>the page the second save deleted</h1>").unwrap();
+    let (render, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), render).await;
+    assert!(!stage.join("added").exists(), "the overtaken render's page outlived the next seal");
+}
+
+/// A render that sealed before a newer one was minted leaves its tail to the
+/// newer render's, and the page it staged is named by no seal: the newer seal
+/// walks the whole stage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_after_a_tail_left_to_a_newer_render_leaves_none_of_its_files() {
+    let fx = seal_fixture();
+    let stage = fx.mp.staging_dir();
+    after_first_seal(&fx).await;
+    let (older, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    std::fs::create_dir_all(stage.join("added")).unwrap();
+    std::fs::write(stage.join("added/index.html"), b"<h1>staged by the older render</h1>").unwrap();
+    older.note_sealed();
+    let (newer, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    newer.note_sealed();
+    serving_tail(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), older).await;
+    assert!(stage.join("added/index.html").is_file(), "the older tail should have left staging to the newer one");
+    serving_tail(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), newer).await;
+    assert!(!stage.join("added").exists(), "the page of the render whose tail yielded outlived the newer seal");
+}
+
+/// An encode whose source went mid-run leaves a half-written output that no
+/// build registers; the next seal removes it though its delta cannot name it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_removes_the_output_of_an_encode_whose_source_went() {
+    let fx = seal_fixture();
+    let stage = fx.mp.staging_dir();
+    after_first_seal(&fx).await;
+    let encodes = std::sync::Arc::new(crate::types::runtime::VideoConversionState::new());
+    encodes.begin_run(1, [("clip.mov".to_string(), "fp".to_string(), vec!["clip.mp4".to_string()])]);
+    std::fs::write(stage.join("clip.mp4"), b"half an encode").unwrap();
+    let (kept, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail_with_encodes(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), kept, encodes.clone()).await;
+    assert!(stage.join("clip.mp4").is_file(), "a running encode's output was swept");
+    encodes.end_item("clip.mov", 1, [], false, &[]);
+    encodes.end_run(1);
+    let (render, _) = crate::build::lifecycle::show_render(&fx.mp, true);
+    serving_tail_with_encodes(&fx, sealed_pages(&stage, &["index.html", "extra/index.html"]), render, encodes).await;
+    assert!(!stage.join("clip.mp4").exists(), "the output no build registered outlived the next seal");
 }
 
 /// Only the render on screen sweeps: a withheld render's tail leaves staging

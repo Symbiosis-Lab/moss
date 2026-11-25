@@ -2200,6 +2200,7 @@ pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, gene
     let permit = crate::build::lifecycle::park_for_rebuild(paths, true, encode_outputs)?;
     crate::phase!("staging_sweep", { sweep_staging(&stage_dir, sealed, Some(&permit)) });
     let (render, _) = crate::build::lifecycle::show_render(paths, true);
+    render.close_unsealed();
     crate::build::lifecycle::promote(paths, crate::build::ship::next_promotion_epoch(), Some(&render), generation, false).ok()?;
     Some(render.seq())
 }
@@ -2227,9 +2228,9 @@ pub(crate) fn sweep_staging(
     stage_dir: &Path,
     previous: &SiteHashes,
     permit: Option<&crate::build::lifecycle::SweepPermit>,
-) {
+) -> usize {
     let Some(permit) = permit.filter(|_| !previous.files.is_empty()) else {
-        return;
+        return 0;
     };
     let files = remove_stale_files(stage_dir, previous, "staging", permit);
     let dirs = remove_stale_dirs(stage_dir, &compute_expected_dirs(previous), permit);
@@ -2237,6 +2238,39 @@ pub(crate) fn sweep_staging(
     if files.removed() > 0 || dirs > 0 {
         log::info!("staging sweep: {}, {} dir(s)", files.describe(), dirs);
     }
+    files.removed()
+}
+
+/// The seal tail's reclaim: unlink what `sealed` leaves unnamed. Walks staging
+/// only when `SweepPermit::claim_whole_sweep` says residue the manifests
+/// cannot name may be there; otherwise it removes the entries `previous` had
+/// and `sealed` lacks, and those this build dropped after sealing. Returns
+/// how many files it removed.
+pub(crate) fn reclaim_staging(
+    stage_dir: &Path,
+    sealed: &crate::build::manifest::SealedManifest,
+    previous: Option<&SiteHashes>,
+    folder: &Path,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> usize {
+    let view = sealed.site_hashes_view();
+    let whole = permit.claim_whole_sweep(folder);
+    let Some(previous) = previous.filter(|p| !whole && !p.files.is_empty()) else {
+        return sweep_staging(stage_dir, view, Some(permit));
+    };
+    let gone: std::collections::HashSet<String> = previous
+        .output_keys()
+        .filter(|key| !view.names(key))
+        .chain(sealed.dropped())
+        .cloned()
+        .collect();
+    let files = crate::build::media::pipeline::remove_stale_named(stage_dir, &gone, view, permit);
+    let dirs = crate::build::media::pipeline::remove_emptied_dirs(stage_dir, &gone, permit);
+    crate::build::phase::record_count("swept", files.removed());
+    if files.removed() > 0 || dirs > 0 {
+        log::info!("staging reclaim: {}, {} dir(s)", files.describe(), dirs);
+    }
+    files.removed()
 }
 
 /// Load previous hashes from .moss/build.nosync/hashes.json.

@@ -794,8 +794,8 @@ fn a_foreign_or_cut_short_kept_scan_reads_every_file_again() {
         let kept = std::fs::read_to_string(kept_scan(memo.path())).unwrap();
         let (header, body) = kept.split_once('\n').unwrap();
         let tampered = match tamper {
-            "another moss" => format!("moss-memo references-stage 1 another-moss\n{body}"),
-            "another version" => format!("{}\n{body}", header.replacen("references-stage 1 ", "references-stage 2 ", 1)),
+            "another moss" => format!("moss-memo references-stage 2 another-moss\n{body}"),
+            "another version" => format!("{}\n{body}", header.replacen("references-stage 2 ", "references-stage 3 ", 1)),
             _ => kept[..kept.len() - 1].to_string(),
         };
         std::fs::write(kept_scan(memo.path()), tampered).unwrap();

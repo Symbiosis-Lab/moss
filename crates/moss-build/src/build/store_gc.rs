@@ -378,15 +378,28 @@ struct Finished {
 }
 
 impl WholeGeneration {
-    /// Stat every file of `gen_id`, a whole generation at `gen_dir` whose
-    /// manifest entries are `files`. An entry with no file — the `_moss/math/`
+    /// Record every file of `gen_id`, a whole generation at `gen_dir` whose
+    /// manifest entries are `files`, from its stat in `stats` or, where `stats`
+    /// has none, a fresh one. An entry with no file — the `_moss/math/`
     /// exemption — is left out, so it is never taken as held. `None` where the
     /// directory has no identity to check, so no copy is seeded from it.
-    pub fn record(gen_dir: &Path, gen_id: &str, files: &std::collections::HashMap<String, String>) -> Option<Self> {
+    pub fn record(
+        gen_dir: &Path,
+        gen_id: &str,
+        files: &std::collections::HashMap<String, String>,
+        stats: &GenerationStats,
+    ) -> Option<Self> {
         let files = files
             .iter()
             .filter_map(|(rel, entry)| {
-                let meta = std::fs::symlink_metadata(gen_dir.join(rel)).ok()?;
+                let fresh;
+                let meta = match stats.get(rel) {
+                    Some(meta) => meta,
+                    None => {
+                        fresh = std::fs::symlink_metadata(gen_dir.join(rel)).ok()?;
+                        &fresh
+                    }
+                };
                 Some((rel.clone(), Finished { entry: entry.clone(), size: meta.len(), mtime: meta.modified().ok() }))
             })
             .collect();
@@ -429,16 +442,21 @@ impl WholeGeneration {
     /// bytes: this generation finished `rel_path` as `entry`, and the file is
     /// present with the size and mtime it had then (a clone keeps both). An
     /// edit since, or a dataless or evicted file, is shipped again. Presence is
-    /// the one predicate every generation check asks, given the stat taken
-    /// here; every ancestor of `path` is a real directory, because
-    /// [`prune_to_manifest`] removes any link that is not itself an entry.
-    pub fn still_holds(&self, rel_path: &str, entry: &str, path: &Path) -> bool {
-        let Some(finished) = self.files.get(rel_path) else { return false };
-        let stat = std::fs::symlink_metadata(path);
+    /// the one predicate every generation check asks, given the stat in
+    /// `stats` (the walk of [`prune_to_manifest`], which no write has
+    /// outdated for this entry); every ancestor of `path` is a real directory,
+    /// because that walk removes any link that is not itself an entry.
+    pub fn still_holds(&self, rel_path: &str, entry: &str, path: &Path, stats: &GenerationStats) -> bool {
+        let (Some(finished), Some(meta)) = (self.files.get(rel_path), stats.get(rel_path)) else { return false };
         finished.entry == entry
-            && stat.as_ref().is_ok_and(|meta| meta.len() == finished.size && meta.modified().ok() == finished.mtime)
-            && crate::build::io_utils::probe_output_stat(path, crate::types::content::parse_entry(entry).0, stat)
-                .is_present()
+            && meta.len() == finished.size
+            && meta.modified().ok() == finished.mtime
+            && crate::build::io_utils::probe_output_stat(
+                path,
+                crate::types::content::parse_entry(entry).0,
+                Ok(meta.clone()),
+            )
+            .is_present()
     }
 }
 
@@ -466,13 +484,34 @@ fn dir_identity(_dir: &Path) -> Option<DirIdentity> {
 /// directory that leaves empty, so a promoted generation holds exactly its
 /// manifest. A seeded directory holds its base's outputs, and a copy cut off
 /// after seeding leaves them for the next copy of the same id.
-pub fn prune_to_manifest(gen_dir: &Path, files: &std::collections::HashMap<String, String>) -> std::io::Result<()> {
-    prune_dir(gen_dir, "", files).map(|_| ())
+///
+/// Returns the stat of every entry that stays, taken as it was left: one
+/// `lstat` per directory entry serves this walk, [`WholeGeneration::still_holds`]
+/// and [`WholeGeneration::record`]. An entry written afterwards must be taken
+/// out of the table, for its size can change.
+pub fn prune_to_manifest(
+    gen_dir: &Path,
+    files: &std::collections::HashMap<String, String>,
+) -> std::io::Result<GenerationStats> {
+    let mut stats = GenerationStats::new();
+    prune_dir(gen_dir, "", files, &mut stats)?;
+    Ok(stats)
 }
+
+/// The stat of each entry of a generation, by manifest path; live for one seal
+/// and never saved.
+/// Taken and read under one `GenerationWriteLock`: the walk, `still_holds` and
+/// the record all run before `materialize_and_promote` releases it.
+pub type GenerationStats = std::collections::HashMap<String, std::fs::Metadata>;
 
 /// [`prune_to_manifest`] below `dir`, whose manifest path is `rel`. Returns
 /// whether `dir` is empty afterwards.
-fn prune_dir(dir: &Path, rel: &str, files: &std::collections::HashMap<String, String>) -> std::io::Result<bool> {
+fn prune_dir(
+    dir: &Path,
+    rel: &str,
+    files: &std::collections::HashMap<String, String>,
+    stats: &mut GenerationStats,
+) -> std::io::Result<bool> {
     let mut empty = true;
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -481,8 +520,9 @@ fn prune_dir(dir: &Path, rel: &str, files: &std::collections::HashMap<String, St
             "" => name.to_string_lossy().into_owned(),
             _ => format!("{rel}/{}", name.to_string_lossy()),
         };
-        if entry.file_type()?.is_dir() {
-            if !prune_dir(&entry.path(), &child, files)? {
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            if !prune_dir(&entry.path(), &child, files, stats)? {
                 empty = false;
             } else {
                 // allow:unlink a generation directory emptied of outputs its manifest does not name
@@ -490,6 +530,7 @@ fn prune_dir(dir: &Path, rel: &str, files: &std::collections::HashMap<String, St
             }
         } else if files.contains_key(&child) {
             empty = false;
+            stats.insert(child, meta);
         } else {
             // allow:unlink an output this generation's manifest does not name, before promote
             std::fs::remove_file(entry.path())?;

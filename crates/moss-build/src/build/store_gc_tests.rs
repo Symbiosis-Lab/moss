@@ -489,10 +489,11 @@ fn a_kept_seed_record_is_read_back_only_whole_and_of_this_version() {
     std::fs::create_dir_all(&gen_dir).unwrap();
     std::fs::write(gen_dir.join("a.html"), b"<p>a</p>").unwrap();
     let files: std::collections::HashMap<String, String> = [("a.html".to_string(), "100644:abc".to_string())].into();
-    let whole = WholeGeneration::record(&gen_dir, "g1", &files).expect("a unix directory has an identity");
+    let whole = WholeGeneration::record(&gen_dir, "g1", &files, &Default::default()).expect("a unix directory has an identity");
     whole.save(generations);
     let back = WholeGeneration::load(generations, "g1").expect("kept and read back");
-    assert!(back.still_holds("a.html", "100644:abc", &gen_dir.join("a.html")));
+    let stats = prune_to_manifest(&gen_dir, &files).unwrap();
+    assert!(back.still_holds("a.html", "100644:abc", &gen_dir.join("a.html"), &stats));
     let path = WholeGeneration::record_path(generations, "g1");
     std::fs::copy(&path, WholeGeneration::record_path(generations, "g2")).unwrap();
     assert!(WholeGeneration::load(generations, "g2").is_none(), "another id's record is not this one");
@@ -502,4 +503,32 @@ fn a_kept_seed_record_is_read_back_only_whole_and_of_this_version() {
     assert!(WholeGeneration::load(generations, "g1").is_none(), "another version");
     std::fs::write(&path, &json[..json.len() / 2]).unwrap();
     assert!(WholeGeneration::load(generations, "g1").is_none(), "cut short");
+}
+
+/// A file changed on disk after the base was recorded is not held, and a
+/// record of the generation takes its stat from the walk only for an entry
+/// nothing wrote since.
+#[cfg(unix)]
+#[test]
+fn a_file_changed_since_the_record_is_not_held_and_a_written_one_is_stat_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let gen_dir = tmp.path().join("g1");
+    std::fs::create_dir_all(&gen_dir).unwrap();
+    std::fs::write(gen_dir.join("a.html"), b"<p>a</p>").unwrap();
+    std::fs::write(gen_dir.join("b.html"), b"<p>b</p>").unwrap();
+    let files: std::collections::HashMap<String, String> = [("a.html", "100644:a"), ("b.html", "100644:b")]
+        .map(|(rel, entry)| (rel.to_string(), entry.to_string()))
+        .into();
+    let base = WholeGeneration::record(&gen_dir, "g1", &files, &Default::default()).unwrap();
+
+    std::fs::write(gen_dir.join("a.html"), b"<p>a, edited</p>").unwrap();
+    let mut stats = prune_to_manifest(&gen_dir, &files).unwrap();
+    assert!(!base.still_holds("a.html", "100644:a", &gen_dir.join("a.html"), &stats));
+    assert!(base.still_holds("b.html", "100644:b", &gen_dir.join("b.html"), &stats));
+
+    // `a.html` is shipped again, and its size changes once more.
+    stats.remove("a.html");
+    std::fs::write(gen_dir.join("a.html"), b"<p>a, transformed</p>").unwrap();
+    let next = WholeGeneration::record(&gen_dir, "g2", &files, &stats).unwrap();
+    assert_eq!(next.files["a.html"].size, "<p>a, transformed</p>".len() as u64);
 }

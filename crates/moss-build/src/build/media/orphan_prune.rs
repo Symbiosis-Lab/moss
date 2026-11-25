@@ -105,7 +105,20 @@ pub struct ReferenceScan {
     /// Paths the scan could not read. Non-empty means `tails` is a SUBSET of
     /// the truth, so pruning from it would delete referenced files.
     pub unreadable: Vec<std::path::PathBuf>,
+    /// What the shipped-reference scan statted, for this seal only.
+    pub(crate) ship_stats: ShipStats,
+    /// Each page's root-relative links by manifest key, from the bytes the
+    /// scan read. Only the shipped-reference scan keys by manifest key.
+    pub(crate) page_links: PageLinks,
 }
+
+/// A page's manifest key to the root-relative references in its HTML.
+pub(crate) type PageLinks = HashMap<String, Vec<String>>;
+
+/// Each manifest entry's ship source and that source's `symlink_metadata`,
+/// taken once by the shipped-reference scan so the presence pass does not stat
+/// it again. Never persisted; an entry absent from it is statted afresh.
+pub(crate) type ShipStats = HashMap<String, (PathBuf, std::io::Result<std::fs::Metadata>)>;
 
 /// Walk `stage_dir` and collect every embedded image-path token from the
 /// scannable text file types, normalized to a site-root-relative tail with no
@@ -197,6 +210,16 @@ pub(crate) fn scan_stage(stage_dir: &Path, memo_dir: Option<&Path>) -> Reference
     rescan.finish()
 }
 
+/// `doc` when it is an HTML page, the only kind the link audit reads.
+fn page_path(doc: Option<&str>) -> Option<&str> {
+    doc.filter(|d| d.ends_with(".html"))
+}
+
+/// The root-relative links of the page `doc`; other files have none.
+fn page_hrefs(doc: Option<&str>, text: &str) -> Vec<String> {
+    page_path(doc).map_or_else(Vec::new, |_| crate::build::manifest::link_audit::root_relative_urls(text))
+}
+
 /// Whether the scan reads a file of this name. The extension is lowercased
 /// first, so `index.HTML` is read like `index.html`.
 pub(crate) fn is_scanned(path: &Path) -> bool {
@@ -261,12 +284,20 @@ impl Rescan {
     /// scannable extension is binary, so there is no reference to miss. A
     /// read error is the caller's to judge (see [`Rescan::blind`]).
     pub(crate) fn read_file(&mut self, path: &Path, doc: Option<&str>) -> std::io::Result<()> {
+        let md = std::fs::symlink_metadata(path);
+        self.read_file_stat(path, doc, md.as_ref().ok())
+    }
+
+    /// [`Rescan::read_file`] for a caller that already took `path`'s
+    /// `symlink_metadata`.
+    pub(crate) fn read_file_stat(&mut self, path: &Path, doc: Option<&str>, md: Option<&std::fs::Metadata>) -> std::io::Result<()> {
         let key = (path.to_path_buf(), doc.map(str::to_owned));
-        let stat = std::fs::symlink_metadata(path).ok().map(|md| crate::build::stat::FileStat::of(&md));
+        let stat = md.map(crate::build::stat::FileStat::of);
         let held = stat.as_ref().zip(self.last.remove(&key)).filter(|(stat, file)| file.stat.vouches_for(stat, file.read_at));
         if let Some((_, file)) = held {
             self.scan.tails.extend(file.tails.iter().cloned());
             self.scan.resolved.extend(file.resolved.iter().cloned());
+            self.note_links(doc, &file.hrefs);
             self.kept.insert(key, file);
             return Ok(());
         }
@@ -276,15 +307,30 @@ impl Rescan {
         FILES_READ.with(|n| n.set(n.get() + 1));
         let bytes = std::fs::read(path)?;
         let (mut tails, mut resolved) = (HashSet::new(), HashSet::new());
+        let mut hrefs = Vec::new();
         if let Ok(text) = std::str::from_utf8(&bytes) {
             collect_references(text, doc, &mut tails, &mut resolved);
+            hrefs = page_hrefs(doc, text);
         }
         self.scan.tails.extend(tails.iter().cloned());
         self.scan.resolved.extend(resolved.iter().cloned());
+        self.note_links(doc, &hrefs);
         if let Some(stat) = stat {
-            self.kept.insert(key, FileRefs { stat, read_at, tails: tails.into_iter().collect(), resolved: resolved.into_iter().collect() });
+            self.kept.insert(key, FileRefs { stat, read_at, tails: tails.into_iter().collect(), resolved: resolved.into_iter().collect(), hrefs });
         }
         Ok(())
+    }
+
+    /// Keep `hrefs` as the links of the page `doc`; other files have none.
+    fn note_links(&mut self, doc: Option<&str>, hrefs: &[String]) {
+        if let Some(page) = page_path(doc) {
+            self.scan.page_links.insert(page.to_owned(), hrefs.to_vec());
+        }
+    }
+
+    /// Record `key`'s ship source and stat for the presence pass.
+    pub(crate) fn record_ship_stat(&mut self, key: &str, path: PathBuf, md: std::io::Result<std::fs::Metadata>) {
+        self.scan.ship_stats.insert(key.to_owned(), (path, md));
     }
 
     /// Add the references in bytes held in memory, which have no stat to
@@ -292,6 +338,7 @@ impl Rescan {
     pub(crate) fn read_bytes(&mut self, doc: Option<&str>, bytes: &[u8]) {
         if let Ok(text) = std::str::from_utf8(bytes) {
             collect_references(text, doc, &mut self.scan.tails, &mut self.scan.resolved);
+            self.note_links(doc, &page_hrefs(doc, text));
         }
     }
 
@@ -325,6 +372,8 @@ struct FileRefs {
     read_at: Option<u64>,
     tails: Vec<String>,
     resolved: Vec<String>,
+    /// For an HTML page: its root-relative links, as the link audit reads them.
+    hrefs: Vec<String>,
 }
 
 #[cfg(test)]
@@ -349,11 +398,11 @@ struct Kind {
 
 static SCANNED: Kind = Kind {
     memo: crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS),
-    file: crate::build::cache::MemoFile::new("references-stage", 1),
+    file: crate::build::cache::MemoFile::new("references-stage", 2),
 };
 static SHIPPED: Kind = Kind {
     memo: crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS),
-    file: crate::build::cache::MemoFile::new("references-shipped", 1),
+    file: crate::build::cache::MemoFile::new("references-shipped", 2),
 };
 
 /// The image references in one scanned file's `text`, read both ways

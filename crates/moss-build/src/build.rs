@@ -1867,9 +1867,10 @@ fn record_promise_gate(
     sealed: &crate::build::manifest::SealedManifest,
     assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
     folder_path: &str,
+    page_links: &crate::build::media::orphan_prune::PageLinks,
 ) -> Vec<crate::build::manifest::link_audit::DeadLink> {
     crate::build::emit::commerce::audit_next(stage_dir, sealed);
-    let dead_links = crate::build::manifest::link_audit::audit_and_report(stage_dir, sealed);
+    let dead_links = crate::build::manifest::link_audit::audit_and_report(stage_dir, sealed, page_links);
 
     // Posters are deliberately not registry-tracked (`DeliveryKind::
     // registry_tracked` in `build/media/video.rs`) — nothing ever calls
@@ -2062,6 +2063,7 @@ async fn advertise_sealed(
     // walk never reached, and the preview keeps its last whole one.
     if yields && (sealed.outcome() == crate::build::manifest::RenderOutcome::Superseded || render.as_ref().is_some_and(crate::build::lifecycle::Render::newer_sealed)) {
         log::info!("seal tail for render #{} left to a newer render", render_seq.unwrap_or_default());
+        if let Some(render) = &render { render.note_overtaken(); }
         return None;
     }
 
@@ -2072,7 +2074,7 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let (mut presence_verdict, rewritten) = crate::phase!("seal_repair", { crate::build::degrade::repair_staged_html(
+    let (mut presence_verdict, rewritten, page_links) = crate::phase!("seal_repair", { crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
@@ -2144,7 +2146,7 @@ async fn advertise_sealed(
     let guarded_ship = _stage_write_guard.is_some() && verdict == crate::build::ship::ShipVerdict::Ship;
     let serving = guards.sweep.serving_permit(render.as_ref().filter(|_| guarded_ship), std::path::Path::new(folder_path), guards.cache_lease.is_some());
     if let Some(permit) = guards.sweep.final_permit().or(serving.as_ref()) {
-        crate::phase!("seal_reclaim", { crate::build::pipeline::sweep_staging(stage_dir, sealed.site_hashes_view(), Some(permit)) });
+        crate::phase!("seal_reclaim", { crate::build::pipeline::reclaim_staging(stage_dir, &sealed, previous_hashes.as_ref(), std::path::Path::new(folder_path), permit) });
         crate::build::lifecycle::note_tail_swept(mp, locked_at_nanos);
     }
     drop(serving);
@@ -2155,7 +2157,7 @@ async fn advertise_sealed(
     // still-unfulfilled promise, which `record_promise_gate` below carries to
     // `refuse_publish` — see that function's doc and `link_audit`'s module
     // docs on the publish/media race this closes.
-    let unfulfilled = crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path) });
+    let unfulfilled = crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path, &page_links) });
 
     // The addresses this build stops serving, for the publish gate. Recorded
     // on every seal, empty included, like the promise verdict above.

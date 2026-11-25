@@ -58,6 +58,15 @@ struct FolderLifecycle {
     detached_writers: usize,
     /// A [`CacheGcToken`] is out.
     gc_running: bool,
+    /// The render minted last, until its seal tail runs or it is revealed.
+    open_render: Option<u64>,
+    /// Staging may hold files no sealed manifest names: a render was
+    /// overtaken or never sealed.
+    residue: bool,
+    /// A seal's reclaim has walked staging in this process.
+    reclaimed: bool,
+    /// The `locked_at` of the build this process last promoted.
+    own_promotion: Option<u64>,
 }
 
 /// One folder's record. Leases, permits and seal tails hold it, which is what
@@ -192,6 +201,12 @@ pub(crate) fn unless_tail_swept<'a>(mp: &MossPaths, locked_at: u64, permit: Opti
     permit.filter(|_| !swept)
 }
 
+/// Record that this process promoted the generation of the build that entered
+/// at `locked_at`.
+pub(crate) fn note_own_promotion(mp: &MossPaths, locked_at: u64) {
+    lock_for(mp).state().own_promotion = Some(locked_at);
+}
+
 /// Record that the seal tail of the build that entered at `locked_at` swept
 /// staging, unless another build has entered since.
 pub(crate) fn note_tail_swept(mp: &MossPaths, locked_at: u64) {
@@ -247,6 +262,21 @@ impl SweepPermit {
             .iter()
             .filter_map(|marker| key.rfind(marker).map(|i| &key[..i]))
             .any(|base| self.encode_outputs.contains(base))
+    }
+
+    /// Whether this seal's reclaim must walk all of staging, and the claim
+    /// that it will. The walk is owed when no reclaim has walked yet, when a
+    /// render was overtaken, or when another process promoted since this one
+    /// did (its builds may have left files the manifests cannot name). The
+    /// caller holds the folder build lock, which keeps the promotion record
+    /// from moving between this read and the reclaim.
+    pub(crate) fn claim_whole_sweep(&self, folder: &Path) -> bool {
+        let promoted = crate::infra::folder_lock::last_promoted_epoch(folder);
+        let mut st = self.record.state();
+        let whole = !st.reclaimed || st.residue || st.own_promotion.unwrap_or(0) != promoted;
+        st.reclaimed = true;
+        st.residue = false;
+        whole
     }
 
     /// Whether `dir` (relative to staging) holds an output the sweep keeps.
@@ -406,6 +436,7 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (Render, Option<
     let mut st = record.state();
     st.next_render += 1;
     let seq = st.next_render;
+    st.residue |= st.open_render.replace(seq).is_some();
     let announce = if publishable {
         if let Some(cell) = &st.served {
             point(cell, mp, &staging);
@@ -455,6 +486,24 @@ impl Render {
     pub(crate) fn note_sealed(&self) {
         let mut state = self.record.state();
         state.newest_sealed = state.newest_sealed.max(Some(self.seq));
+        self.close(&mut state);
+    }
+
+    /// A render that wrote nothing a seal would name, shown again as it was.
+    pub(crate) fn close_unsealed(&self) {
+        self.close(&mut self.record.state());
+    }
+
+    fn close(&self, state: &mut FolderLifecycle) {
+        if state.open_render == Some(self.seq) {
+            state.open_render = None;
+        }
+    }
+
+    /// This render's tail leaves to a newer one, so what it staged is named by
+    /// no seal.
+    pub(crate) fn note_overtaken(&self) {
+        self.record.state().residue = true;
     }
 
     /// Whether a newer render has already sealed. Its tail is then running,
@@ -486,7 +535,8 @@ impl Render {
     pub(crate) fn seal_sweep_permit(&self, folder: &Path, holds_lease: bool, encodes: &crate::types::runtime::VideoConversionState) -> Option<SweepPermit> {
         let folder_lock = crate::infra::folder_lock::try_acquire_named(folder, "build").ok().flatten()?;
         let encode_outputs = encodes.protected_outputs();
-        let st = self.record.state();
+        let mut st = self.record.state();
+        st.residue |= encodes.take_abandoned();
         let newest_on_screen = st.next_render == self.seq && st.shown_render == Some(self.seq);
         if !newest_on_screen || others_writing(&st, holds_lease) > 0 {
             return None;
@@ -588,8 +638,9 @@ pub(crate) fn promote(
 
 /// Record `sealed`'s generation, at `gen_dir`, as whole on disk: every entry
 /// present, and no copy of it cut off or drifted. Only where a copy can be
-/// seeded from it at all, since recording stats every file.
-pub(crate) fn remember_whole(mp: &MossPaths, gen_dir: &Path, sealed: &crate::build::manifest::SealedManifest, copied: bool) {
+/// seeded from it at all. `stats` holds the stat of every file the copy left
+/// untouched; the rest are stat again.
+pub(crate) fn remember_whole(mp: &MossPaths, gen_dir: &Path, sealed: &crate::build::manifest::SealedManifest, copied: bool, stats: &crate::build::store_gc::GenerationStats) {
     if !crate::build::io_utils::CLONES_DIRS {
         return;
     }
@@ -597,7 +648,7 @@ pub(crate) fn remember_whole(mp: &MossPaths, gen_dir: &Path, sealed: &crate::bui
     if !copied && whole_generation(mp).is_some_and(|whole| whole.id() == sealed.generation_id()) {
         return;
     }
-    let whole = crate::build::store_gc::WholeGeneration::record(gen_dir, sealed.generation_id(), sealed.all_files());
+    let whole = crate::build::store_gc::WholeGeneration::record(gen_dir, sealed.generation_id(), sealed.all_files(), stats);
     if let Some(whole) = &whole {
         whole.save(&mp.generations_dir());
     }

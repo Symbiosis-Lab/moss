@@ -623,6 +623,16 @@ impl SiteHashes {
         Self::default()
     }
 
+    /// Whether any output bucket names `key`.
+    pub fn names(&self, key: &str) -> bool {
+        self.files.contains_key(key) || self.video_outputs.contains(key) || self.image_outputs.contains(key) || self.notebook_outputs.contains(key)
+    }
+
+    /// Every output path a bucket names.
+    pub fn output_keys(&self) -> impl Iterator<Item = &String> {
+        self.files.keys().chain(&self.video_outputs).chain(&self.image_outputs).chain(&self.notebook_outputs)
+    }
+
     /// Whether this build may have served `source` under `uid`. A manifest
     /// that predates per-page uids answers yes for every page it built, since
     /// it cannot rule the uid out.

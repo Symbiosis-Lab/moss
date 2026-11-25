@@ -7569,7 +7569,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     let mut sealed = pending.seal();
     let id_before = sealed.generation_id().to_string();
 
-    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None);
+    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None, Default::default());
 
     assert!(sealed.files().contains_key(real.as_str()), "a real output stays");
     assert!(
@@ -7676,7 +7676,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         return;
     }
 
-    let (verdict, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let (verdict, _, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
     let promotion = crate::build::ship::materialize_and_promote(
         &sealed,
         &mp,

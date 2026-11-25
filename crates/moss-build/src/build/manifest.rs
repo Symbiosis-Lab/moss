@@ -1089,6 +1089,7 @@ impl PendingManifest {
             unverified,
             outcome: self.outcome,
             articles: self.articles,
+            removed: HashSet::new(),
             ship_sources,
             late: self.late,
         }
@@ -1145,6 +1146,9 @@ pub struct SealedManifest {
     ship_sources: HashMap<String, ShipSource>,
     /// See [`PendingManifest::late`].
     late: Option<HashSet<String>>,
+    /// Keys `remove_entries` took out after seal: bytes this build may have
+    /// staged that no manifest names.
+    removed: HashSet<String>,
 }
 
 impl SealedManifest {
@@ -1394,7 +1398,14 @@ impl SealedManifest {
             self.blocking_keys.remove(key);
             self.ship_sources.remove(key);
         }
+        self.removed.extend(keys.iter().cloned());
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
+    }
+
+    /// The keys `remove_entries` took out: bytes this build may have staged
+    /// that no manifest names.
+    pub(crate) fn dropped(&self) -> &HashSet<String> {
+        &self.removed
     }
 
     /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
@@ -1442,6 +1453,7 @@ impl SealedManifest {
             unverified: Default::default(),
             outcome: RenderOutcome::default(),
             articles: None,
+            removed: HashSet::new(),
             ship_sources: Default::default(),
             late: None,
         })
