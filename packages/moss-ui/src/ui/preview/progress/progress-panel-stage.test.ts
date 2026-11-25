@@ -251,6 +251,10 @@ describe('nextPublishStage', () => {
     expect(nextPublishStage('committing', { kind: 'progress', stage: 'finalizing' })).toBe('finalizing');
   });
 
+  it('a late progress event for an earlier stage does not regress', () => {
+    expect(nextPublishStage('uploading', { kind: 'progress', stage: 'preparing' })).toBe('uploading');
+  });
+
   it('complete event -> complete', () => {
     expect(nextPublishStage('finalizing', { kind: 'complete' })).toBe('complete');
   });
