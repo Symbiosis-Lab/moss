@@ -88,6 +88,8 @@ const BLOCKS = '---\ntitle: Blocks\n---\nIntro paragraph.\n\n:::callout\nFirst i
 
 const FENCES = '---\ntitle: Fences\n---\n# Heading\n\n:::grid\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n:::\n\nA paragraph.\n\n:::note\n';
 
+const DRAG = '---\ntitle: Drag\n---\n# One\n\nIntro.\n\n:::callout\nInside.\n:::\n\nMiddle.\n\n## Sub\n\nsub text\n\n# Two\n\ntwo text\n';
+
 const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
   '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
@@ -179,6 +181,7 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
   }
   writeFileSync(join(site, 'blocks.md'), BLOCKS);
   writeFileSync(join(site, 'fences.md'), FENCES);
+  writeFileSync(join(site, 'drag.md'), DRAG);
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -459,12 +462,76 @@ test('paired ::: fences hang in the margin beside a rail, an unpaired one stays 
   await page.waitForTimeout(300);
   expect(await editor.locator('[role="menu"]').count(), 'a fence marker opens no line-type menu').toBe(0);
 
-  // The caret is at the start of the fence's text after the click; Backspace unwraps.
+  // The press moved nothing; the caret goes to the start of the fence's text, where Backspace unwraps.
+  await line(':::grid').click();
+  await page.keyboard.press('Home');
   await page.keyboard.press('Backspace');
   await expect.poll(file, { timeout: 15_000, message: 'the file after Backspace on the hung opening fence' })
     .toBe('---\ntitle: Fences\n---\n# Heading\n\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n\nA paragraph.\n\n:::note\n');
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await expect.poll(file, { timeout: 15_000, message: 'one undo restores the block' }).toBe(FENCES);
+});
+
+for (const width of [420, 1280]) test(`a block is dragged by its margin grip at ${width}px: a ::: block among its siblings, a heading's section whole, Esc cancels`, async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  if ((await editor.locator('.seg[data-path="drag.md"]').count()) === 0) await openTreeRoot(editor);
+  await editor.click('.seg[data-path="drag.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('two text', { timeout: 15_000 });
+  await page.setViewportSize({ width, height: 1600 }); // real mouse moves do not scroll: the whole page stays on screen
+  const file = () => readFileSync(join(serve.site, 'drag.md'), 'utf8');
+  const line = (text: string | RegExp) => editor.locator('.cm-line', { hasText: text });
+  const box = async (text: string | RegExp) => (await line(text).first().boundingBox())!;
+  const grip = async (text: string) => { const b = (await line(text).locator('.cm-hang').boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+  const undo = () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  const move = async (from: { x: number; y: number }, to: number, release = true) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 2, from.y + 2); // under the threshold: still a press
+    await page.mouse.move(from.x, to, { steps: 8 });
+    if (release) await page.mouse.up();
+  };
+  // The text a section's drag changes is only ever the file: the dim and the line are editor chrome.
+  const chrome = () => editor.evaluate(() => ({ lifted: document.querySelectorAll('.cm-grip-lifted').length, line: document.querySelectorAll('.cm-grip-insertion').length }));
+
+  // A :::  block's colons lift the block; the line shows below `Middle.`, between whole blocks of its section.
+  const afterMiddle = (await box('Middle.')).y + (await box('Middle.')).height + 4;
+  await move(await grip(':::callout'), afterMiddle, false);
+  expect(await chrome(), 'the block is dimmed (its three lines) and one insertion line shows').toEqual({ lifted: 3, line: 1 });
+  await page.mouse.up();
+  const DOWN = '---\ntitle: Drag\n---\n# One\n\nIntro.\n\nMiddle.\n\n:::callout\nInside.\n:::\n\n## Sub\n\nsub text\n\n# Two\n\ntwo text\n';
+  await expect.poll(file, { timeout: 15_000, message: 'the file after dragging the block below Middle.' }).toBe(DOWN);
+  expect(await chrome(), 'nothing is left dimmed or drawn').toEqual({ lifted: 0, line: 0 });
+  await undo();
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the block' }).toBe(DRAG);
+
+  // Dropped by its own gaps, the block stays put and no line was drawn there.
+  await move(await grip(':::callout'), (await box('Inside.')).y, false);
+  expect(await chrome(), 'the block is lifted but no line shows over its own gap').toEqual({ lifted: 3, line: 0 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(file(), 'a drop in its own gap changes nothing').toBe(DRAG);
+
+  // Esc cancels with the button still down.
+  await move(await grip(':::callout'), afterMiddle, false);
+  expect((await chrome()).line).toBe(1);
+  await page.keyboard.press('Escape');
+  expect(await chrome()).toEqual({ lifted: 0, line: 0 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(file(), 'Esc leaves the file as it was').toBe(DRAG);
+  expect(await editor.locator('[role="menu"]').count(), 'a cancelled drag opens no menu').toBe(0);
+
+  // A heading's `#` lifts its whole section, sub-heading included, above the first one.
+  await move(await grip('# One'), (await box('# One')).y + (await box('# One')).height * 4, false);
+  expect((await chrome()).line, 'its own gap shows no line').toBe(0);
+  await page.mouse.up();
+  const two = await grip('# Two');
+  await move(two, (await box('# One')).y - 4);
+  const SWAPPED = '---\ntitle: Drag\n---\n# Two\n\ntwo text\n\n# One\n\nIntro.\n\n:::callout\nInside.\n:::\n\nMiddle.\n\n## Sub\n\nsub text\n';
+  await expect.poll(file, { timeout: 15_000, message: 'the file after dragging # Two above # One' }).toBe(SWAPPED);
+  await undo();
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the sections' }).toBe(DRAG);
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
