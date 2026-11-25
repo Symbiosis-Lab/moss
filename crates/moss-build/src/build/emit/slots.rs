@@ -28,6 +28,23 @@ thread_local! {
     pub(crate) static LAST_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
 }
 
+/// Every registered page in the stage is one slot injection would leave as it
+/// is. The pass fills only registered pages, so a page registered after it,
+/// over bytes already staged, would ship with its slots empty.
+#[cfg(debug_assertions)]
+pub(crate) fn assert_every_page_filled(stage_dir: &Path, slots: &ResolvedSlots, pending: &PendingManifest) {
+    let unfilled: Vec<&String> = pending
+        .files()
+        .keys()
+        .filter(|page| crate::build::enhance::takes_slots(page))
+        .filter(|page| {
+            let Ok(html) = std::fs::read_to_string(stage_dir.join(page.as_str())) else { return false };
+            crate::build::enhance::inject_slots(&html, slots, page) != html
+        })
+        .collect();
+    assert!(unfilled.is_empty(), "registered after the slot pass, so never filled: {unfilled:?}");
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_to_stage_and_manifest(
     paths: &MossPaths,
@@ -62,6 +79,7 @@ pub fn apply_to_stage_and_manifest(
     // whose stage file already holds its final bytes is not written again.
     let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(paths, "pages", stage_dir);
     let carried = if same_pass { pending.carried_pages() } else { Default::default() };
+    let registered = pending.files().keys().filter(|page| crate::build::enhance::takes_slots(page)).cloned().collect();
     let pass = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
         stage_dir,
@@ -71,6 +89,7 @@ pub fn apply_to_stage_and_manifest(
         &object_store,
         &transform_cache,
         pending.take_unwritten_pages(),
+        registered,
         &carried,
         &mut staged,
     )

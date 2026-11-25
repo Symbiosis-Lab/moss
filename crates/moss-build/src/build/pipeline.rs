@@ -1634,6 +1634,8 @@ fn build_inner(
         services.and_then(|s| s.assets.clone()),
     );
     staged_html.apply_to(&mut pending);
+    #[cfg(debug_assertions)]
+    crate::build::emit::slots::assert_every_page_filled(&stage_dir, &resolved_slots, &pending);
 
     pending.set_builder_fingerprint(Some(cache_keys.builder.clone()));
     // Include every synchronous output and the builder fingerprint in change detection.

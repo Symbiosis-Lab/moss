@@ -407,6 +407,17 @@ fn serde_roundtrip_per_page() {
 
 // --- inject_slots_into_directory_cached tests ---
 
+/// Every file a test put in the stage `dir`, as the manifest would name it.
+fn stage_pages(dir: &std::path::Path) -> Vec<String> {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .map(|e| moss_core::slug::normalize_separators(&e.path().strip_prefix(dir).unwrap().to_string_lossy()))
+        .filter(|page| takes_slots(page))
+        .collect()
+}
+
 /// The pass over pages a test already put in the stage `dir`, with nothing
 /// rendered in memory and no record of earlier links, as a new process runs
 /// it: records come from the transform cache, not this process's memo.
@@ -430,7 +441,7 @@ fn inject_in_this_process(
     let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
     let mut staged = StagedLinks::load(&paths, "pages", dir);
     inject_slots_into_directory_cached(
-        dir, dir, slots, &resolved_slots_hash(slots), &Default::default(), objects, transforms, Default::default(), &Default::default(), &mut staged,
+        dir, dir, slots, &resolved_slots_hash(slots), &Default::default(), objects, transforms, Default::default(), stage_pages(dir), &Default::default(), &mut staged,
     )
     .map(|pass| pass.receipts)
 }
@@ -507,7 +518,7 @@ fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled(
     let slots = head_end_slots("<style>h1{}</style>");
 
     let receipts = inject_slots_into_directory_cached(
-        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, &Default::default(), &mut staged,
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, stage_pages(dir.path()), &Default::default(), &mut staged,
     )
     .unwrap()
     .receipts;

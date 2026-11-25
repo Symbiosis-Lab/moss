@@ -279,29 +279,10 @@ fn residual_known_slot_markers(html: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// HTML files under `dir` eligible for slot injection: real files, `.html`
-/// extension, excluding JupyterLite assets (third-party HTML that must not
-/// be modified). Used by [`inject_slots_into_directory_cached`].
-fn walk_html_files(dir: &std::path::Path) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "html"))
-        .filter(move |e| {
-            !e.path()
-                .strip_prefix(dir)
-                .unwrap_or(e.path())
-                .starts_with("jupyter")
-        })
-}
-
-/// A build-output path, relative to the stage directory, in the `/`-separated
-/// build convention. Windows `strip_prefix` yields backslash-separated paths,
-/// so this always normalizes.
-fn page_path_for(dir: &std::path::Path, entry_path: &std::path::Path) -> String {
-    let rel_path = entry_path.strip_prefix(dir).unwrap_or(entry_path);
-    moss_core::slug::normalize_separators(&rel_path.to_string_lossy())
+/// Whether a stage page is one slot injection fills: `.html`, and not under
+/// `jupyter/`, which is JupyterLite's third-party HTML.
+pub(crate) fn takes_slots(page_path: &str) -> bool {
+    page_path.ends_with(".html") && page_path.split('/').next() != Some("jupyter")
 }
 
 /// Content-free page id: a one-way hash of the build-output path, NOT the
@@ -519,6 +500,10 @@ pub(crate) fn inject_slots_into_directory_cached(
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
     rendered: std::collections::BTreeMap<String, String>,
+    // Every page the manifest has registered that takes slots, by stage path. Only these ship,
+    // so the stage is never listed: at 10k pages the listing alone outcost
+    // the injection.
+    registered: Vec<String>,
     // Stage pages proved unchanged since the pass that last filled them, by path,
     // with their manifest entry. Each is reported from its staged link, unread.
     carried: &std::collections::BTreeMap<String, String>,
@@ -542,8 +527,8 @@ pub(crate) fn inject_slots_into_directory_cached(
     let mut kept = std::collections::HashMap::new();
 
     let t_walk = std::time::Instant::now();
-    let staged_only: Vec<String> = walk_html_files(dir)
-        .map(|entry| page_path_for(dir, entry.path()))
+    let staged_only: Vec<String> = registered
+        .into_iter()
         .filter(|page_path| !rendered.contains_key(page_path))
         .filter(|page_path| {
             let proven = carried.get(page_path).zip(staged.vouched_oid(page_path).filter(|oid| object_store.holds(oid)));
@@ -569,7 +554,13 @@ pub(crate) fn inject_slots_into_directory_cached(
             Some(html) => html,
             // The sync client can evict a stage page; `io_stop` keeps that
             // distinguishable from a real failure all the way up to the cloud gate.
-            None => std::fs::read_to_string(&path).map_err(|e| io_stop(root, "re-read for slot injection", &path, e))?,
+            None => match std::fs::read_to_string(&path) {
+                Ok(html) => html,
+                // A carried page that left the stage after the render: `rereads_left`
+                // discards the build, which runs again, rather than show an error.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io_stop(root, "re-read for slot injection", &path, e)),
+            },
         };
         // A page with no slot marker (a redirect stub) is injected live and keeps
         // no record: reading the record back costs more than the work it saves.
