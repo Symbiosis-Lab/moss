@@ -132,11 +132,12 @@ pub(crate) mod tests {
     use std::net::TcpListener;
 
     /// A bridge answering as `plugin` declaring `hosts`.
-    pub(crate) fn bridge_declaring(plugin: &'static str, hosts: &'static [&'static str]) -> DispatchBridge {
+    pub(crate) fn bridge_declaring(plugin: &'static str, hosts: &[&str]) -> DispatchBridge {
+        let hosts: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::engine::host_fns::DispatchRequest>();
         tokio::spawn(async move {
             while let Some(req) = rx.recv().await {
-                let r = crate::engine::host_fns::dispatch_command_test_stub_declaring("/tmp/none", plugin, hosts, &req.cmd, &req.args_json).await;
+                let r = crate::engine::host_fns::dispatch_command_test_stub_declaring("/tmp/none", plugin, &hosts.iter().map(String::as_str).collect::<Vec<_>>(), &req.cmd, &req.args_json).await;
                 let _ = req.reply.send(r);
             }
         });
@@ -190,12 +191,13 @@ pub(crate) mod tests {
         for (option, expected, requests) in [("error", "rejected", 0), ("manual", "302", 0), ("follow", "200", 1), ("", "200", 1)] {
             let server = RedirectServer::new(302);
             let url = server.url.clone();
+            let hosts = server.hosts();
             let local = tokio::task::LocalSet::new();
             let result: String = local.run_until(async move {
                 let rt = AsyncRuntime::new().unwrap();
                 let ctx = AsyncContext::full(&rt).await.unwrap();
                 async_with!(ctx => |ctx| {
-                    install_fetch(&ctx, bridge_declaring("local", &["127.0.0.1"]), Default::default()).unwrap();
+                    install_fetch(&ctx, bridge_declaring("local", &[&hosts[0], &hosts[1]]), Default::default()).unwrap();
                     let redirect = if option.is_empty() { String::new() } else { format!(", redirect: '{option}'") };
                     let code = format!("let outcome; try {{ outcome = String((await fetch('{url}', {{method: 'POST', body: 'payload'{redirect}}})).status); }} catch (e) {{ outcome = 'rejected'; }} outcome");
                     let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
@@ -227,7 +229,7 @@ pub(crate) mod tests {
             let rt = AsyncRuntime::new().unwrap();
             let ctx = AsyncContext::full(&rt).await.unwrap();
             async_with!(ctx => |ctx| {
-                install_fetch(&ctx, bridge_declaring("local", &["127.0.0.1"]), Default::default()).unwrap();
+                install_fetch(&ctx, bridge_declaring("local", &[&format!("127.0.0.1:{port}")]), Default::default()).unwrap();
                 let code = format!("(await fetch('http://127.0.0.1:{port}/posts/7', {{ method: 'DELETE' }})).status");
                 let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
                 let envelope: Object = promise.into_future().await.unwrap();
@@ -246,7 +248,7 @@ pub(crate) mod tests {
             let rt = AsyncRuntime::new().unwrap();
             let ctx = AsyncContext::full(&rt).await.unwrap();
             let (ok, login, scopes): (bool, String, String) = async_with!(ctx => |ctx| {
-                install_fetch(&ctx, bridge_declaring("local", &["127.0.0.1"]), Default::default()).unwrap();
+                install_fetch(&ctx, bridge_declaring("local", &[&format!("127.0.0.1:{port}")]), Default::default()).unwrap();
                 // Top-level await: with `promise: true` (eval_promise) the eval result
                 // promise resolves to the async-eval envelope `{ value: <completion> }`
                 // — QuickJS's JS_EVAL_FLAG_ASYNC shape. The fetch/json host-fn promises

@@ -1,6 +1,8 @@
 //! Which hosts one plugin request may reach. The transport checks the first
 //! address and every redirect target, so a declared host cannot bounce a
 //! request elsewhere. A plugin with no `network` declaration reaches nothing.
+//! An entry may carry a port; a loopback entry must, since every program on
+//! the computer listens there, so one without a port reaches nothing.
 
 use crate::plugins::types::NetworkDecl;
 
@@ -10,7 +12,7 @@ pub struct AllowedHosts(Allow);
 
 #[derive(Debug, Clone)]
 enum Allow {
-    Hosts { plugin: String, patterns: Vec<String> },
+    Hosts { plugin: String, patterns: Vec<Pattern> },
     Refused(Refusal),
     /// The desktop app's panel commands, which do not yet carry their
     /// plugin's declarations. Never built for engine code.
@@ -42,11 +44,12 @@ impl AllowedHosts {
         let Some(network) = network else {
             return Self::refused(Refusal::Undeclared(plugin.to_string()));
         };
-        let mut patterns: Vec<String> = network.hosts.iter().map(|h| normalize(h)).collect();
-        patterns.extend(network.setting_hosts.iter().filter_map(|key| setting(key)).filter_map(|v| host_of(&v)));
+        let mut patterns: Vec<Pattern> = network.hosts.iter().map(|h| entry(h)).collect();
+        patterns.extend(network.setting_hosts.iter().filter_map(|key| setting(key)).filter_map(|v| typed(&v)));
         if network.site {
-            patterns.extend(site_host().map(|h| normalize(&h)));
+            patterns.extend(site_host().and_then(|h| typed(&h)));
         }
+        patterns.retain(|p| p.port.is_some() || !loopback(&p.host));
         Self(Allow::Hosts { plugin: plugin.to_string(), patterns })
     }
 
@@ -86,7 +89,8 @@ impl AllowedHosts {
             Allow::Hosts { plugin, patterns } => {
                 let host = normalize(url.host_str().unwrap_or_default());
                 let host = host.trim_start_matches('[').trim_end_matches(']');
-                if patterns.iter().any(|p| matches(p, host)) {
+                let port = url.port_or_known_default();
+                if patterns.iter().any(|p| matches(&p.host, host) && p.port.is_none_or(|want| Some(want) == port)) {
                     Ok(())
                 } else {
                     Err(format!("{plugin} tried to reach {host}, which it does not list in its manifest."))
@@ -101,16 +105,40 @@ pub(crate) fn unidentified(tried: &str) -> String {
     format!("a plugin moss could not identify tried to {tried}; refusing")
 }
 
+#[derive(Debug, Clone)]
+struct Pattern {
+    host: String,
+    /// `None`: any port.
+    port: Option<u16>,
+}
+
 fn normalize(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// The host of an address the person typed, with or without a scheme.
-fn host_of(value: &str) -> Option<String> {
+/// A manifest entry: a host pattern, optionally `:<port>` (`[::1]:5001`).
+fn entry(raw: &str) -> Pattern {
+    let (host, port) = crate::system::proxy::split_entry_port(raw.trim());
+    Pattern { host: normalize(host), port }
+}
+
+/// An address the person typed, with or without a scheme. A loopback address
+/// keeps its port, the scheme's default when none was typed.
+fn typed(value: &str) -> Option<Pattern> {
     let value = value.trim();
     let parsed = url::Url::parse(value).ok().filter(|u| u.host_str().is_some())
         .or_else(|| url::Url::parse(&format!("https://{value}")).ok())?;
-    parsed.host_str().map(normalize).filter(|h| !h.is_empty())
+    let host = parsed.host_str().map(normalize).filter(|h| !h.is_empty())?;
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let port = loopback(&host).then(|| parsed.port_or_known_default()).flatten();
+    Some(Pattern { host, port })
+}
+
+/// Whether `pattern` names only loopback addresses; `*.localhost` does.
+fn loopback(pattern: &str) -> bool {
+    let host = pattern.strip_prefix("*.").unwrap_or(pattern);
+    let host = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
+    url::Url::parse(&format!("http://{host}/")).ok().is_some_and(|u| u.host().is_some_and(|h| crate::system::proxy::is_loopback(&h)))
 }
 
 /// `*.example.com` matches any name below `example.com`, never the domain
@@ -159,8 +187,28 @@ mod tests {
 
     #[test]
     fn a_setting_typed_without_a_scheme_still_names_its_host() {
-        assert_eq!(host_of("mastodon.example").as_deref(), Some("mastodon.example"));
-        assert_eq!(host_of("https://Mastodon.Example/@me").as_deref(), Some("mastodon.example"));
+        let typed = |v: &str| typed(v).map(|p| (p.host, p.port));
+        assert_eq!(typed("mastodon.example"), Some(("mastodon.example".into(), None)));
+        assert_eq!(typed("https://Mastodon.Example:8443/@me"), Some(("mastodon.example".into(), None)));
+        assert_eq!(typed("http://127.0.0.1:5001"), Some(("127.0.0.1".into(), Some(5001))));
+        assert_eq!(typed("localhost"), Some(("localhost".into(), Some(443))));
+        assert_eq!(typed("http://[::1]:5001/"), Some(("::1".into(), Some(5001))));
+    }
+
+    #[test]
+    fn a_loopback_entry_reaches_only_the_port_it_names() {
+        let allowed = AllowedHosts::for_plugin(
+            "node",
+            Some(&decl(&["127.0.0.1", "127.0.0.1:5001", "localhost", "*.ipfs.localhost:8080", "[::1]:5001", "api.example.com:8443", "0.0.0.0", "::", "::ffff:7f00:1"], &[], false)),
+            |_| None,
+            || None,
+        );
+        for ok in ["http://127.0.0.1:5001/api/v0/add", "http://bafy.ipfs.localhost:8080/", "http://[::1]:5001/", "https://api.example.com:8443/"] {
+            assert!(allowed.check(&url(ok)).is_ok(), "{ok}");
+        }
+        for refused in ["http://127.0.0.1:22/", "http://127.0.0.1/", "http://localhost:5001/", "http://bafy.ipfs.localhost:9000/", "https://api.example.com/", "http://0.0.0.0:22/", "http://[::]:22/", "http://[::ffff:127.0.0.1]:22/"] {
+            assert!(allowed.check(&url(refused)).is_err(), "{refused}");
+        }
     }
 
     #[test]

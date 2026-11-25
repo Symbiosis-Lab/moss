@@ -702,7 +702,7 @@ mod tests {
             install_crypto(&ctx).unwrap();
             install_text_codec(&ctx).unwrap();
             crate::engine::url_shim::install_url(&ctx).unwrap();
-            crate::engine::fetch_shim::install_fetch(&ctx, crate::engine::fetch_shim::tests::bridge_declaring("local", &["127.0.0.1"]), Default::default()).unwrap();
+            crate::engine::fetch_shim::install_fetch(&ctx, crate::engine::fetch_shim::tests::bridge_declaring("local", &[&server.host_with_port()]), Default::default()).unwrap();
             let promise: rquickjs::Promise = ctx.eval(script.as_bytes().to_vec()).unwrap();
             promise.into_future::<String>().await.unwrap()
         })

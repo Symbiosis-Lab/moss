@@ -28,7 +28,6 @@ All notable changes to moss will be documented here.
 ### Changed
 
 - A `.moss/config.toml` that still sets `domain` under `[site]` gets a note that the key is now `url`. It still works.
-
 - A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
 - A publish right after a build, with nothing changed since, no longer makes every page again: it keeps the pages nothing changed, as `moss build` does. The first build after a publish still makes every page.
 - A site on moss hosting takes its address from what the hosting service answers at publish, kept in `.moss/state.toml`, instead of always assuming `<site>.mosspub.com`. The next build writes that address into canonical links, `og:url`, the sitemap and feeds, and `moss deploy` prints it; a build still makes no network request. An authored `[site] url` ranks above it as before, and a folder that has not published since updating keeps the assumed address.
@@ -42,6 +41,7 @@ All notable changes to moss will be documented here.
 - Request forms no longer carry the hidden `_hp` field (class `moss-form__hp`), and the subscribe form no longer sends `website`. Nothing read either one; a form service that checks a honeypot of its own keeps doing so.
 - `moss doctor --surface` also names the `{.class}` text and raw HTML blocks pages write, and exits 1 when it finds anything, so a script or a hook can hold a site to plain pages.
 - A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links.
+- Security: a plugin that lists a loopback address (`127.0.0.1`, `::1`, `localhost` or a name under it) in `network.hosts` reaches only the port it names there (`127.0.0.1:5001`), not every program listening on the computer. An entry may carry a port for any host; a loopback entry without one reaches nothing.
 
 ### Fixed
 

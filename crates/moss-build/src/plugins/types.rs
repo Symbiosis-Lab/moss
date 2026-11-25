@@ -159,7 +159,8 @@ pub struct PluginManifest {
 /// A manifest's `network` field: what [`crate::plugins::runtime::hosts`] allows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkDecl {
-    /// Exact hosts, or `*.domain` for any name below `domain`.
+    /// Exact hosts, or `*.domain` for any name below `domain`, each optionally
+    /// `:<port>`; a loopback host without a port reaches nothing.
     #[serde(default)]
     pub hosts: Vec<String>,
     /// Settings whose value is an address the person typed; its host is allowed.

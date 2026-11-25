@@ -82,6 +82,11 @@ impl RedirectServer {
         Self { url: format!("{}/upload", first.url), first, second }
     }
 
+    /// The `host:port` each server bound, as a plugin declares them.
+    pub fn hosts(&self) -> [String; 2] {
+        [&self.first, &self.second].map(|s| s.url.trim_start_matches("http://").to_string())
+    }
+
     pub fn finish(self) -> (String, usize) {
         let first = self.first.finish();
         let second = self.second.finish();

@@ -843,7 +843,7 @@ pub async fn dispatch_command(
 }
 
 /// AppHandle-free entry for tests that call the arms. Its run table is empty, so a plugin's call is confined to the
-/// plugin's own storage; [`dispatch_command_test_stub_for_person`] asks for a
+/// plugin's own storage; [`dispatch_command_test_stub_declaring`] asks for a
 /// person's run instead.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn dispatch_command_test_stub(
@@ -861,18 +861,20 @@ pub async fn dispatch_command_test_stub(
     .await
 }
 
-/// As [`dispatch_command_test_stub`], for a plugin named `local` that
-/// declares `127.0.0.1`, the address the local test servers bind.
+/// As [`dispatch_command_test_stub_declaring`], for a plugin named `local`
+/// that declares `server`, the `host:port` a local test server bound.
 #[cfg(test)]
 pub async fn dispatch_command_test_stub_reaching_local(
+    server: &str,
     project_path: &str,
     cmd: &str,
     args_json: &str,
 ) -> std::result::Result<String, String> {
-    dispatch_command_test_stub_declaring(project_path, "local", &["127.0.0.1"], cmd, args_json).await
+    dispatch_command_test_stub_declaring(project_path, "local", &[server], cmd, args_json).await
 }
 
-/// As [`dispatch_command_test_stub_for_person`], for `plugin` declaring `hosts`.
+/// [`dispatch_command_test_stub`] as a call from `plugin`'s run that a person
+/// started, which reaches the whole folder and `hosts`.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn dispatch_command_test_stub_declaring(
     project_path: &str,
@@ -910,18 +912,6 @@ pub async fn dispatch_command_test_stub_asked_by(
         args_json,
     )
     .await
-}
-
-/// [`dispatch_command_test_stub`] as a call from `plugin`'s run that a person
-/// started, which reaches the whole folder.
-#[cfg(any(test, feature = "test-fixtures"))]
-pub async fn dispatch_command_test_stub_for_person(
-    project_path: &str,
-    plugin: &str,
-    cmd: &str,
-    args_json: &str,
-) -> std::result::Result<String, String> {
-    dispatch_command_test_stub_asked_by(AskedBy::Person, project_path, plugin, Some(&["127.0.0.1"]), cmd, args_json).await
 }
 
 #[cfg(test)]
@@ -1311,7 +1301,7 @@ mod tests {
             "headers": { "x-access-token": "tok" },
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub_reaching_local("/tmp/none", "http_post", &args).await.unwrap();
+        let reply = dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", "http_post", &args).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         // Wire-shape parity with the webview path (and mock-tauri's served shape):
         // snake_case keys, base64 body.
@@ -1331,7 +1321,7 @@ mod tests {
             .create_async().await;
         for cmd in ["fetch_url", "http_get"] {
             let args = serde_json::json!({ "url": format!("{}/x", server.url()), "timeoutMs": 5000 }).to_string();
-            let reply = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &args).await.unwrap();
+            let reply = dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", cmd, &args).await.unwrap();
             let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
             assert_eq!(v["status"], serde_json::json!(200), "{cmd}");
             use base64::Engine as _;
@@ -1356,7 +1346,7 @@ mod tests {
             "targetDir": "assets",
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub_for_person(proj.path().to_str().unwrap(), "p", "download_asset", &args)
+        let reply = dispatch_command_test_stub_declaring(proj.path().to_str().unwrap(), "p", &[&server.host_with_port()], "download_asset", &args)
             .await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true));
@@ -1378,12 +1368,12 @@ mod tests {
             serde_json::json!({ "relativePath": rel, "dataBase64": data }).to_string()
         };
 
-        dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write("maps/a.jpg", &b64))
+        dispatch_command_test_stub_declaring(pp, "p", &[], "write_project_file_binary", &write("maps/a.jpg", &b64))
             .await.unwrap();
         assert_eq!(std::fs::read(proj.path().join("maps/a.jpg")).unwrap(), bytes);
 
         for refused in [".moss/config.toml", ".moss/plugins/x/main.js", "../escape.bin", "a/../../escape.bin", "/abs.bin"] {
-            let err = dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write(refused, &b64))
+            let err = dispatch_command_test_stub_declaring(pp, "p", &[], "write_project_file_binary", &write(refused, &b64))
                 .await.expect_err(refused);
             assert!(!err.contains("unknown command"), "{refused}: {err}");
             assert!(!err.contains("only when you start it yourself") && !err.contains("could not identify"), "{refused}: refused by reach, not the path rule: {err}");
@@ -1391,7 +1381,7 @@ mod tests {
         assert!(!proj.path().join(".moss/config.toml").exists());
         assert!(!proj.path().parent().unwrap().join("escape.bin").exists());
 
-        let err = dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write("b.bin", "not base64!!"))
+        let err = dispatch_command_test_stub_declaring(pp, "p", &[], "write_project_file_binary", &write("b.bin", "not base64!!"))
             .await.expect_err("bad base64");
         assert!(err.contains("base64"), "{err}");
     }
@@ -1415,14 +1405,14 @@ mod tests {
             "filename": name, "headers": { "X-Probe": "1" }
         }).to_string();
 
-        let reply = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args(Some("sheet-1.jpg"))).await.unwrap();
+        let reply = dispatch_command_test_stub_declaring(pp, "p", &[&server.host_with_port()], "download_asset", &args(Some("sheet-1.jpg"))).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(v["actual_path"], "maps/sheet-1.jpg");
         assert_eq!(std::fs::read(proj.path().join("maps/sheet-1.jpg")).unwrap(), vec![9u8, 8, 7]);
         m.assert_async().await;
 
         for bad in ["../x.jpg", "a/b.jpg", "a\\b.jpg", ""] {
-            let err = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args(Some(bad))).await.expect_err(bad);
+            let err = dispatch_command_test_stub_declaring(pp, "p", &[&server.host_with_port()], "download_asset", &args(Some(bad))).await.expect_err(bad);
             assert!(err.contains("Invalid file name"), "{bad}: {err}");
         }
     }
@@ -1448,9 +1438,9 @@ mod tests {
         let args = |path: &str| serde_json::json!({ "url": format!("{}{path}", server.url()), "targetDir": "media", "filename": "a.bin", "timeoutMs": 60000 }).to_string();
 
         let pp = proj.path().to_str().unwrap();
-        let err = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args("/big.bin")).await.unwrap_err();
+        let err = dispatch_command_test_stub_declaring(pp, "p", &[&server.host_with_port()], "download_asset", &args("/big.bin")).await.unwrap_err();
         assert!(err.contains("at most 512 MB"), "{err}");
-        dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args("/cut.bin")).await.unwrap_err();
+        dispatch_command_test_stub_declaring(pp, "p", &[&server.host_with_port()], "download_asset", &args("/cut.bin")).await.unwrap_err();
         assert_eq!(std::fs::read(proj.path().join("media/a.bin")).unwrap(), b"good");
         assert_eq!(std::fs::read_dir(proj.path().join("media")).unwrap().count(), 1, "no partial file is left");
     }
@@ -1496,8 +1486,8 @@ mod tests {
         let get = |path: &str, headers: serde_json::Value| serde_json::json!({
             "url": format!("{}{}", server.url(), path), "headers": headers, "timeoutMs": 5000
         }).to_string();
-        dispatch_command_test_stub_reaching_local("/tmp/none", "http_get", &get("/ua", serde_json::json!({}))).await.unwrap();
-        dispatch_command_test_stub_reaching_local("/tmp/none", "http_get", &get("/own", serde_json::json!({ "User-Agent": "custom/1" }))).await.unwrap();
+        dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", "http_get", &get("/ua", serde_json::json!({}))).await.unwrap();
+        dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", "http_get", &get("/own", serde_json::json!({ "User-Agent": "custom/1" }))).await.unwrap();
         ua.assert_async().await;
         own.assert_async().await;
     }
@@ -1568,7 +1558,7 @@ mod tests {
         let r = dispatch_command_test_stub(pp, Some("matters"), "read_plugin_file", &e).await.unwrap();
         assert!(r.contains("\\\"id\\\"") || r.contains("id"), "got {r}");
         let wp = serde_json::json!({ "relativePath": "notes/a.md", "data": "# hi" }).to_string();
-        dispatch_command_test_stub_for_person(pp, "p", "write_project_file", &wp).await.unwrap();
+        dispatch_command_test_stub_declaring(pp, "p", &[], "write_project_file", &wp).await.unwrap();
         let rp = serde_json::json!({ "relativePath": "notes/a.md" }).to_string();
         assert!(dispatch_command_test_stub(pp, None, "read_project_file", &rp).await.unwrap().contains("# hi"));
         let listed = dispatch_command_test_stub(pp, None, "list_project_files", "null").await.unwrap();
@@ -1669,7 +1659,7 @@ mod tests {
             "headers": { "x-access-token": "tok", "apollo-require-preflight": "true" },
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub_reaching_local("/tmp/none", "http_post_multipart", &args)
+        let reply = dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", "http_post_multipart", &args)
             .await
             .expect("http_post_multipart must be bridged (not 'unknown command')");
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
@@ -2205,7 +2195,7 @@ mod tests {
         for cmd in ["fetch_url", "http_get"] {
             let err = dispatch_command_test_stub_declaring("/tmp/none", "social", &["api.example.com"], cmd, &get("/x")).await.unwrap_err();
             assert_eq!(err, "social tried to reach 127.0.0.1, which it does not list in its manifest.", "{cmd}");
-            let err = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/bounce")).await.unwrap_err();
+            let err = dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", cmd, &get("/bounce")).await.unwrap_err();
             assert_eq!(err, "local tried to reach localhost, which it does not list in its manifest.", "{cmd}");
             let err = dispatch_command_test_stub_asked_by(AskedBy::Person, "/tmp/none", "old", None, cmd, &get("/x")).await.unwrap_err();
             assert!(err.contains("old does not list the hosts it contacts"), "{cmd}: {err}");
@@ -2216,7 +2206,7 @@ mod tests {
         let err = dispatch_command_test_stub_declaring("/tmp/none", "social", &["api.example.com"], "fetch", &get("/x")).await.unwrap_err();
         assert_eq!(err, "social tried to reach 127.0.0.1, which it does not list in its manifest.");
         let elsewhere = serde_json::json!({ "url": format!("http://localhost:{port}/x"), "targetDir": "assets", "timeoutMs": 5000 }).to_string();
-        let err = dispatch_command_test_stub_for_person("/tmp/none", "p", "download_asset", &elsewhere).await.unwrap_err();
+        let err = dispatch_command_test_stub_declaring("/tmp/none", "p", &[&server.host_with_port()], "download_asset", &elsewhere).await.unwrap_err();
         assert_eq!(err, "p tried to reach localhost, which it does not list in its manifest.");
     }
 
@@ -2237,8 +2227,8 @@ mod tests {
         let _over = server.mock("GET", "/over").with_body(vec![b'a'; cap + 1]).create_async().await;
         let get = |path: &str| serde_json::json!({ "url": format!("{}{path}", server.url()) }).to_string();
         for cmd in ["http_get", "fetch"] {
-            dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/at")).await.unwrap();
-            let err = dispatch_command_test_stub_reaching_local("/tmp/none", cmd, &get("/over")).await.unwrap_err();
+            dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", cmd, &get("/at")).await.unwrap();
+            let err = dispatch_command_test_stub_reaching_local(&server.host_with_port(), "/tmp/none", cmd, &get("/over")).await.unwrap_err();
             assert_eq!(err, "127.0.0.1 sent more than 32 MB; local can read at most 32 MB in one response.", "{cmd}");
         }
     }

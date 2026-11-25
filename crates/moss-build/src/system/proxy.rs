@@ -145,27 +145,31 @@ fn host_key(host: &url::Host<&str>) -> String {
 /// RFC 6761 reserves `localhost` and everything under it for the loopback
 /// interface, so the suffix match is on `.localhost` — `notlocalhost` and
 /// `evil.localhost.example.com` are ordinary internet hosts and must not match.
+/// The unspecified addresses (`0.0.0.0`, `::`) and IPv4-mapped loopback
+/// (`::ffff:127.0.0.1`) reach local listeners too, so they count.
 ///
-/// Outbound routing only, and deliberately wider than
+/// Outbound only: the proxy bypass, and the plugin host check, where a
+/// loopback entry must carry its port. Deliberately wider than
 /// [`crate::ops::serve::trust_boundary::admit_origin`], which decides which
 /// `Host:` headers the preview server will answer. Naming an extra name here
-/// only keeps a request off the user's proxy; naming one there opens the
-/// server to it. They are not twins — do not unify them.
-fn is_loopback(host: &url::Host<&str>) -> bool {
+/// keeps a request off the user's proxy and makes a plugin name its port;
+/// naming one there opens the server to it. They are not twins — do not
+/// unify them.
+pub(crate) fn is_loopback(host: &url::Host<&str>) -> bool {
     match host {
         url::Host::Domain(d) => {
             let d = d.trim_end_matches('.').to_ascii_lowercase();
             d == "localhost" || d.ends_with(".localhost")
         }
-        url::Host::Ipv4(ip) => ip.is_loopback(),
-        url::Host::Ipv6(ip) => ip.is_loopback(),
+        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_unspecified(),
+        url::Host::Ipv6(ip) => ip.is_loopback() || ip.is_unspecified() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
     }
 }
 
 /// Split a `NO_PROXY` entry into host pattern and optional port pin. A bare
 /// IPv6 literal carries colons of its own, so only an unambiguous single colon
 /// (or a bracketed literal) is read as a port.
-fn split_entry_port(entry: &str) -> (&str, Option<u16>) {
+pub(crate) fn split_entry_port(entry: &str) -> (&str, Option<u16>) {
     if let Some(rest) = entry.strip_prefix('[') {
         return match rest.split_once(']') {
             Some((h, tail)) => (h, tail.strip_prefix(':').and_then(|p| p.parse().ok())),
