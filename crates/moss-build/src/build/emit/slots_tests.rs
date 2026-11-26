@@ -388,6 +388,34 @@ fn a_reread_page_takes_its_entry_from_the_stage() {
     assert_eq!(pending.seal().files()["page.html"], entry_for("page.html", b"<html>newer render</html>"));
 }
 
+/// A save that starts before the last render sealed finds every page newer than
+/// `hashes.json`; the pass that filled them is this process's, so its record and
+/// staged link prove the stage bytes without reading them.
+#[test]
+fn a_newer_page_this_process_filled_is_not_read_again() {
+    use crate::build::manifest::{PendingManifest, StageBytes};
+    use crate::build::served_path::ServedPath;
+
+    let tmp = TempDir::new().unwrap();
+    let paths = MossPaths::new(tmp.path());
+    let stage = paths.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let page = ServedPath::from_source("page.html").unwrap();
+    let slots = || head_end("<style>h1{}</style>");
+    let mut rendered = PendingManifest::new(crate::types::content::SiteHashes::default());
+    rendered.register_unwritten_page(&page, "<html><head><!-- slot:head-end --></head></html>".to_string());
+    apply_to_stage_and_manifest(&paths, &stage, &slots(), &mut rendered, None).expect("render's slot pass");
+    let filled = rendered.seal().files()["page.html"].clone();
+    touch_apart();
+
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register_carried_page(&page, "0123456789abcdef", StageBytes::Newer);
+    apply_to_stage_and_manifest(&paths, &stage, &slots(), &mut pending, None).expect("save's slot pass");
+
+    assert_eq!(scanned_by_last_pass(), 0, "the save re-read a page its own process filled");
+    assert_eq!(pending.seal().files()["page.html"], filled);
+}
+
 /// A re-read page with nothing on the stage has no bytes to take an entry from:
 /// the build stops for one more run rather than seal the older entry, and no
 /// render is recorded.
@@ -592,9 +620,11 @@ fn a_one_page_edit_scans_only_that_page() {
     }
     assert!(std::fs::read_to_string(site.stage("c/index.html")).unwrap().contains("edited body of c"));
 
-    // Forgetting what the last pass was makes the next one read every page; the
-    // bytes and the manifest it ends with are the ones the skipping pass left.
+    // Forgetting what the last pass was, on disk and in this process, makes the
+    // next one read every page; the bytes and the manifest it ends with are the
+    // ones the skipping pass left.
     std::fs::remove_file(site.paths().cache_dir().join("slot-pass.json")).unwrap();
+    crate::build::enhance::forget_slot_memo(&site.paths().staging_dir());
     let full = site.build_with_slots(CARRY, slots());
     let html_files = walkdir::WalkDir::new(site.paths().staging_dir()).into_iter().flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "html")).count();

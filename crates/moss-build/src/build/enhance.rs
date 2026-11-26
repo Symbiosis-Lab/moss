@@ -531,9 +531,14 @@ pub(crate) fn inject_slots_into_directory_cached(
         .into_iter()
         .filter(|page_path| !rendered.contains_key(page_path))
         .filter(|page_path| {
-            let proven = carried.get(page_path).zip(staged.vouched_oid(page_path).filter(|oid| object_store.holds(oid)));
-            let Some((manifest_hash, oid)) = proven else { return true };
-            receipts.push(SlotInjectionReceipt { page_path: page_path.clone(), manifest_hash: manifest_hash.clone(), content_oid: Some(oid) });
+            let Some(oid) = staged.vouched_oid(page_path).filter(|oid| object_store.holds(oid)) else { return true };
+            // A page newer than the sealed manifest that this process's last pass
+            // filled: its record names the blob the link vouches for.
+            let manifest_hash = carried.get(page_path).cloned().or_else(|| {
+                remembered.get(page_path).filter(|(_, record)| record.content_oid == oid).map(|(_, record)| record.manifest_hash.clone())
+            });
+            let Some(manifest_hash) = manifest_hash else { return true };
+            receipts.push(SlotInjectionReceipt { page_path: page_path.clone(), manifest_hash, content_oid: Some(oid) });
             false
         })
         .collect();
