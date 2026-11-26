@@ -73,6 +73,9 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
     // so this is the one place the problem's text is at hand.
     if PENDING_PROBLEM.with(|p| p.take()) {
         let line = args.to_string();
+        if !LOGGING_RECORDED.with(std::cell::Cell::get) {
+            RECORDING.with(|r| r.borrow_mut().as_mut().map(|(_, problems)| problems.push(Problem::Printed(line.clone()))));
+        }
         let first_time = with_printed(|p| {
             let since_take = p.total - p.taken;
             since_take > p.lines.len() || !p.lines.iter().skip(p.lines.len() - since_take).any(|l| *l == line)
@@ -101,6 +104,64 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
 thread_local! {
     /// A problem was noted on this thread and its line has not been printed yet.
     static PENDING_PROBLEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Inside [`recorded_problems`]: how many problems were noted on this
+    /// thread, and each one as it was reported.
+    static RECORDING: std::cell::RefCell<Option<(usize, Vec<Problem>)>> = const { std::cell::RefCell::new(None) };
+    /// A [`log_warn_problem!`] record is being logged; it is already recorded,
+    /// so the line the CLI logger prints for it is not recorded again.
+    static LOGGING_RECORDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// One build problem as it was reported, so it can be reported again the same way.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Problem {
+    /// A [`cli_warn!`] line.
+    Printed(String),
+    /// A [`log_warn_problem!`] record, which a host's own logger may take.
+    Logged { target: String, text: String },
+}
+
+impl Problem {
+    pub(crate) fn report(&self) {
+        match self {
+            Problem::Printed(line) => cli_warn!("{line}"),
+            Problem::Logged { target, text } => {
+                note_cli_problem();
+                log::warn!(target: target.as_str(), "{text}");
+            }
+        }
+    }
+}
+
+/// Whether this thread is inside [`recorded_problems`].
+pub(crate) fn recording_problems() -> bool {
+    RECORDING.with(|r| r.borrow().is_some())
+}
+
+/// [`log_warn_problem!`] inside [`recorded_problems`]: record the problem, then
+/// `log` it.
+pub(crate) fn record_logged_problem(target: &str, text: &str, log: impl FnOnce()) {
+    RECORDING.with(|r| r.borrow_mut().as_mut().map(|(_, problems)| problems.push(Problem::Logged { target: target.to_owned(), text: text.to_owned() })));
+    LOGGING_RECORDED.with(|l| l.set(true));
+    log();
+    LOGGING_RECORDED.with(|l| l.set(false));
+}
+
+/// Run `f`, returning with its value the problems it reported on this thread,
+/// each of which [`Problem::report`] reports again. `None` when a problem was
+/// noted here without being reported here, so the list would under-report.
+pub(crate) fn recorded_problems<R>(f: impl FnOnce() -> R) -> (R, Option<Vec<Problem>>) {
+    struct Restore(Option<(usize, Vec<Problem>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RECORDING.with(|r| *r.borrow_mut() = self.0.take());
+        }
+    }
+    let outer = Restore(RECORDING.with(|r| r.replace(Some((0, Vec::new())))));
+    let value = f();
+    let (noted, lines) = RECORDING.with(|r| r.replace(None)).unwrap_or_default();
+    drop(outer);
+    (value, (noted == lines.len()).then_some(lines))
 }
 
 #[cfg(not(test))]
@@ -243,6 +304,7 @@ fn take_built() -> Option<(usize, usize, usize)> {
 /// print separately, or the count can drift from what was actually shown.
 pub fn note_cli_problem() {
     PENDING_PROBLEM.with(|p| p.set(true));
+    RECORDING.with(|r| r.borrow_mut().as_mut().map(|(noted, _)| *noted += 1));
     // Under `quiet`, counting waits for the line: a problem the first pass
     // already printed is dropped, a new one is counted when it is printed.
     if quiet_now() {
@@ -349,14 +411,21 @@ pub(crate) use cli_warn;
 /// `[WARN]` line and still exited 0. Found by an agent-surface audit,
 /// 2026-08-06.
 macro_rules! log_warn_problem {
-    (target: $target:literal, $($arg:tt)*) => {{
+    (target: $target:literal, $($arg:tt)*) => {
+        $crate::build::cli_output::log_warn_problem!(@ concat!($target, "#counted"), $($arg)*)
+    };
+    (@ $target:expr, $($arg:tt)*) => {{
         $crate::build::cli_output::note_cli_problem();
-        log::warn!(target: concat!($target, "#counted"), $($arg)*)
+        if $crate::build::cli_output::recording_problems() {
+            let text = format!($($arg)*);
+            $crate::build::cli_output::record_logged_problem($target, &text, || log::warn!(target: $target, "{text}"));
+        } else {
+            log::warn!(target: $target, $($arg)*);
+        }
     }};
-    ($($arg:tt)*) => {{
-        $crate::build::cli_output::note_cli_problem();
-        log::warn!(target: concat!(module_path!(), "#counted"), $($arg)*)
-    }};
+    ($($arg:tt)*) => {
+        $crate::build::cli_output::log_warn_problem!(@ concat!(module_path!(), "#counted"), $($arg)*)
+    };
 }
 pub(crate) use log_warn_problem;
 

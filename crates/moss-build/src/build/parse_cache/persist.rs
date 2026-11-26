@@ -16,7 +16,7 @@ use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 4);
+const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 5);
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -30,6 +30,7 @@ struct SavedEntry {
     content_hash: String,
     reads: Vec<Read>,
     doc: SavedDoc,
+    problems: Vec<crate::build::cli_output::Problem>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -537,7 +538,7 @@ pub(super) fn write(dir: &Path, generation: &str, cache: &ParseCache) {
         .iter()
         .filter_map(|(path, entry)| {
             let reads = entry.reads.iter().filter(|read| !matches!(read, Read::GraphIdentity(_))).cloned().collect();
-            Some((path.clone(), SavedEntry { content_hash: entry.content_hash.clone(), reads, doc: SavedDoc::split(&entry.doc)? }))
+            Some((path.clone(), SavedEntry { content_hash: entry.content_hash.clone(), reads, doc: SavedDoc::split(&entry.doc)?, problems: entry.problems.clone() }))
         })
         .collect();
     let skipped = cache.entries.len() - entries.len();
@@ -556,7 +557,7 @@ pub(super) fn read(dir: &Path, generation: &str) -> Option<ParseCache> {
     let entries = saved
         .entries
         .into_iter()
-        .map(|(path, entry)| (path, ParseCacheEntry { content_hash: entry.content_hash, reads: entry.reads, doc: entry.doc.join() }))
+        .map(|(path, entry)| (path, ParseCacheEntry { content_hash: entry.content_hash, reads: entry.reads, doc: entry.doc.join(), problems: entry.problems }))
         .collect();
     Some(ParseCache { inputs_fingerprint: saved.inputs_fingerprint, entries })
 }

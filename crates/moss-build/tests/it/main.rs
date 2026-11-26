@@ -71,6 +71,7 @@ mod country_map_search_test;
 mod cross_edition_listing_test;
 mod declared_name_list_test;
 mod derived_embed_test;
+mod edit_build_problems_test;
 mod edition_home_listing_test;
 mod embed_forms_test;
 mod embed_more_none_test;
