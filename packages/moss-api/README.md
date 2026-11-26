@@ -56,10 +56,7 @@ A plugin is three things:
 Ship the manifest, the bundle and the icon together; that trio is what moss
 installs.
 
-Your code runs in **QuickJS, not a browser** — no DOM, no `crypto.subtle`, no
-Web Streams, and `fetch` is a buffered shim. Read
-[the runtime environment](docs/runtime-environment.md) before you reach for a
-web API; green Node-mock tests do not prove QuickJS compatibility.
+Your code runs in **QuickJS, not a browser** — no DOM, only part of `crypto.subtle`, no Web Streams, and `fetch` is a buffered shim. Read [the runtime environment](docs/runtime-environment.md) before you reach for a web API; green Node-mock tests do not prove QuickJS compatibility.
 
 ## API reference
 

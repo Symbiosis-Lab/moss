@@ -139,6 +139,8 @@ export class StatusBlockView {
       this.statusLineEl.appendChild(this.statusVerbSpan);
     }
     this.statusVerbSpan.textContent = status.text;
+    if (status.tooltip) this.statusLineEl.setAttribute("data-tooltip", status.tooltip);
+    else this.statusLineEl.removeAttribute("data-tooltip");
 
     // ── Subject span (optional, cached; added/removed only when presence changes) ──
     if (status.subject) {

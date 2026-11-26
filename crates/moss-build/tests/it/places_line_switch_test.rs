@@ -3,32 +3,9 @@
 //! listing cards and the article locator. Also the page's own `map:` switch,
 //! which turns that page's locator on or off against the site's setting.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -66,9 +43,9 @@ fn build_located_site(terms_extra: &str, site_extra: &str, article_fm: &str, loc
     write(&tmp, ".moss/places.toml", PLACES);
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(&tmp, "posts/report.md", &format!("---\ntitle: Report\ndate: 2025-05-22\nlocation: {location}\n{article_fm}---\n\nA single place.\n"));
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     (read_page(&out, "posts/report/index.html"), read_page(&out, "posts/index.html"))
 }
 
@@ -81,10 +58,10 @@ fn a_tags_kind_with_line_true_draws_linked_names_in_the_masthead() {
     write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nname = \"Example Notes\"\nlang = \"en\"\n\n[terms.tags]\nline = true\n");
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(&tmp, "letters/first-light.md", "---\ntitle: First light\ndate: 2026-01-01\ntags: [\"Field Notes\"]\n---\n\nThe letter itself.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
 
-    let html = read_page(&tmp.join(".moss/build.nosync/staging"), "letters/first-light/index.html");
+    let html = read_page(&MossPaths::new(&tmp).staging_dir(), "letters/first-light/index.html");
     let line = html.find("class=\"moss-term-line\"").unwrap_or_else(|| panic!("no term line: {html}"));
     let body = html.find(">The letter itself").expect("the body, not the description in the head");
     assert!(line < body, "the line sits above the letter: {html}");
@@ -138,8 +115,8 @@ fn page_map_true_with_no_resolved_location_renders_nothing_and_builds() {
     write(&tmp, "posts/none.md", "---\ntitle: None\nmap: true\n---\n\nNo location.\n");
     write(&tmp, "posts/gone.md", "---\ntitle: Gone\nmap: true\nlocation: Nowhere\n---\n\nUnknown place.\n");
     write(&tmp, "posts/bare.md", "---\ntitle: Bare\nmap: true\nlocation: Harbor\n---\n\nKnown.\n");
-    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-    let out = tmp.join(".moss/build.nosync/staging");
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let out = MossPaths::new(&tmp).staging_dir();
     assert!(!read_page(&out, "posts/none/index.html").contains("moss-place-locator"));
     assert!(!read_page(&out, "posts/gone/index.html").contains("moss-place-locator"));
     assert!(read_page(&out, "posts/bare/index.html").contains("moss-place-locator"));
@@ -158,8 +135,8 @@ fn map_false_on_a_place_page_still_turns_its_term_map_off() {
         write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
         write(&tmp, "harbor.md", &format!("---\ntitle: Harbor\nplace_page: true\n{fm}---\n\nThe harbor.\n"));
         write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nText.\n");
-        assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-        read_page(&tmp.join(".moss/build.nosync/staging"), "harbor/index.html")
+        assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+        read_page(&MossPaths::new(&tmp).staging_dir(), "harbor/index.html")
     };
     assert!(build("").contains("moss-place-map"));
     assert!(!build("map: false\n").contains("moss-place-map"));
@@ -188,8 +165,8 @@ fn a_claimed_place_page_never_gets_a_locator() {
     write(&tmp, ".moss/places.toml", PLACES);
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(&tmp, "harbor.md", "---\ntitle: Harbor\nplace_page: true\nlocation: Harbor\nmap: true\n---\n\nThe harbor.\n");
-    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "harbor/index.html");
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&MossPaths::new(&tmp).staging_dir(), "harbor/index.html");
     assert!(page.contains("moss-place-map"), "its own term map still draws: {page}");
     assert!(!page.contains("moss-place-locator"), "{page}");
 }
@@ -204,9 +181,9 @@ fn place_pages_omit_geographic_parent_annotations_but_keep_authored_text_and_hie
     write(&tmp, "index.md", "---\ntitle: Home\nbreadcrumb: true\n---\n\nHi.\n");
     write(&tmp, "village.md", "---\ntitle: Village\nplace_page: true\n---\n\nAn authored mention of Territory.\n");
     write(&tmp, "posts/report.md", "---\ntitle: Field report\nlocation: Village\n---\n\nText.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     let claimed = read_page(&out, "village/index.html");
     let generated = read_page(&out, "places/region/index.html");
     for html in [&claimed, &generated] {

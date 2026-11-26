@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeStageLabel,
+  stageCountText,
   nextStage,
   computePublishLabel,
   nextPublishStage,
@@ -16,11 +17,15 @@ describe('progress-panel stage state machine', () => {
     expect(label).toEqual({ text: 'Opening folder…', percent: null });
   });
 
-  it('scanning shows running found count, indeterminate bar', () => {
-    const label = computeStageLabel({ stage: 'scanning', found: 42 });
-    expect(label.text).toContain('Scanning files');
-    expect(label.text).toContain('42');
-    expect(label.percent).toBeNull();
+  it('scanning and compiling both read "Updating…", with or without counts', () => {
+    expect(computeStageLabel({ stage: 'scanning', found: 42 })).toEqual({ text: 'Updating…', percent: null });
+    expect(computeStageLabel({ stage: 'scanning' }).text).toBe('Updating…');
+    expect(computeStageLabel({ stage: 'compiling', phase: 'markdown', current: 0, total: 0 }).text).toBe('Updating…');
+    expect(computeStageLabel({ stage: 'compiling', phase: 'pages', current: 40, total: 554 }).text).toBe('Updating…');
+  });
+
+  it("the first-open screen's sentence keeps the found count", () => {
+    expect(stageCountText({ stage: 'scanning', found: 42 })).toBe('Scanning files… (42 found)');
   });
 
   it('materializing shows provider and determinate progress', () => {
@@ -97,14 +102,13 @@ describe('progress-panel stage state machine', () => {
     // defaults the counts to 0, so the interpolated form rendered
     // "Formatting your writing… (0 / 0)" on the full-window waiting screen: a
     // counter pinned at zero reads as a build that has stopped.
-    const label = computeStageLabel({
+    expect(stageCountText({
       stage: 'compiling',
       phase: 'markdown',
       current: 0,
       total: 0,
-    });
-    expect(label.text).toBe('Formatting your writing…');
-    expect(label.percent).toBeNull();
+    })).toBe('Formatting your writing…');
+    expect(computeStageLabel({ stage: 'compiling', phase: 'markdown', current: 0, total: 0 }).percent).toBeNull();
   });
 
   it('compiling names the phase, so a moving denominator moves with the verb', () => {
@@ -112,20 +116,20 @@ describe('progress-panel stage state machine', () => {
     // synthetic documents `markdown_total` never saw), which is the "total
     // goes up by one at the end" the old shared counter showed. Naming the
     // pass is what makes that change read as progress instead of a glitch.
-    const first = computeStageLabel({
+    const first = stageCountText({
       stage: 'compiling',
       phase: 'markdown',
       current: 553,
       total: 553,
     });
-    const second = computeStageLabel({
+    const second = stageCountText({
       stage: 'compiling',
       phase: 'pages',
       current: 40,
       total: 554,
     });
-    expect(first.text).toBe('Formatting your writing… (553 / 553)');
-    expect(second.text).toBe('Generating pages… (40 / 554)');
+    expect(first).toBe('Formatting your writing… (553 / 553)');
+    expect(second).toBe('Generating pages… (40 / 554)');
   });
 
   it('materializing with total=0 returns null percent', () => {
@@ -140,32 +144,19 @@ describe('progress-panel stage state machine', () => {
 });
 
 describe('publish stage labels', () => {
-  it('waiting -> "Waiting for build…", indeterminate', () => {
-    expect(computePublishLabel({ stage: 'waiting' })).toEqual({
-      text: 'Waiting for build…',
+  it('everything before the first byte leaves reads "Preparing…"', () => {
+    for (const stage of ['waiting', 'preparing', 'syncing'] as const) {
+      expect(computePublishLabel({ stage })).toEqual({ text: 'Preparing…', percent: null });
+    }
+    expect(computePublishLabel({ stage: 'rebuilding' })).toEqual({ text: 'Preparing…', percent: null });
+  });
+
+  it("the pre-publish rebuild's message leaves the headline for its detail", () => {
+    expect(computePublishLabel({ stage: 'rebuilding', message: 'Updating search' })).toEqual({
+      text: 'Preparing…',
       percent: null,
+      detail: 'Updating search',
     });
-  });
-
-  it('preparing -> "Preparing to publish…", indeterminate', () => {
-    expect(computePublishLabel({ stage: 'preparing' })).toEqual({
-      text: 'Preparing to publish…',
-      percent: null,
-    });
-  });
-
-  it('rebuilding shows backend message when present', () => {
-    const label = computePublishLabel({ stage: 'rebuilding', message: 'No rebuild needed' });
-    expect(label.text).toBe('No rebuild needed');
-    expect(label.percent).toBeNull();
-  });
-
-  it('rebuilding falls back to default when message empty', () => {
-    expect(computePublishLabel({ stage: 'rebuilding' }).text).toBe('Rebuilding…');
-  });
-
-  it('syncing -> "Comparing with server…"', () => {
-    expect(computePublishLabel({ stage: 'syncing' }).text).toBe('Comparing with server…');
   });
 
   it('uploading shows determinate fraction', () => {
@@ -236,12 +227,9 @@ describe('publish stage labels', () => {
     ).toBe('Uploading…');
   });
 
-  it('committing -> "Making changes live…"', () => {
-    expect(computePublishLabel({ stage: 'committing' }).text).toBe('Making changes live…');
-  });
-
-  it('finalizing -> "Finalizing…"', () => {
-    expect(computePublishLabel({ stage: 'finalizing' }).text).toBe('Finalizing…');
+  it('committing and finalizing still read "Uploading…"', () => {
+    expect(computePublishLabel({ stage: 'committing' }).text).toBe('Uploading…');
+    expect(computePublishLabel({ stage: 'finalizing' }).text).toBe('Uploading…');
   });
 
   it('complete and failed return empty text (panel auto-closes)', () => {

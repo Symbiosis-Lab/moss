@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -15,7 +16,7 @@ fn write(root: &Path, path: &str, contents: &str) {
 
 fn build(root: &Path) -> (std::path::PathBuf, Vec<ParsedDocument>) {
     let project = crate::build::scan::scan::scan_folder(root.to_str().unwrap()).unwrap();
-    let output = root.join(".moss/build.nosync/site");
+    let output = MossPaths::new(root).build_dir().join("site");
     fs::create_dir_all(&output).unwrap();
     let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
     let (_, _, documents, _) = super::super::blocking::generate_blocking_content(
@@ -226,7 +227,7 @@ fn a_build_names_each_empty_folder_it_left_out() {
     write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
     fs::create_dir_all(root.path().join("drafts/later")).unwrap();
     let project = crate::build::scan::scan::scan_folder(root.path().to_str().unwrap()).unwrap();
-    let output = root.path().join(".moss/build.nosync/site");
+    let output = MossPaths::new(root.path()).build_dir().join("site");
     fs::create_dir_all(&output).unwrap();
     let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
     let recording = std::sync::Arc::new(Recording::default());
@@ -291,7 +292,7 @@ fn favicons_are_rewritten_only_when_their_bytes_differ() {
         }
         let built = |root: &Path| {
             let project = crate::build::scan::scan::scan_folder(root.to_str().unwrap()).unwrap();
-            let output = root.join(".moss/build.nosync/site");
+            let output = MossPaths::new(root).build_dir().join("site");
             fs::create_dir_all(&output).unwrap();
             let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
             let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(root));

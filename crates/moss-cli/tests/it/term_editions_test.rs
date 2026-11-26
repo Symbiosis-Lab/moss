@@ -1,6 +1,7 @@
 //! A plugin listing on an edition's home receives that edition's term pages in
 //! `ctx.terms`, through the real binary. All names are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::Command;
 
@@ -43,7 +44,7 @@ fn the_plugin_on_an_edition_home_gets_that_editions_term_pages() {
         .expect("spawn moss-cli");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
-    let page = std::fs::read_to_string(root.join(".moss/build.nosync/current/de/index.html")).unwrap();
+    let page = std::fs::read_to_string(MossPaths::new(&root).current_ptr().join("de/index.html")).unwrap();
     let json = page.split(r#"id="ctx">"#).nth(1).and_then(|rest| rest.split("</script>").next()).expect("no context in the page");
     let ctx: serde_json::Value = serde_json::from_str(json).unwrap();
     let pages = ctx["pages"].as_array().unwrap();

@@ -50,6 +50,37 @@ pub struct BuildInputs {
     /// differently, so no page of that seal may be carried.
     #[serde(default)]
     pub media_settled: bool,
+    /// [`config_rest`] as this build measured it. A watch batch that edits
+    /// `.moss/config.toml` reuses the last build's pages only while this holds.
+    #[serde(default)]
+    pub config_rest: Option<String>,
+}
+
+/// `.moss/config.toml` keys whose effect on each page is in that page's own
+/// render fingerprint (`facade::ShellFacts`), so changing one needs no full
+/// render. A key earns its place with a test that flips it and compares every
+/// page against a full build.
+pub(crate) const FINGERPRINTED_KEYS: &[(&str, &str)] = &[("site", "floating_nav")];
+
+/// A digest of `.moss/config.toml` without [`FINGERPRINTED_KEYS`]: equal across
+/// two builds when nothing else in the file changed. `None` when the file
+/// cannot be read or parsed, which proves nothing.
+pub(crate) fn config_rest(folder: &Path) -> Option<String> {
+    let path = crate::moss_paths::MossPaths::new(folder).config();
+    let mut table: toml::Table = match std::fs::read_to_string(&path) {
+        Ok(text) => text.parse().ok()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(_) => return None,
+    };
+    for (section, key) in FINGERPRINTED_KEYS {
+        if let Some(toml::Value::Table(t)) = table.get_mut(*section) {
+            t.remove(*key);
+            if t.is_empty() {
+                table.remove(*section);
+            }
+        }
+    }
+    Some(value_hash(Some(&serde_json::to_string(&table).ok()?)))
 }
 
 /// [`BuildInputs::day`]: the date [`effective_now`] gave, and the site zone it
@@ -100,7 +131,7 @@ pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BT
         value_hash(std::env::var(name).ok().as_deref())
     };
     let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| now(name) == *seen));
-    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at, ..Default::default() }) }
+    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at, config_rest: config_rest(folder), ..Default::default() }) }
 }
 
 /// The build's own options that reach a page, hashed like a variable: the

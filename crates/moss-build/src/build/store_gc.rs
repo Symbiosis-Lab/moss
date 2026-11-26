@@ -617,6 +617,7 @@ pub fn gc_old_generations(
                     crate::build::manifest::publish_view::receipt_path(generations_dir, name),
                     crate::build::manifest::publish_view::articles_path(generations_dir, name),
                     WholeGeneration::record_path(generations_dir, name),
+                    crate::infra::folder_lock::promotion_record_path(generations_dir, name),
                 ] {
                     // allow:unlink the records kept beside this removed generation, outside staging
                     let _ = std::fs::remove_file(receipt);
@@ -655,26 +656,22 @@ struct GcWatermark {
     sources_local: bool,
 }
 
-fn watermark_path(build_dir: &Path) -> PathBuf {
-    build_dir.join("cache").join("gc-watermark.json")
-}
-
-fn load_watermark(build_dir: &Path) -> Option<usize> {
-    let raw = std::fs::read_to_string(watermark_path(build_dir)).ok()?;
+fn load_watermark(path: &Path) -> Option<usize> {
+    let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<GcWatermark>(&raw)
         .ok()
         .filter(|w| w.sources_local)
         .map(|w| w.objects_after_gc)
 }
 
-fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
+fn save_watermark(path: &Path, objects_after_gc: usize) {
     let Ok(json) = serde_json::to_string(&GcWatermark { objects_after_gc, sources_local: true }) else {
         return;
     };
     // `.moss/build.nosync/**` is regenerable output, so this goes through io_utils:
     // a cloud-evicted destination is *absent*, not something to materialize.
     // A raw `fs::write` here would `EDEADLK` the build.
-    if let Err(e) = super::io_utils::write_output(&watermark_path(build_dir), json.as_bytes()) {
+    if let Err(e) = super::io_utils::write_output(path, json.as_bytes()) {
         log::info!("cache GC: failed to record watermark: {}", e);
     }
 }
@@ -724,9 +721,9 @@ fn should_gc_cache(objects_on_disk: usize, watermark: Option<usize>) -> bool {
 ///
 /// Blocking — walks and unlinks. Async callers wrap it in `spawn_blocking`.
 pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResult> {
-    let build_dir = &mp.build_dir();
+    let watermark = mp.gc_watermark();
     let before = count_objects(&mp.cache_objects()) + count_objects(&mp.cache_local_objects());
-    if !should_gc_cache(before, load_watermark(build_dir)) {
+    if !should_gc_cache(before, load_watermark(&watermark)) {
         return None;
     }
     let token = match crate::build::lifecycle::try_begin_cache_gc(mp) {
@@ -745,7 +742,7 @@ pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResu
         }
     };
     let after = before.saturating_sub(result.objects_removed);
-    save_watermark(build_dir, after);
+    save_watermark(&watermark, after);
     log::info!(
         "cache GC: {} → {} objects ({} removed, {} transforms, {} bytes freed)",
         before,

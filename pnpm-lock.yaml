@@ -229,6 +229,9 @@ importers:
         specifier: workspace:*
         version: link:../moss-ui
     devDependencies:
+      '@codemirror/autocomplete':
+        specifier: ^6.20.3
+        version: 6.20.3
       '@codemirror/state':
         specifier: ^6.5.4
         version: 6.7.1
@@ -259,6 +262,9 @@ importers:
       expect-webdriverio:
         specifier: ^5.7.0
         version: 5.7.0(@wdio/globals@9.31.3)(@wdio/logger@9.29.1)(webdriverio@9.31.9)
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
       mocha:
         specifier: ^10.8.2
         version: 10.8.2

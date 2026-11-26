@@ -34,7 +34,7 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 | `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again. |
 | `copy_account` | multiple | `AccountQuery` | Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`. |
 | `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
-| `login` | multiple | `BaseContext` | Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline. |
+| `login` | multiple | `BaseContext` | Sign the person in to a channel's account (contributes.channel.login: true) when they press Sign in, never during a build. Answers a `LoginResult`: `completed` with the account's stable `id` (and `name`, shown), which moss records as the folder's account in `.moss/state.toml`, `cancelled`, or `failed` with a `message`. A `login` that answers nothing is read from its own config, as before. |
 <!-- auto:end:hooks -->
 
 ## process
@@ -54,7 +54,7 @@ Use for: fetching external data, transforming source files, pre-processing conte
 
 **Data contract:** A process hook that fetches external data writes JSON to `.moss/data/social/<plugin>.json`. The build core does not read this file; moss's native slot-filling and other plugins consume it.
 
-The generated source-to-output map (paths plus uids) is at `.moss/build.nosync/article-map.json`.
+The generated source-to-output map (paths plus uids) is `article-map.json` in the build output's root, the folder above the `output` path `moss build --json` prints.
 
 ## deploy
 
@@ -70,7 +70,7 @@ A channel posts a copy of each new post to another network (POSSE: publish on yo
 
 Use for: cross-posting to Bluesky, Mastodon, Matters.town, LinkedIn, X; a hand-off for a network with no posting API.
 
-**Context:** a `CopyJob`: the post's address, title, language, date and tags, the form moss chose, and the copy already shaped. The full contract is in the [syndication design](https://github.com/Symbiosis-Lab/moss/tree/develop/docs/proposals/syndication).
+**Context:** a `CopyJob`: the site's address and name, the post's address, title, language, date and tags, the form moss chose, and the copy already shaped (a long article also as plain text). The full contract is in the [syndication design](https://github.com/Symbiosis-Lab/moss/tree/develop/docs/proposals/syndication).
 
 ## login
 
@@ -80,11 +80,11 @@ How it is known that a channel is signed in: its `copy_account` answer. `copy.ac
 
 An OAuth channel signs in through the person's default browser, where they are usually signed in already: `startBrowserSignIn()` from `@symbiosis-lab/moss-api` listens once on `127.0.0.1` and gives the redirect address to register, and its `open(authorizeUrl)` opens the provider's page and resolves with the redirect's query. The plugin checks `state` and exchanges the code; `crypto.subtle.digest` makes the PKCE challenge. moss opens only `https` addresses (and `http` to a loopback address) in the browser. A sign-in ends after ten minutes, when the person presses Cancel, when the channel starts another, or in a terminal at once ("Sign in from the moss app"). A token the sign-in earns is a setting with `"type": "secret", "hidden": true`, which signing out removes.
 
-When the sign-in needs one thing it cannot find out by itself, such as the server a Mastodon account is on, the channel declares it as a `string` setting with `"at_sign_in": true` and a `default`. The settings form never draws it; the sign-in asks it first, pre-filled, and the answer reaches `login` in its context's `config`. The plugin keeps what it needs of it.
+`login` answers a `LoginResult`: `{ status: "completed", account: { id, name } }`, `{ status: "cancelled" }` or `{ status: "failed", message }`. A channel whose accounts live on many servers, as Mastodon's do, asks which server inside its own sign-in page and adds `account.host`, the account's server: moss records it with the account and takes a `syndicated:` address on that host as the channel's copy.
 
 Use for: authenticating with a remote platform before `process` or a copy hook can act on the user's behalf.
 
-**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`, with any `at_sign_in` answers on top.
+**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`.
 
 ## Plugin runtime
 

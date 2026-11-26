@@ -45,9 +45,15 @@ permissions:
 
 jobs:
   render-gates-chromium:
-    name: Render gates (Chromium)
+    name: Render gates (Chromium, ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # One runner took the whole 45 minutes for the gates alone. Two split them
+    # by turns down the list, which balances them to within a few percent.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -111,5 +117,7 @@ jobs:
         run: bash scripts/render-gates.sh --check
 
       - name: Run render gates (Chromium)
-        run: bash scripts/render-gates.sh --project chromium
+        run: |
+          mapfile -t gates < <(bash scripts/render-gates.sh --project chromium --list | awk -v s=${{ matrix.shard }} 'NR % 2 == s % 2')
+          bash scripts/render-gates.sh --project chromium "${gates[@]}"
 

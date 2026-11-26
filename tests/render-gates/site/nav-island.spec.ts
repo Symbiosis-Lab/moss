@@ -182,6 +182,61 @@ for (const width of WIDTHS) {
   });
 }
 
+test.describe('shared article measure', () => {
+  test.use({ viewport: { width: 1440, height: 800 } });
+
+  for (const ancestor of [':root:lang(en)', 'body:lang(en)']) {
+    test(`${ancestor} changes article and both navigation widths together`, async ({ page }) => {
+      await page.evaluate(() => { document.documentElement.lang = 'en'; });
+      await reveal(page);
+      const measure = () => page.evaluate(() => {
+        const article = document.querySelector('main > article.container')!;
+        const style = getComputedStyle(article);
+        const box = article.getBoundingClientRect();
+        const nav = document.querySelector('.nav-content')!.getBoundingClientRect();
+        const bar = document.querySelector('.moss-nav-island-bar')!.getBoundingClientRect();
+        const probe = document.createElement('div');
+        probe.style.cssText = 'position: absolute; width: var(--moss-reading-size); height: 0';
+        article.append(probe);
+        const readingSize = probe.getBoundingClientRect().width;
+        probe.remove();
+        return {
+          readingSize,
+          articleWidth: box.width,
+          articleLeft: box.left + parseFloat(style.paddingLeft),
+          articleRight: box.right - parseFloat(style.paddingRight),
+          navLeft: nav.left, navRight: nav.right,
+          barLeft: bar.left, barRight: bar.right,
+        };
+      });
+      const original = await measure();
+      expect(original.articleWidth).toBeCloseTo(42 * original.readingSize, 0);
+      await page.addStyleTag({ content: `@layer themes {
+        ${ancestor} { --moss-content-width: calc(35 * var(--moss-reading-size)); }
+        article { text-wrap: pretty; }
+      }` });
+      const themed = await measure();
+      expect(themed.articleWidth).toBeCloseTo(35 * themed.readingSize, 0);
+      expect(themed.articleWidth).toBeLessThan(original.articleWidth);
+      for (const m of [original, themed]) {
+        expect(Math.abs(m.barLeft - m.articleLeft)).toBeLessThanOrEqual(2);
+        expect(Math.abs(m.barRight - m.articleRight)).toBeLessThanOrEqual(2);
+        expect(Math.abs(m.navLeft - m.articleLeft)).toBeLessThanOrEqual(2);
+        expect(Math.abs(m.navRight - m.articleRight)).toBeLessThanOrEqual(2);
+      }
+      // The intentional nav escape hatch still widens both bars independently.
+      await page.addStyleTag({ content: `@layer themes {
+        ${ancestor} { --moss-nav-width: calc(39 * var(--moss-reading-size)); }
+      }` });
+      const escaped = await measure();
+      expect(escaped.articleWidth).toBeCloseTo(themed.articleWidth, 0);
+      expect(escaped.barRight - escaped.barLeft).toBeGreaterThan(themed.barRight - themed.barLeft);
+      expect(Math.abs(escaped.navLeft - escaped.barLeft)).toBeLessThanOrEqual(2);
+      expect(Math.abs(escaped.navRight - escaped.barRight)).toBeLessThanOrEqual(2);
+    });
+  }
+});
+
 test.describe('behaviour at desktop width', () => {
   test.use({ viewport: { width: 1100, height: 800 } });
 

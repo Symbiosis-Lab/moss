@@ -13,13 +13,76 @@ under `contributes.channel.syndication`.
 ```ts
 optional article?: 
   | {
+  blocks?: ArticleBlock[];
   cover?: string | null;
   description?: string | null;
   html: string;
+  text?: string;
   title: string;
 }
   | null;
 ```
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  blocks?: ArticleBlock[];
+  cover?: string | null;
+  description?: string | null;
+  html: string;
+  text?: string;
+  title: string;
+}
+```
+
+##### blocks?
+
+```ts
+optional blocks?: ArticleBlock[];
+```
+
+`html` as an editor is given it, split at its pictures in reading order:
+head elements, a leading h1 repeating the title and footnote back-links
+removed, embeds as links, a heading over the notes. Formula pictures stay inline.
+
+##### cover?
+
+```ts
+optional cover?: string | null;
+```
+
+##### description?
+
+```ts
+optional description?: string | null;
+```
+
+##### html
+
+```ts
+html: string;
+```
+
+##### text?
+
+```ts
+optional text?: string;
+```
+
+The page as written, in plain text: no title and no link back.
+
+##### title
+
+```ts
+title: string;
+```
+
+***
+
+`null`
 
 ***
 
@@ -160,6 +223,28 @@ optional previous?: CopyRef & object | null;
 ```
 
 The copy already on the network (for an update or lookup), or the draft a hand-off left there.
+
+***
+
+### site
+
+```ts
+site: object;
+```
+
+The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host.
+
+#### name
+
+```ts
+name: string;
+```
+
+#### url
+
+```ts
+url: string;
+```
 
 ***
 

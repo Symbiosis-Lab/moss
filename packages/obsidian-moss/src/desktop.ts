@@ -1,4 +1,5 @@
-import { FileSystemAdapter, Notice, TFolder, WorkspaceLeaf } from "obsidian";
+import { EditorView } from "@codemirror/view";
+import { editorInfoField, FileSystemAdapter, Notice, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { shell } from "electron";
 import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,11 +12,14 @@ import {
   publishNotice,
   siteRoot,
   type DetectEnv,
+  type PageStatus,
   type SiteAddress,
 } from "./desktop/cli";
 import { FirstPreviewModal } from "./desktop/first-build-modal";
 import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./desktop/preview-view";
 import { MossProcess, type SpawnFn } from "./desktop/process";
+import { pageFor, watchRebuilds } from "./desktop/server";
+import { PublishState } from "./desktop/publish-state";
 import { MossSettingTab } from "./settings";
 import type MossPlugin from "./main";
 
@@ -32,7 +36,17 @@ export class DesktopCommands {
 
   load(): void {
     this.plugin.addSettingTab(new MossSettingTab(this.app, this.plugin, this));
-    this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, () => this.stopPreview(false)));
+    const publish = new PublishState(this.plugin, (file) => this.siteFor(this.findBinary(), file.path), {
+      preview: () => void this.runPreview(),
+      publish: () => void this.publishInApp(),
+    });
+    this.app.workspace.onLayoutReady(() => void publish.update());
+    this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, {
+      closed: () => this.stopPreview(false),
+      openInBrowser: () => this.openInBrowser(),
+      // The pane's folder, whatever note is open.
+      publish: () => this.publishInApp(this.session?.root),
+    }));
     this.plugin.addCommand({ id: "preview", name: "Preview this folder", callback: () => void this.runPreview() });
     this.plugin.addCommand({
       id: "stop-preview",
@@ -41,6 +55,15 @@ export class DesktopCommands {
         // Not while only the first-preview question is open: nothing runs yet.
         if (!this.session || !this.mossProcess.running) return false;
         if (!checking) this.stopPreview(true);
+        return true;
+      },
+    });
+    this.plugin.addCommand({
+      id: "open-in-browser",
+      name: "Open in browser",
+      checkCallback: (checking) => {
+        if (!this.session?.url) return false;
+        if (!checking) void this.openInBrowser();
         return true;
       },
     });
@@ -54,11 +77,23 @@ export class DesktopCommands {
         .onClick(() => void this.runPreview(file.path)));
     }));
 
+    this.plugin.registerEvent(this.app.workspace.on("file-open", (file) => void this.follow(file)));
+    this.plugin.registerEditorExtension(EditorView.updateListener.of((update) => {
+      const session = this.session;
+      if (!session?.page || !update.selectionSet || update.state.field(editorInfoField).file?.path !== session.page) return;
+      const line = update.state.doc.lineAt(update.state.selection.main.head).number;
+      if (line === session.line) return;
+      session.line = line;
+      this.openPreviewView()?.scrollToLine(line);
+    }));
+
     // Obsidian calls no onunload when its window closes or it quits.
     this.plugin.registerDomEvent(window, "beforeunload", () => this.mossProcess.stop());
 
     this.statusEl = this.plugin.addStatusBarItem();
     this.statusEl.addClass("mod-clickable");
+    // The plugin has two status items; this names the preview's.
+    this.statusEl.addClass("moss-preview-status");
     this.plugin.registerDomEvent(this.statusEl, "click", () => void this.openPreviewLeaf());
     this.setStatus(null);
   }
@@ -102,15 +137,16 @@ export class DesktopCommands {
    * The moss site that owns `target` (a vault path) or else the open note, as
    * `moss root` finds it. When none does, a clicked folder becomes the site;
    * otherwise the vault. Without the program the vault is all there is to say.
+   * For a page the last build made, `page` says what moss knows of it.
    */
-  private async siteFor(binary: string | null, target?: string): Promise<{ root: string; address: SiteAddress } | null> {
+  private async siteFor(binary: string | null, target?: string): Promise<{ root: string; address: SiteAddress; page?: PageStatus } | null> {
     const vault = this.vaultPath();
     if (!vault) return null;
     if (!binary) return { root: siteRoot(path, vault, undefined, null), address: undefined };
     const at = path.join(vault, target ?? this.app.workspace.getActiveFile()?.path ?? "");
     // A CLI without `moss root` fails here and reads as no site found.
     const found = parseRootJson(await runCli(binary, ["root", at, "--json"], 5000).catch(() => ""));
-    return { root: siteRoot(path, vault, target, found.root), address: found.address };
+    return { root: siteRoot(path, vault, target, found.root), address: found.address, page: found.page };
   }
 
   /** A folder moss has not previewed gains `.moss/`; ask once before that. */
@@ -163,7 +199,11 @@ export class DesktopCommands {
       onServerReady: (addr) => {
         if (this.session !== session) return;
         session.url = addr.url;
-        view?.setUrl(addr.url);
+        session.stopWatching?.();
+        session.stopWatching = watchRebuilds(addr.url, () => void this.openPreviewView()?.update());
+        void this.follow(this.app.workspace.getActiveFile()).then((followed) => {
+          if (!followed && this.session === session) view?.setUrl(addr.url);
+        });
       },
       onError: (message) => {
         session.failure = `moss could not preview ${session.folder}: ${message}`;
@@ -171,6 +211,26 @@ export class DesktopCommands {
       },
       onExit: () => this.endSession(session),
     });
+  }
+
+  /**
+   * Points the pane at the page of the note in front of the person, as Obsidian's
+   * own panes follow the active note. It stays where it is for a note outside the
+   * previewed folder, a note with no page yet, and while the person has it pinned.
+   */
+  private async follow(file: TFile | null): Promise<boolean> {
+    const session = this.session;
+    const vault = this.vaultPath();
+    if (!session?.url || !vault || file?.extension !== "md") return false;
+    if (this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE)[0]?.getViewState().pinned) return false;
+    const inFolder = path.relative(session.root, path.join(vault, file.path));
+    if (inFolder.startsWith("..") || path.isAbsolute(inFolder)) return false;
+    const page = await pageFor(session.url, inFolder.split(path.sep).join("/"));
+    if (!page || this.session !== session || !session.url) return false;
+    session.page = file.path;
+    session.line = undefined;
+    this.openPreviewView()?.setUrl(session.url + page);
+    return true;
   }
 
   /** `announce` is false when the pane closed itself, or another site's preview replaces this one. */
@@ -186,18 +246,31 @@ export class DesktopCommands {
   private endSession(session: Session): void {
     if (this.session !== session) return;
     this.session = null;
+    session.stopWatching?.();
     session.modal?.close();
     this.setStatus(null);
     // A failure stays on screen; the exit that follows it is not news.
     if (!session.failure) this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
   }
 
-  private async publishInApp(): Promise<void> {
-    const site = await this.siteFor(this.findBinary());
+  /** The page the pane shows, in the person's browser. */
+  private async openInBrowser(): Promise<void> {
+    const session = this.session;
+    const address = await this.openPreviewView()?.address();
+    if (!session?.url || !address) return;
+    // What the page says is opened only when it is one of the preview's own pages.
+    const own = address.showing !== undefined && origin(address.showing) === origin(session.url);
+    await shell.openExternal(own ? address.showing! : address.set);
+  }
+
+  /** `root` is the folder to publish; otherwise the open note decides. */
+  private async publishInApp(root?: string): Promise<void> {
+    const vault = this.vaultPath();
+    const site = await this.siteFor(this.findBinary(), root && vault ? path.relative(vault, root) : undefined);
     if (!site) return;
     const folder = path.basename(site.root);
     new Notice(publishNotice(folder, site.address));
-    shell.openExternal(publishInAppUrl(site.root)).catch(() => {
+    await shell.openExternal(publishInAppUrl(site.root)).catch(() => {
       new Notice(`Get moss at mosspub.com to publish ${folder}.`, 10000);
     });
   }
@@ -211,12 +284,13 @@ export class DesktopCommands {
   private async openPreviewLeaf(folder?: string): Promise<MossPreviewView | null> {
     const existing = this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE);
     let leaf: WorkspaceLeaf | null = existing[0] ?? null;
-    if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(false);
-      if (!leaf) return null;
-    }
-    if (!existing[0] || folder) await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: true, state: { folder } });
+    const editing = this.app.workspace.getMostRecentLeaf();
+    // Beside the editor: a page needs the width, and a sidebar puts other tools' tabs over it.
+    leaf ??= this.app.workspace.getLeaf("split", "vertical");
+    if (!existing[0] || folder) await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: false, state: { folder } });
     await this.app.workspace.revealLeaf(leaf);
+    // The person goes on writing; the pane follows.
+    if (editing && editing !== leaf) this.app.workspace.setActiveLeaf(editing, { focus: true });
     const view = leaf.view;
     return view instanceof MossPreviewView ? view : null;
   }
@@ -233,10 +307,23 @@ interface Session {
   root: string;
   folder: string;
   url: string | null;
+  /** The vault path of the note whose page the pane follows, and the cursor line last sent to it. */
+  page?: string;
+  line?: number;
+  /** Ends the watch on the server's rebuilds. */
+  stopWatching?: () => void;
   /** Why the preview failed, kept on screen after the process exits. */
   failure?: string;
   /** The first-preview question while it is open; ending the session closes it. */
   modal?: FirstPreviewModal;
+}
+
+function origin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 function runCli(binary: string, args: string[], timeout = 0): Promise<string> {

@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 use crate::vault_root::{resolve_input, VaultRoot};
 
 mod import_sources;
+mod landscape;
 mod lift;
+mod list;
 mod translation_keys;
 
 /// One file's text before and after.
@@ -53,6 +55,7 @@ struct Args {
     folder: Option<String>,
     apply: bool,
     json: bool,
+    list: bool,
     lift: Option<String>,
     field: Option<String>,
     place: Option<String>,
@@ -77,14 +80,19 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "--apply" => out.apply = true,
             "--json" => out.json = true,
+            "--list" => out.list = true,
             "--lift" => out.lift = Some(value("--lift")?.trim_start_matches('.').to_string()),
             "--as" => out.field = Some(value("--as")?),
             "--place" => out.place = Some(value("--place")?),
             "--import-sources" => out.import_sources = Some(value("--import-sources")?),
+            "--dry-run" => return Err("unknown flag --dry-run: without --apply, moss migrate writes nothing".to_string()),
             flag if flag.starts_with('-') => return Err(format!("unknown flag {flag}")),
             folder if out.folder.is_none() => out.folder = Some(folder.to_string()),
             extra => return Err(format!("unexpected argument {extra}")),
         }
+    }
+    if out.list && (out.apply || out.lift.is_some() || out.field.is_some() || out.place.is_some() || out.import_sources.is_some()) {
+        return Err("--list is a run of its own, with only a folder and --json".to_string());
     }
     if out.lift.is_some() != out.field.is_some() {
         return Err("--lift <class> and --as <field> go together".to_string());
@@ -101,14 +109,21 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(out)
 }
 
-fn usage() -> &'static str {
-    "Usage: moss migrate [<folder>] [--apply] [--json]
-       moss migrate [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]
-       moss migrate [<folder>] --import-sources <list.json> [--apply] [--json]
+/// The command's forms, as `moss describe` lists them and `--help` prints them.
+pub(crate) const ARGS: &str = "[<folder>] [--apply] [--json] | [<folder>] --list [--json] | [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json] | [<folder>] --import-sources <list.json> [--apply] [--json]";
 
-Rewrites what `moss doctor --surface` finds. Without --apply it prints the
+fn usage() -> String {
+    let forms: Vec<String> = ARGS.split(" | ").map(|form| format!("moss migrate {form}")).collect();
+    format!("Usage: {}\n\n{}", forms.join("\n       "), HELP)
+}
+
+const HELP: &str = "Rewrites what `moss doctor --surface` finds. Without --apply it prints the
 change as a diff and writes nothing; with --apply it saves a version of the
 site first (undo with `moss history --restore`), then writes.
+
+--list prints the retired names the folder still uses (today, in the theme's
+style.css): each with its id, how many times it appears, the release that
+retired it and what replaces it, or that nothing does. It reads files only.
 
 With no --lift, it removes a `translationKey` that the page's path already
 implies, and only when building the site with and without it gives the same
@@ -117,6 +132,10 @@ output.
 It compares the built site only: the scratch builds run the site's plugins as
 a build does, but a tool that reads translationKey from the files themselves is
 not checked, and a page renamed later pairs by key and not by path.
+
+It also gives a place-typed kind without one `landscape = \"detail\"` and
+copies moss's place-map pack into .moss/maps/, so the site's maps stay as they
+are once moss stops carrying the pack.
 
 --lift <class> --as <field> moves each `::: {.class}` div holding one paragraph
 of plain text into the page's frontmatter as <field>, declares <field> in
@@ -131,8 +150,7 @@ imported from. Imports made before `origin:` existed wrote that address into
 `syndicated:` holds one listed address gets it as `origin:` instead; its
 other entries stay. A page is left as written when it already names a
 different origin, holds two listed addresses, shares one with another page,
-or when moss itself posted a copy to that address."
-}
+or when moss itself posted a copy to that address.";
 
 pub fn run(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -150,6 +168,19 @@ pub fn run(args: &[String]) -> i32 {
     }
     if let Err(msg) = crate::cli::site_guard::guard_cli_open(&folder.to_string_lossy(), "migrate") {
         return fail(&msg, args.json);
+    }
+    if args.list {
+        return match list::found(&folder) {
+            Ok(found) => {
+                if args.json {
+                    println!("{}", list::to_json(&found));
+                } else {
+                    print!("{}", list::to_text(&found));
+                }
+                0
+            }
+            Err(e) => fail(&e, args.json),
+        };
     }
     match migrate(&folder, &args) {
         Ok(report) => {
@@ -191,6 +222,8 @@ struct Report {
     /// The version saved before writing, when `--apply` wrote.
     saved: Option<String>,
     applied: bool,
+    /// moss's place-map pack is (to be) copied into `.moss/maps/`.
+    pack: bool,
 }
 
 fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
@@ -219,6 +252,15 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
     }
     report.saved = Some(id);
     write_all(folder, &mut report.changes, &mut report.skipped);
+    if report.pack {
+        match crate::build::place_map::install_landscape(&crate::moss_paths::MossPaths::new(folder), crate::build::place_map::embedded_stored()) {
+            Ok(wrote) => report.pack = wrote,
+            Err(e) => {
+                report.pack = false;
+                report.skipped.push(Skipped { path: ".moss/maps/".to_string(), line: None, reason: format!("could not be written: {e}") });
+            }
+        }
+    }
     report.applied = true;
     Ok(report)
 }
@@ -290,7 +332,17 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
         }
     };
 
-    let mut report = Report { changes, skipped, notes, check, saved: None, applied: false };
+    let mut report = Report { changes, skipped, notes, check, saved: None, applied: false, pack: false };
+    if args.lift.is_none() {
+        let landscape_config = landscape::plan(&config_text)?;
+        report.pack = landscape::needs_pack(folder, landscape_config.as_deref().unwrap_or(&config_text));
+        if let Some(after) = landscape_config {
+            report.changes.push(FileChange { path: CONFIG.to_string(), before: config_text, after });
+        }
+        if report.pack {
+            report.notes.push("Copies moss's place-map pack into .moss/maps/.".to_string());
+        }
+    }
     if report.check == Check::DifferentOutput {
         report.notes.push("Removing these would change the built site, so they stay as written.".to_string());
     }
@@ -300,7 +352,7 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
 fn plan_import_sources(folder: &Path, pages: &[(String, String)], list: &str) -> Result<Report, String> {
     let plan = import_sources::plan(pages, &import_sources::load(list)?, &import_sources::copy_addresses(folder));
     let notes = if plan.unmatched.is_empty() { Vec::new() } else { vec![format!("No page's syndicated: holds {}.", plan.unmatched.join(", "))] };
-    Ok(Report { changes: plan.changes, skipped: plan.skipped, notes, check: Check::NotNeeded, saved: None, applied: false })
+    Ok(Report { changes: plan.changes, skipped: plan.skipped, notes, check: Check::NotNeeded, saved: None, applied: false, pack: false })
 }
 
 /// Write every change whose file still holds the text it was planned from,
@@ -356,7 +408,7 @@ fn output_unchanged(folder: &Path, changes: &[FileChange]) -> Result<bool, Strin
 /// check, and a folder session inside a runtime of its own.
 fn headless_build_sealed(root: &VaultRoot) -> Result<crate::build::manifest::SealedManifest, String> {
     crate::build::cli_output::install_headless_logger();
-    crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), false);
+    crate::plugins::install::registry_client::enforce::install_headless_for_running_app(false);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -419,7 +471,7 @@ fn site_relative(folder: &Path, file: &Path) -> String {
 
 impl Report {
     fn writable(&self) -> bool {
-        self.check != Check::DifferentOutput && !self.changes.is_empty()
+        self.check != Check::DifferentOutput && (!self.changes.is_empty() || self.pack)
     }
 
     fn to_text(&self) -> String {
@@ -439,7 +491,7 @@ impl Report {
         }
         let files = |n: usize| if n == 1 { "1 file".to_string() } else { format!("{n} files") };
         out.push('\n');
-        out.push_str(&match (&self.saved, self.changes.len(), &self.check) {
+        out.push_str(&match (&self.saved, self.changes.len() + usize::from(self.pack), &self.check) {
             (_, 0, _) if self.skipped.is_empty() && self.notes.is_empty() => "Nothing to rewrite.\n".to_string(),
             (_, _, Check::DifferentOutput) => "Nothing was written.\n".to_string(),
             (Some(id), n, _) if self.applied => format!(
@@ -463,6 +515,7 @@ impl Report {
             "notes": self.notes,
             "same_output": match self.check { Check::NotNeeded => serde_json::Value::Null, Check::SameOutput => true.into(), Check::DifferentOutput => false.into() },
             "applied": self.applied,
+            "pack": self.pack,
             "saved_version": self.saved,
         })
     }

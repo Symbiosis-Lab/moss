@@ -1,7 +1,6 @@
-# release-plz creates a GitHub release for moss-core right after each app
-# release is published. By default it marks that release "Latest", and GitHub's
-# /releases/latest/ then resolves to a release with no assets: the landing's
-# download link and the app updater's latest.json both 404. Only the app
-# release may hold the Latest badge.
+# moss-core ships to crates.io with its tag and its CHANGELOG.md, and no GitHub
+# release: the releases page holds app releases only, so Latest is always the
+# app and /releases/latest/download/ (the landing's download link, the app
+# updater's latest.json) always resolves.
 [workspace]
-git_release_latest = false
+git_release_enable = false

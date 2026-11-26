@@ -260,13 +260,15 @@ fn title_of(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
 
     /// A vault whose article map holds `articles` (url key -> source path) and
     /// `pages`, with `files` written as sources.
     fn vault(articles: &[(&str, &str)], pages: &[(&str, &str)], files: &[&str]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
-        let build = dir.path().join(".moss").join("build.nosync");
+        std::fs::create_dir_all(MossPaths::new(dir.path()).root()).unwrap();
+        let build = MossPaths::new(dir.path()).build_dir();
         std::fs::create_dir_all(&build).unwrap();
         let articles: serde_json::Map<String, serde_json::Value> = articles
             .iter()
@@ -430,7 +432,7 @@ mod tests {
         let dir = vault(&[], &[], &["index.md", "doc.pdf", "My Files/pic.png"]);
         let stat = serde_json::json!({ "hash": "abc", "size": 1, "mtime": 1000 });
         std::fs::write(
-            dir.path().join(".moss/build.nosync/hashes.json"),
+            MossPaths::new(dir.path()).hashes(),
             serde_json::json!({
                 "files": { "index.html": "100644:a", "doc.pdf": "100644:a", "my-files/pic.png": "100644:a" },
                 "sources": { "index.md": stat, "doc.pdf": stat, "My Files/pic.png": stat },
@@ -448,7 +450,7 @@ mod tests {
         let missing = resolve_page_source("/missing.pdf", dir.path()).unwrap();
         assert!(missing.source_path.is_none() && missing.source_known);
         // Without a manifest, which file is served there is not known yet.
-        std::fs::remove_file(dir.path().join(".moss/build.nosync/hashes.json")).unwrap();
+        std::fs::remove_file(MossPaths::new(dir.path()).hashes()).unwrap();
         let unread = resolve_page_source("/doc.pdf", dir.path()).unwrap();
         assert!(unread.source_path.is_none() && !unread.source_known);
     }
@@ -477,7 +479,7 @@ mod tests {
     #[test]
     fn an_unreadable_map_still_finds_the_home_on_disk() {
         let dir = vault(&[], &[], &["index.md"]);
-        std::fs::write(dir.path().join(".moss/build.nosync/article-map.json"), "{ \"articles\": 7 }").unwrap();
+        std::fs::write(MossPaths::new(dir.path()).article_map(), "{ \"articles\": 7 }").unwrap();
         let r = resolve_page_source("", dir.path()).unwrap();
         assert!(r.source_path.unwrap().ends_with("index.md"));
     }
@@ -494,7 +496,7 @@ mod tests {
         let generated = resolve_page_source("rss/", dir.path()).unwrap();
         assert!(generated.source_known && generated.source_path.is_none() && generated.takeover.is_none(), "a readable map settles a generated page");
 
-        let map = dir.path().join(".moss/build.nosync/article-map.json");
+        let map = MossPaths::new(dir.path()).article_map();
         for state in ["a map in a format this moss cannot parse", "no map yet"] {
             if state == "no map yet" { std::fs::remove_file(&map).unwrap() } else { std::fs::write(&map, "{ \"articles\": 7 }").unwrap() }
             assert!(resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_path.is_some(), "{state}: a lossy slug, found by its expected address");
@@ -508,6 +510,7 @@ mod tests {
 
     /// The takeover branch: a URL no page backs, and what the editor offers.
     mod folder_home {
+        use crate::moss_paths::MossPaths;
         use super::*;
         use crate::editor::resolve::takeover::TakeoverKind;
 
@@ -523,7 +526,7 @@ mod tests {
         }
 
         fn write_map(dir: &Path, map: serde_json::Value) {
-            std::fs::write(dir.join(".moss/build.nosync/article-map.json"), map.to_string()).unwrap();
+            std::fs::write(MossPaths::new(dir).article_map(), map.to_string()).unwrap();
         }
 
         #[test]
@@ -540,7 +543,8 @@ mod tests {
             // open `apple.md` as the root's source.
             let parent = tempfile::tempdir().unwrap();
             let root = parent.path().join("wild garden");
-            std::fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::create_dir_all(MossPaths::new(&root).build_dir()).unwrap();
             write_map(&root, serde_json::json!({ "articles": {}, "pages": {} }));
             std::fs::write(root.join("apple.md"), "---\ntitle: Apple\n---\nbody").unwrap();
             std::fs::write(root.join("banana.md"), "---\ntitle: Banana\n---\nbody").unwrap();
@@ -635,7 +639,7 @@ mod tests {
         std::fs::write(staging.join("index.html"), "<title>Home</title>").unwrap();
         assert_eq!(pages_in(&paths.initial_serve_dir()).len(), 1, "before the first seal, staging is served");
 
-        std::fs::create_dir_all(paths.generation_dir("gen001")).unwrap();
+        paths.finish_test_generation("gen001");
         paths.set_current_ptr("gen001").unwrap();
         std::fs::write(staging.join("second.html"), "<title>Second</title>").unwrap();
         assert_eq!(pages_in(&staging).len(), 2);

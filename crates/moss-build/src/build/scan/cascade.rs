@@ -101,7 +101,7 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>, fields: &[moss_core:
                 continue;
             }
 
-            apply_cascade_values(doc, page, cascade, fields);
+            apply_cascade_values(doc, page, &format!("/{prefix}"), cascade, fields);
         }
     }
 
@@ -182,146 +182,97 @@ fn report_cascade_values(
 fn apply_cascade_values(
     doc: &mut ParsedDocument,
     page: &str,
+    from: &str,
     cascade: &std::collections::BTreeMap<String, serde_yaml::Value>,
     fields: &[moss_core::fields::FieldDecl],
 ) {
     for (key, value) in cascade {
         if !CASCADE_KEYS.contains(&key.as_str()) {
             if let Some(decl) = cascadable_field(fields, key) {
-                apply_declared_field(doc, decl, value, page);
+                if apply_declared_field(doc, decl, value, page) {
+                    record_inherited(doc, key, value, from);
+                }
             }
             continue;
         }
-        match key.as_str() {
-            "nav" => {
-                if doc.nav.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
-                        doc.nav = Some(v);
-                    }
-                }
-            }
+        // Each arm says whether it set a value, so `record_inherited` runs once for them all.
+        let took = match key.as_str() {
+            "nav" => doc.nav.is_none() && serde_yaml::from_value::<bool>(value.clone()).map(|v| doc.nav = Some(v)).is_ok(),
             "breadcrumb" => {
-                if doc.breadcrumb.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<moss_core::frontmatter_typed::BreadcrumbSetting>(value.clone()) {
-                        doc.breadcrumb = Some(v);
-                    }
-                }
+                doc.breadcrumb.is_none()
+                    && serde_yaml::from_value::<moss_core::frontmatter_typed::BreadcrumbSetting>(value.clone()).map(|v| doc.breadcrumb = Some(v)).is_ok()
             }
-            "footer" => {
-                if doc.footer.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
-                        doc.footer = Some(v);
-                    }
-                }
-            }
-            "children" => {
-                if doc.children.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
-                        doc.children = Some(v);
-                    }
-                }
-            }
+            "footer" => doc.footer.is_none() && serde_yaml::from_value::<bool>(value.clone()).map(|v| doc.footer = Some(v)).is_ok(),
+            "children" => doc.children.is_none() && serde_yaml::from_value::<bool>(value.clone()).map(|v| doc.children = Some(v)).is_ok(),
             "children_style" => {
-                if doc.children_style.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        doc.children_style = Some(moss_core::Resolved::cascade(v));
-                    }
-                }
+                doc.children_style.is_none()
+                    && serde_yaml::from_value::<String>(value.clone()).map(|v| doc.children_style = Some(moss_core::Resolved::cascade(v))).is_ok()
             }
             "children_group" => {
-                if doc.children_group.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        doc.children_group = Some(moss_core::Resolved::cascade(v));
-                    }
-                }
+                doc.children_group.is_none()
+                    && serde_yaml::from_value::<String>(value.clone()).map(|v| doc.children_group = Some(moss_core::Resolved::cascade(v))).is_ok()
             }
-            "children_depth" => {
-                if doc.children_depth.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        doc.children_depth = Some(v);
-                    }
-                }
-            }
+            "children_depth" => doc.children_depth.is_none() && serde_yaml::from_value::<String>(value.clone()).map(|v| doc.children_depth = Some(v)).is_ok(),
             "tags" => {
-                if doc.tags.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<Vec<String>>(value.clone()) {
-                        // Cascaded tags are declared metadata (folder
-                        // frontmatter), so they also derive term-page
-                        // membership — `fm_tags` is what `derive_terms`
-                        // reads, and `doc.tags == None` implies it is unset.
-                        doc.fm_tags = Some(v.clone());
-                        doc.tags = Some(v);
-                    }
-                }
+                doc.tags.is_none()
+                    && serde_yaml::from_value::<Vec<String>>(value.clone())
+                        .map(|v| {
+                            // Cascaded tags are declared metadata (folder
+                            // frontmatter), so they also derive term-page
+                            // membership — `fm_tags` is what `derive_terms`
+                            // reads, and `doc.tags == None` implies it is unset.
+                            doc.fm_tags = Some(v.clone());
+                            doc.tags = Some(v);
+                        })
+                        .is_ok()
             }
             "author" => {
                 // Read as the page's own `author:` is, so a cascaded byline links to its term page
                 // like a written one. A key the page writes, blank or not, keeps its own value.
-                if doc.author.is_empty() && !doc.raw_frontmatter.contains_key("author") {
-                    if let Ok(v) = moss_core::frontmatter_union::normalize_name_list(value) {
-                        doc.author = v;
-                    }
-                }
+                doc.author.is_empty()
+                    && !doc.raw_frontmatter.contains_key("author")
+                    && moss_core::frontmatter_union::normalize_name_list(value).map(|v| doc.author = v).is_ok()
             }
-            "description" => {
-                if doc.description.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        doc.description = Some(v);
-                    }
-                }
-            }
+            "description" => doc.description.is_none() && serde_yaml::from_value::<String>(value.clone()).map(|v| doc.description = Some(v)).is_ok(),
             "content_width" => {
-                if doc.content_width.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        if matches!(v.as_str(), "wide" | "full" | "screen") {
-                            doc.content_width = Some(v);
-                        }
-                    }
-                }
+                doc.content_width.is_none()
+                    && serde_yaml::from_value::<String>(value.clone())
+                        .ok()
+                        .filter(|v| matches!(v.as_str(), "wide" | "full" | "screen"))
+                        .map(|v| doc.content_width = Some(v))
+                        .is_some()
             }
             "title_block" => {
-                if doc.title_block.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        let allowed = moss_core::schema_fields::builtin_field("title_block").and_then(|f| f.enum_values).unwrap_or_default();
-                        if allowed.contains(&v.as_str()) {
-                            doc.title_block = Some(v);
-                        }
-                    }
-                }
+                let allowed = moss_core::schema_fields::builtin_field("title_block").and_then(|f| f.enum_values).unwrap_or_default();
+                doc.title_block.is_none()
+                    && serde_yaml::from_value::<String>(value.clone())
+                        .ok()
+                        .filter(|v| allowed.contains(&v.as_str()))
+                        .map(|v| doc.title_block = Some(v))
+                        .is_some()
             }
             "reader_controls" => {
-                if doc.reader_controls.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
-                        doc.reader_controls = Some(v);
-                    }
-                }
+                doc.reader_controls.is_none() && serde_yaml::from_value::<bool>(value.clone()).map(|v| doc.reader_controls = Some(v)).is_ok()
             }
             "sort" => {
-                if doc.sort.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<moss_core::sort::SortField>(value.clone()) {
-                        doc.sort = Some(v);
-                    }
-                }
+                doc.sort.is_none() && serde_yaml::from_value::<moss_core::sort::SortField>(value.clone()).map(|v| doc.sort = Some(v)).is_ok()
             }
             "syndicate" => {
                 // A page's own `syndicate:`, even an invalid one, is the page's say.
-                if doc.syndicate.is_none() && !doc.raw_frontmatter.contains_key("syndicate") {
-                    if let Ok(v) = serde_json::to_value(value).map_err(|e| e.to_string()).and_then(|v| crate::syndication::parse_choice(&v)) {
-                        doc.syndicate = Some(v);
-                    }
-                }
+                doc.syndicate.is_none()
+                    && !doc.raw_frontmatter.contains_key("syndicate")
+                    && serde_json::to_value(value)
+                        .map_err(|e| e.to_string())
+                        .and_then(|v| crate::syndication::parse_choice(&v))
+                        .map(|v| doc.syndicate = Some(v))
+                        .is_ok()
             }
             "timezone" => {
                 // Only an event that names no zone of its own takes the folder's, and
                 // only a zone name; `report_cascade_values` reports the rest.
-                if let Some(event) = doc.event.as_mut().filter(|e| e.timezone.is_none()) {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        let zone = v.trim();
-                        if crate::build::feeds::calendar::zone::is_known(zone) {
-                            event.timezone = Some(zone.to_string());
-                        }
-                    }
-                }
+                doc.event.as_mut().filter(|e| e.timezone.is_none()).is_some_and(|event| {
+                    serde_yaml::from_value::<String>(value.clone()).ok().filter(|v| crate::build::feeds::calendar::zone::is_known(v.trim())).map(|v| event.timezone = Some(v.trim().to_string())).is_some()
+                })
             }
             // `typesetting` is intentionally excluded from cascade — it's a site-level
             // setting (config.toml) applied globally via LayoutConfig, not something
@@ -332,8 +283,18 @@ fn apply_cascade_values(
             // `draft` and `listed` are intentionally excluded from cascade —
             // same policy: visibility is a per-page decision, not inherited.
             // (If folder-level off-feed is wanted later, add an arm here.)
-            _ => {} // Ignore unknown cascade keys
+            _ => false, // Ignore unknown cascade keys
+        };
+        if took {
+            record_inherited(doc, key, value, from);
         }
+    }
+}
+
+/// Note a value the page took from the folder at `from`, for the inventory.
+fn record_inherited(doc: &mut ParsedDocument, key: &str, value: &serde_yaml::Value, from: &str) {
+    if let Ok(value) = serde_json::to_value(value) {
+        doc.inherited.push(crate::build::emit::inventory::Inherited { name: key.to_string(), value, from: from.to_string() });
     }
 }
 
@@ -341,9 +302,9 @@ fn apply_cascade_values(
 /// value is. A value the page writes itself, blank or not, wins. So does a value
 /// an outer folder states, even one that does not fit, so a nested folder's value
 /// fills in only where no folder above has stated the field.
-fn apply_declared_field(doc: &mut ParsedDocument, decl: &moss_core::fields::FieldDecl, value: &serde_yaml::Value, page: &str) {
+fn apply_declared_field(doc: &mut ParsedDocument, decl: &moss_core::fields::FieldDecl, value: &serde_yaml::Value, page: &str) -> bool {
     if doc.declared_written.contains(&decl.name) || doc.declared.contains_key(&decl.name) || doc.field_errors.contains_key(&decl.name) {
-        return;
+        return false;
     }
     let file = doc.source_path.clone().unwrap_or_default();
     let lang = doc.lang;
@@ -354,12 +315,14 @@ fn apply_declared_field(doc: &mut ParsedDocument, decl: &moss_core::fields::Fiel
     match moss_core::fields::declare_one(decl, &file, Some(value), format) {
         Some(Ok(typed)) => {
             doc.declared.insert(decl.name.clone(), typed);
+            true
         }
         Some(Err(reason)) => {
             crate::build::cli_output::cli_warn!("[{file}] frontmatter: field '{}': {reason} (cascaded from {page})", decl.name);
             doc.field_errors.insert(decl.name.clone(), reason);
+            false
         }
-        None => {}
+        None => false,
     }
 }
 
@@ -414,6 +377,31 @@ mod tests {
             Some(true),
             "Grandchild should inherit nav: true from parent cascade"
         );
+    }
+
+    /// A page names what it took from a folder and from which, and nothing it set itself.
+    #[test]
+    fn a_page_records_the_values_it_took_and_the_folder_they_came_from() {
+        let mut posts = make_doc("Posts", "posts/index.html");
+        posts.cascade = Some(HashMap::from([
+            ("nav".to_string(), serde_yaml::to_value(false).unwrap()),
+            ("description".to_string(), serde_yaml::to_value("From posts").unwrap()),
+            ("content_width".to_string(), serde_yaml::to_value("wide").unwrap()),
+        ]));
+        let mut heron = make_doc("Heron", "posts/heron/index.html");
+        heron.description = Some("Its own".to_string());
+
+        let mut docs = vec![posts, heron, make_doc("About", "about/index.html")];
+        apply_cascade(&mut docs, &[]);
+
+        assert_eq!(
+            docs[1].inherited,
+            vec![
+                crate::build::emit::inventory::Inherited { name: "content_width".into(), value: serde_json::json!("wide"), from: "/posts/".into() },
+                crate::build::emit::inventory::Inherited { name: "nav".into(), value: serde_json::json!(false), from: "/posts/".into() },
+            ]
+        );
+        assert!(docs[0].inherited.is_empty() && docs[2].inherited.is_empty());
     }
 
     /// Descendant with explicit value is NOT overridden by cascade.

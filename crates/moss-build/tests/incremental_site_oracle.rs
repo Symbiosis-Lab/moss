@@ -27,6 +27,7 @@
 //! a browser. `MOSS_ORACLE_WORK` is where the clones go (default: the output).
 //! `MOSS_ORACLE_REPEAT` (default 3) is how many timed rebuilds each case gets.
 
+use moss_build::moss_paths::MossPaths;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -82,7 +83,7 @@ fn build_in(rt: &tokio::runtime::Runtime, root: &Path, trigger: BuildTrigger, ex
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder),
-        trigger,
+        trigger, reason: None,
         exits_after_build,
         site_url_override: None,
         server_port: None,
@@ -129,25 +130,23 @@ fn clone_source(src: &Path, dst: &Path) {
     // page from source. The content-addressed media store comes along: it is
     // keyed by source bytes, and re-encoding every video per clean build would
     // cost hours on a video-heavy site without testing anything rendered.
-    let moss = dst.join(".moss");
-    for sub in ["build.nosync", "build"] {
-        let _ = std::fs::remove_dir_all(moss.join(sub));
-    }
-    // Two per-machine caches under the build tree hold inputs, not render
-    // state: what the network answered for external links, and the local
+    let _ = std::fs::remove_dir_all(MossPaths::new(dst).build_dir());
+    let _ = std::fs::remove_dir_all(dst.join(".moss").join("build"));
+    // Two caches of this computer's hold inputs, not render state: what the network answered for external links, and the local
     // object store their downloaded covers (and other encoded bytes) live in.
     // A clean build that fetched them again would be judged on different input.
     // The incremental caches beside them (dependency, facade, hash index) stay out.
-    for cache in [".moss/build.nosync/cache/link-meta", ".moss/build.nosync/cache/local-objects"] {
-        if src.join(cache).is_dir() {
-            std::fs::create_dir_all(dst.join(cache).parent().unwrap()).unwrap();
-            copy_tree(&src.join(cache), &dst.join(cache));
+    let (from, to) = (MossPaths::new(src), MossPaths::new(dst));
+    for (cache, copy) in [(from.cache_link_meta(), to.cache_link_meta()), (from.cache_local_objects(), to.cache_local_objects())] {
+        if cache.is_dir() {
+            std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+            copy_tree(&cache, &copy);
         }
     }
 }
 
 fn staging(root: &Path) -> PathBuf {
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// Text outputs by bytes; everything else (images, video, fonts) by length,
@@ -276,8 +275,11 @@ fn phases(log: &[String]) -> serde_json::Value {
         if line.contains("full render:") {
             out.insert("full_render_cause".into(), line.split("full render:").nth(1).unwrap_or("").trim().into());
         }
-        // The verdict line, not the debug list of reparsed pages after it.
-        if line.starts_with("[incremental] parse cache") && !line.starts_with("[incremental] parse cache reparsed") {
+        // The verdict line, not the debug list of reparsed pages or the save line after it.
+        if line.starts_with("[incremental] parse cache")
+            && !line.starts_with("[incremental] parse cache reparsed")
+            && !line.starts_with("[incremental] parse cache: kept ")
+        {
             out.insert("parse_cache".into(), line.clone().into());
         }
     }

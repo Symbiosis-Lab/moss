@@ -18,7 +18,7 @@ fn site_with_escaping_link(page_body: &str) -> std::path::PathBuf {
 }
 
 fn build(root: &std::path::Path) -> site::Built {
-    site::build_turn(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full).expect("builds")
+    site::build_logged(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full).expect("builds")
 }
 
 #[cfg(unix)]

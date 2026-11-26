@@ -8,10 +8,11 @@ async fn sessions_slide_and_recent_admission_does_not_write() {
     records[0]["created"] = json!(secrets::now() - sessions::SESSION_SECONDS - 1);
     records[0]["last_seen"] = json!(secrets::now() - 301);
     std::fs::write(&f.session_path, serde_json::to_vec(&records).unwrap()).unwrap();
+    let before = secrets::now();
     assert_eq!(f.probe(&cookie).await, StatusCode::NOT_FOUND);
     let fresh = std::fs::read(&f.session_path).unwrap();
     let updated: Value = serde_json::from_slice(&fresh).unwrap();
-    assert!(updated[0]["last_seen"].as_u64().unwrap() >= secrets::now() - 1);
+    assert!(updated[0]["last_seen"].as_u64().unwrap() >= before);
     // Compact the JSON: even a same-second rewrite would change these bytes.
     let compact = serde_json::to_vec(&updated).unwrap();
     std::fs::write(&f.session_path, &compact).unwrap();
@@ -55,7 +56,7 @@ async fn token_mint_refuses_cookie_and_uses_same_live_auth() {
     let f = Fixture::new();
     let (_, cookie) = f.enrolled().await;
     let ctx = super::super::super::InvokeCtx::standalone();
-    let dir = Arc::new(std::sync::RwLock::new(f.site.clone()));
+    let dir = crate::moss_paths::Served::test_cell(f.site.clone());
     let token = ctx.bind(&dir).unwrap().token().to_string();
     let mut server = super::super::super::ServeConfig::new(dir, 62000);
     server.invoke = Some(ctx);

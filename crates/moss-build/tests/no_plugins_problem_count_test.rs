@@ -24,7 +24,7 @@ fn build_once(files: &[(&str, &str)], plugins: PluginMode) -> usize {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,

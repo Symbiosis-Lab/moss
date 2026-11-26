@@ -2,32 +2,8 @@
 //! ending in a sources section (`## Sources`, `## Quellen`, ...) gets the
 //! listing before that section.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
-use std::path::PathBuf;
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 /// Build a site whose `acme.md` claims the "Acme" partner term with the given
 /// frontmatter extras and body, and return that page's HTML.
@@ -42,8 +18,8 @@ fn claimed_page(extra_fm: &str, body: &str) -> String {
     write("index.md", "---\ntitle: Home\n---\n\nHello.\n");
     write("acme.md", &format!("---\ntitle: Acme\npartner_page: true\n{extra_fm}---\n\n{body}\n"));
     write("notes/first.md", "---\ntitle: First Note\npartner: [Acme]\n---\n\nNote.\n");
-    let result = build_sync(&tmp.to_string_lossy());
-    let html = fs::read_to_string(tmp.join(".moss/build.nosync/staging/acme/index.html"));
+    let result = crate::site::build_full(&tmp.to_string_lossy());
+    let html = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("acme/index.html"));
     let _ = fs::remove_dir_all(&tmp);
     assert!(result.is_ok(), "build failed: {result:?}");
     html.unwrap()

@@ -23,6 +23,10 @@
     "./model": {
       "import": "./dist/model/index.mjs",
       "types": "./dist/model/index.d.mts"
+    },
+    "./sphere": {
+      "import": "./dist/sphere/index.mjs",
+      "types": "./dist/sphere/index.d.mts"
     }
   },
   "files": [
@@ -34,6 +38,7 @@
     "dev": "tsdown --watch --no-clean",
     "test": "vitest run",
     "test:browser": "node ../../scripts/check-watercolor-endpoints.mjs",
+    "test:frames": "node ../../scripts/watercolor-frames.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

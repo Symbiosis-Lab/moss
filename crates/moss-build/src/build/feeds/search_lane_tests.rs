@@ -654,7 +654,7 @@ async fn a_one_shot_build_indexes_beside_the_background_phase() {
         progress: std::sync::Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
         watch: false, start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full, exits_after_build: true,
+        trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
         site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
     }).await.expect("fixture builds");
 

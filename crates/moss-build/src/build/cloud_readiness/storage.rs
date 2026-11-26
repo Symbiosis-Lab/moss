@@ -395,7 +395,7 @@ pub(crate) fn await_operation(
     path: &Path,
     policy: OperationPolicy,
     deadline: Duration,
-    cancel: &dyn Fn() -> bool,
+    owner: OperationOwner,
     on_wait: &dyn Fn(),
     attempt: Operation,
 ) -> Result<Arc<StorageValue>, Unavailable> {
@@ -406,9 +406,9 @@ pub(crate) fn await_operation(
         let operation = match policy { OperationPolicy::EditorDirectory { .. } => StorageOperation::ReadDirOpen, OperationPolicy::SourceWalk | OperationPolicy::SweepWalk { .. } => StorageOperation::WalkEntry, OperationPolicy::WatchTargets => StorageOperation::ReadDirOpen, OperationPolicy::CachePublication { .. } => StorageOperation::CachePublish };
         let waiting = Arc::new(StorageFailure::new(Some(path.to_path_buf()), operation,
             io::Error::new(io::ErrorKind::WouldBlock, "waiting for the cloud directory operation")));
-        return wait_for_operation(&super::PREFETCH, path, policy, deadline, cancel, on_wait, attempt, waiting);
+        return wait_for_operation(&super::PREFETCH, path, policy, deadline, owner, on_wait, attempt, waiting);
     }
-    await_operation_in(&super::PREFETCH, path, policy, managed_context, deadline, cancel, on_wait, attempt)
+    await_operation_in(&super::PREFETCH, path, policy, managed_context, deadline, owner, on_wait, attempt)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -434,9 +434,16 @@ pub(crate) enum OperationOwner {
 }
 
 impl OperationOwner {
+    /// The folder's registered session, looked up once at an entry point that
+    /// has no session of its own. A build passes the session it entered with
+    /// ([`of`](Self::of)), so a close after entry still cancels it.
     pub fn for_folder(path: &Path) -> Self {
         path.to_str().and_then(|path| crate::system::folder_session::registry().get(path))
-            .map(|session| Self::Folder(Arc::downgrade(&session))).unwrap_or(Self::Host)
+            .map(|session| Self::of(Some(&session))).unwrap_or(Self::Host)
+    }
+
+    pub fn of(session: Option<&Arc<crate::system::folder_session::FolderSession>>) -> Self {
+        session.map_or(Self::Host, |session| Self::Folder(Arc::downgrade(session)))
     }
 
     pub fn active(&self) -> bool {
@@ -472,11 +479,6 @@ pub(crate) struct OperationTask {
 }
 
 impl OperationTask {
-    pub fn new(key: &OperationKey, attempt: Operation) -> Self {
-        let owner = OperationOwner::for_folder(key.folder());
-        Self::from_request(OperationRequest { owner, attempt })
-    }
-
     pub fn from_request(request: OperationRequest) -> Self {
         Self { request, revision: None, last_entry: Default::default(), state: Mutex::new(OperationState { result: None, started_at: None, attempt_revision: None, last_failure: None, waiters: 1, deferred: false, superseding: None }) }
     }
@@ -523,7 +525,7 @@ fn await_operation_in(
     policy: OperationPolicy,
     managed: bool,
     deadline: Duration,
-    cancel: &dyn Fn() -> bool,
+    owner: OperationOwner,
     on_wait: &dyn Fn(),
     attempt: Operation,
 ) -> Result<Arc<StorageValue>, Unavailable> {
@@ -534,7 +536,7 @@ fn await_operation_in(
     if !recoverable_storage_failure(&first, managed, managed) {
         return Err(Unavailable { failure: first, pending: None });
     }
-    wait_for_operation(pool, path, policy, deadline, cancel, on_wait, attempt, first)
+    wait_for_operation(pool, path, policy, deadline, owner, on_wait, attempt, first)
 }
 
 fn admission_failure(pool: &crate::build::cloud_prefetch::Prefetcher, key: &OperationKey, first: Arc<StorageFailure>) -> Unavailable {
@@ -548,18 +550,18 @@ fn wait_for_operation(
     path: &Path,
     policy: OperationPolicy,
     deadline: Duration,
-    cancel: &dyn Fn() -> bool,
+    owner: OperationOwner,
     on_wait: &dyn Fn(),
     attempt: Operation,
     first: Arc<StorageFailure>,
 ) -> Result<Arc<StorageValue>, Unavailable> {
     on_wait();
-    if cancel() {
+    if !owner.active() {
         return Err(Unavailable { failure: first, pending: Some(Settled::Cancelled) });
     }
     let requested_at = Instant::now();
     let key = OperationKey { path: path.to_path_buf(), policy };
-    let Some(mut task) = pool.structural_operation(key.clone(), attempt.clone()) else {
+    let Some(mut task) = pool.structural_operation(key.clone(), owner.clone(), attempt.clone()) else {
         return Err(admission_failure(pool, &key, first));
     };
     let started = Instant::now();
@@ -574,7 +576,7 @@ fn wait_for_operation(
         }
         said = quiet;
         let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
-        if cancel() {
+        if !owner.active() {
             state.waiters -= 1;
             return Err(Unavailable { failure: state.last_failure.clone().unwrap_or(first), pending: Some(Settled::Cancelled) });
         }
@@ -589,7 +591,7 @@ fn wait_for_operation(
             if stale {
                 state.waiters -= 1;
                 drop(state);
-                let Some(fresh) = pool.structural_operation(key.clone(), attempt.clone()) else {
+                let Some(fresh) = pool.structural_operation(key.clone(), owner.clone(), attempt.clone()) else {
                     return Err(admission_failure(pool, &key, first));
                 };
                 task = fresh;
@@ -657,6 +659,7 @@ pub(crate) fn test_probe(path: &Path, operation: StorageOperation) -> Result<(),
 pub(crate) struct TestFault {
     root: PathBuf,
     key: (PathBuf, StorageOperation),
+    count: usize,
 }
 
 #[cfg(test)]
@@ -670,7 +673,34 @@ impl TestFault {
         faults.roots.insert(root.to_path_buf(), deadline);
         let key = (path.to_path_buf(), operation);
         faults.refusals.insert(key.clone(), (count, errno));
-        Self { root: root.to_path_buf(), key }
+        Self { root: root.to_path_buf(), key, count }
+    }
+
+    /// A handle that outlives borrows of the fault, to wait on its first refusal from another thread.
+    pub fn watch(&self) -> FaultWatch {
+        FaultWatch { key: self.key.clone(), count: self.count }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FaultWatch {
+    key: (PathBuf, StorageOperation),
+    count: usize,
+}
+
+#[cfg(test)]
+impl FaultWatch {
+    /// Block until the fault has refused a probe, so a caller acts only once the walk is waiting.
+    /// False if none came in 10 minutes: a loaded machine can take minutes to reach the walk.
+    pub fn wait_for_first_refusal(&self) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        while std::time::Instant::now() < deadline {
+            if test_faults().refusals.get(&self.key).is_some_and(|(remaining, _)| *remaining < self.count) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
     }
 }
 

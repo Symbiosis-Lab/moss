@@ -566,6 +566,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How far the lifted footnote sheet sits from its docked position (1 = away, 0 = docked). Written per-element at runtime by sidenotes.ts as the sheet scrolls back into its slot, and removed on dismiss. Not a theme hook: a hand-set value is overwritten on the next scroll frame.",
     },
     CustomProp {
+        name: "--moss-nav-toggle-size",
+        owner: ":root",
+        default: "2.25rem",
+        description: "The box of the header's search, language and theme buttons (the language toggle takes its height only). On a phone a breadcrumb header holds each of its rows at this height too, so the trail and the links stay the buttons' height and moving the buttons up beside the trail shifts nothing below; a theme that resizes the buttons sets it here rather than on each button.",
+    },
+    CustomProp {
+        name: "--moss-nav-phone",
+        owner: ".nav-content",
+        default: "unset",
+        description: "`1` in the header's phone band (wider than 20rem, narrower than 48rem), unset elsewhere: tells nav-split.ts it may try the tightened one-row header there. Not a theme hook.",
+    },
+    CustomProp {
         name: "--moss-nav-width",
         owner: "main-nav",
         default: "var(--moss-content-width)",
@@ -773,7 +785,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-contents-lane",
         owner: "body",
         default: "unset",
-        description: "The lane kept free for the contents list on a page with `contents: pictures`, from the window's left edge to a gutter before the text: `--moss-contents-inset` plus twice `--moss-contents-pad` plus `--moss-contents-row` plus `--moss-contents-gutter` (92px), set only where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, and unset everywhere else. Where it is set the page column narrows to `min(column, --moss-page-inline - 2 * lane)`, and, when the list also fits the window's height, the list is up and the floating bar stays away (the island's `data-ruler` is `on` or `lane`); the site runtime reads only whether it is set. The list's invisible hit strips end a gutter short of it. Not a theme hook.",
+        description: "The lane kept free for the contents list on a page with `contents: pictures`, from the window's left edge to a gutter before the text: `--moss-contents-inset` plus twice `--moss-contents-pad` plus `--moss-contents-row` plus `--moss-contents-gutter` (96px), set only where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, and unset everywhere else. Where it is set the page column narrows to `min(column, --moss-page-inline - 2 * lane)`, and, when the list also fits the window's height, the list is up and the floating bar stays away (the island's `data-ruler` is `on` or `lane`); the site runtime reads only whether it is set. The list's invisible hit strips end a gutter short of it. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-page-inline",
@@ -802,8 +814,8 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
         name: "--moss-contents-row",
         owner: "body",
-        default: "20px",
-        description: "The height of one row of the contents ruler, at rest and in its hit strip; the title surfaces and the lens derive their sizes from it. The site runtime assumes 20px, so a theme should leave it.",
+        default: "24px",
+        description: "The height of one row of the contents ruler, at rest and in its hit strip; the title surfaces and the lens derive their sizes from it. The site runtime assumes 24px, so a theme should leave it.",
     },
     CustomProp {
         name: "--moss-contents-measure",

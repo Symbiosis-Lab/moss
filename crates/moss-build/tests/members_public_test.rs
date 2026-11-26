@@ -1,4 +1,5 @@
 //! Invented restricted content must never reach any served artifact.
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::io::Read;
 use moss_build::build::BuildTrigger;
@@ -331,7 +332,7 @@ fn assert_absent(site: &site::Site, secret: &str) {
 }
 
 fn manifest_of(site: &site::Site) -> std::collections::HashMap<String, String> {
-    let hashes = fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap();
+    let hashes = fs::read_to_string(MossPaths::new(&site.root).hashes()).unwrap();
     let hashes: serde_json::Value = serde_json::from_str(&hashes).unwrap();
     hashes["files"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect()
 }
@@ -442,7 +443,7 @@ fn a_cascade_toggled_on_a_warm_site_moves_its_pages_into_and_out_of_gated() {
 /// build's profile record.
 fn unobserved_build(site: &site::Site) -> serde_json::Value {
     site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Unobserved).unwrap();
-    let profile = fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let profile = fs::read_to_string(MossPaths::new(&site.root).profile()).unwrap();
     serde_json::from_str(profile.lines().last().unwrap()).unwrap()
 }
 
@@ -453,7 +454,7 @@ fn count(record: &serde_json::Value, name: &str) -> u64 {
 fn assert_gated_manifest_matches_generation(site: &site::Site, build_kind: &str) {
     let manifest = manifest_of(site);
     // The bytes a deploy uploads: the sealed generation, not the preview stage.
-    let build = site.root.join(".moss/build.nosync");
+    let build = MossPaths::new(&site.root).build_dir();
     let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
     let gated: Vec<_> = manifest.iter().filter(|(path, _)| path.starts_with("_gated/")).collect();
     for name in ["_gated/maps/incidents/report/index.html", "_gated/maps/incidents/by-region.json"] {
@@ -489,7 +490,7 @@ fn a_public_page_that_embeds_a_gated_file_stops_the_build() {
     assert!(error.contains("maps/incidents/teaser.md embeds incidents.csv"), "{error}");
     assert!(error.contains("maps/incidents/crossed.md embeds ledger/ledger.csv"), "{error}");
     assert!(!error.contains("report.md"), "a page under the cascade may embed its file: {error}");
-    let staged = root.join(".moss/build.nosync/staging");
+    let staged = MossPaths::new(&root).staging_dir();
     if staged.exists() {
         for entry in walkdir::WalkDir::new(&staged).into_iter().map(Result::unwrap).filter(|e| e.file_type().is_file()) {
             let rel = entry.path().strip_prefix(&staged).unwrap().to_string_lossy().replace('\\', "/");
@@ -502,7 +503,7 @@ fn a_public_page_that_embeds_a_gated_file_stops_the_build() {
 
 #[test]
 fn a_members_cascade_on_a_page_that_is_not_a_folder_home_is_reported() {
-    let site = site::Site::new(&[
+    let site = site::LoggedSite::new(&[
         ("index.md", "---\ntitle: Home\n---\nHome.\n"),
         ("maps/index.md", "---\ntitle: Map\n---\nMap.\n"),
         ("maps/detail.md", "---\ntitle: Detail\ncascade: { members: subscribers }\n---\nDetail.\n"),
@@ -574,8 +575,8 @@ fn the_private_part_of_a_members_page_changes_no_public_file() {
 const SCRIPT: &str = "window.regions = {\"north-quay\": 2};\n";
 const NOTICE: &str = "maps/incidents/detail.js is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.";
 
-fn script_site(cascade: &str) -> site::Site {
-    site::Site::new(&[
+fn script_site(cascade: &str) -> site::LoggedSite {
+    site::LoggedSite::new(&[
         (".moss/config.toml", CONFIG),
         ("index.md", "---\ntitle: Harbour watch\n---\nWelcome.\n"),
         ("maps/incidents/index.md", &format!("---\npartial: true\ncascade: {{ members: {cascade} }}\n---\n")),
@@ -587,7 +588,7 @@ fn script_site(cascade: &str) -> site::Site {
 
 /// The published script, read from the sealed generation a deploy uploads, with its manifest entry.
 fn sealed_script(site: &site::Site) -> (String, Option<String>) {
-    let build = site.root.join(".moss/build.nosync");
+    let build = MossPaths::new(&site.root).build_dir();
     let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
     let bytes = fs::read_to_string(generation.join("maps/incidents/detail.js")).unwrap();
     (bytes, manifest_of(site).get("maps/incidents/detail.js").cloned())
@@ -610,7 +611,7 @@ fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchan
     assert!(!members.notes.iter().any(|line| line.contains("map.css") || line.contains("maps/regions.js")), "{:?}", members.notes);
     assert!(!public.notes.iter().any(|line| line.contains("published to everyone")), "{:?}", public.notes);
 
-    assert_eq!(members.rebuild_turn().notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
+    assert_eq!(members.rebuild_logged().notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
 }
 
 /// The paths the notes name, each of which must be in the manifest a deploy uploads.
@@ -627,7 +628,7 @@ fn assert_named_are_published(site: &site::Site, notes: &[String]) -> Vec<String
 /// lives in `.moss/theme/`), and scripts in folders a build leaves out.
 #[test]
 fn a_script_that_is_not_served_is_not_named() {
-    let site = site::Site::new(&[
+    let site = site::LoggedSite::new(&[
         ("index.md", "---\ntitle: Harbour watch\ncascade: { members: subscribers }\n---\nWelcome.\n"),
         ("script.js", SCRIPT),
         ("node_modules/charts/index.js", SCRIPT),

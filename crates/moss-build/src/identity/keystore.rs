@@ -4,12 +4,11 @@
 //! signs with it, and lists its keys — it never receives private bytes. Every
 //! name resolves inside the *caller's own* scope, so one caller cannot name or
 //! reach another's key. The scope is structural: it comes from who is calling
-//! (the plugin dispatch seam, or moss itself), never a parameter, so there is
-//! nothing to forge.
+//! (the plugin dispatch seam), never a parameter, so there is nothing to forge.
 //!
-//! The user's own identity key is one entry here too, at the reserved [`SYSTEM`]
-//! scope — the keystore is the general mechanism, and identity is its flagship
-//! caller. Plugin keys are separate keys at per-plugin scopes.
+//! Every entry belongs to a plugin. The folder's own identity key is not here:
+//! it lives in `.moss/identity/` (`identity::keypair`), and moss signs with it
+//! directly.
 //!
 //! Custody, not restriction: moss holds the bytes because
 //! `.moss/plugins/` is not gitignored, so a caller holding its own key bytes
@@ -49,35 +48,21 @@ impl Algorithm {
     }
 }
 
-/// The caller a key belongs to. Resolved host-side from the dispatch seam, never
-/// supplied by the caller.
+/// The plugin a key or secret belongs to, by its manifest name (= install-dir
+/// name). Resolved host-side from the dispatch seam, never supplied by the
+/// caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Scope {
-    /// The user's own identity — seta auth, Nostr, moderation.
-    System,
-    /// A plugin, by its manifest name (= install-dir name).
-    Plugin(String),
-}
-
-/// The reserved scope for the user's identity key.
-pub const SYSTEM: Scope = Scope::System;
+pub struct Scope(String);
 
 impl Scope {
-    /// A single, filesystem-safe path segment for the scope's storage dir.
-    pub(crate) fn dir_segment(&self) -> Result<String, KeystoreError> {
-        match self {
-            Scope::System => Ok("system".to_string()),
-            Scope::Plugin(id) => {
-                if id.is_empty()
-                    || id == "system"
-                    || id.contains(['/', '\\', '\0'])
-                    || id.contains("..")
-                {
-                    return Err(KeystoreError::InvalidScope);
-                }
-                Ok(id.clone())
-            }
-        }
+    /// The id names the scope's directory, by the same rule as an entry name.
+    /// Install names are already safe file names, so no older directory moves.
+    pub fn plugin(id: &str) -> Result<Self, KeystoreError> {
+        EntryName::new(id).map(|e| Self(e.file)).map_err(|_| KeystoreError::InvalidScope)
+    }
+
+    pub(crate) fn dir_segment(&self) -> &str {
+        &self.0
     }
 }
 
@@ -104,17 +89,121 @@ pub struct KeyInfo {
 /// the bytes (see the module header). A test in `build.rs` pins the coupling.
 pub const KEYS_DIRNAME: &str = "keys";
 
-/// An entry name that is about to become one path segment, in either store.
-/// Shared with [`super::secrets`] — the same name, the same rule.
-pub(crate) fn validate_entry_name(name: &str) -> Result<(), KeystoreError> {
-    if name.is_empty()
-        || name.contains(['/', '\\', '\0'])
-        || name.contains("..")
-        || name.len() > 128
-    {
-        return Err(KeystoreError::InvalidName);
+/// A name a plugin chose (scope, key, secret, channel) and the one file name
+/// it is stored under, in every store. A name is any string up to 128 bytes
+/// except one holding `/`, `\`, NUL or `..` (the trust boundary) or a Windows
+/// device name, whose stored form fits in 200 bytes. The file name percent-encodes every byte outside
+/// `[A-Za-z0-9._-]` and a trailing `.`, so it is legal on NTFS and the same
+/// on every OS: `.moss/keys` syncs between machines.
+pub(crate) struct EntryName {
+    pub(crate) file: String,
+    /// The name as macOS and Linux stored it before encoding, when that differs.
+    legacy: Option<String>,
+}
+
+const MAX_NAME_BYTES: usize = 128;
+/// Leaves `.<file>.pending.<pid>.<seq>` (the atomic write's temp name) under
+/// the 255-byte limit.
+const MAX_FILE_BYTES: usize = 200;
+
+impl EntryName {
+    pub(crate) fn new(name: &str) -> Result<Self, KeystoreError> {
+        if name.is_empty()
+            || name.contains(['/', '\\', '\0'])
+            || name.contains("..")
+            || name.len() > MAX_NAME_BYTES
+            || is_device_name(name)
+        {
+            return Err(KeystoreError::InvalidName);
+        }
+        let mut file = String::with_capacity(name.len());
+        for &b in name.as_bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-') {
+                file.push(b as char);
+            } else {
+                file.push_str(&format!("%{b:02X}"));
+            }
+        }
+        if file.ends_with('.') {
+            file.pop();
+            file.push_str("%2E");
+        }
+        if file.len() > MAX_FILE_BYTES {
+            return Err(KeystoreError::InvalidName);
+        }
+        // A raw name holding `%` could be another name's encoding, so it is
+        // never read as legacy; no stored name has one.
+        let legacy = (file != name && !name.contains('%')).then(|| name.to_string());
+        Ok(Self { file, legacy })
     }
-    Ok(())
+
+    /// The entry's path in `dir`, renaming a file stored under the raw name
+    /// (macOS and Linux) to the encoded one first; `present` is the caller's
+    /// existence check, so a store that counts a cloud placeholder as present
+    /// does here too. A rename that fails (an evicted placeholder) reads the
+    /// old file in place. Windows never opens a raw name: `a:b` there names a
+    /// stream of the file `a`.
+    pub(crate) fn path_in(&self, dir: &Path, present: impl Fn(&Path) -> bool) -> PathBuf {
+        let path = dir.join(&self.file);
+        if let Some(old) = self.legacy_in(dir) {
+            if !present(&path) && present(&old) {
+                return if std::fs::rename(&old, &path).is_ok() { path } else { old };
+            }
+        }
+        path
+    }
+
+    /// The raw-named file a store must also clear when it forgets the entry.
+    pub(crate) fn legacy_in(&self, dir: &Path) -> Option<PathBuf> {
+        if cfg!(unix) {
+            self.legacy.as_ref().map(|raw| dir.join(raw))
+        } else {
+            None
+        }
+    }
+
+    /// The name a stored file name stands for; a legacy raw name is itself.
+    pub(crate) fn decode(file: &str) -> String {
+        let bytes = file.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let escaped = (bytes[i] == b'%')
+                .then(|| bytes.get(i + 1..i + 3))
+                .flatten()
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            match escaped {
+                Some(b) => {
+                    out.push(b);
+                    i += 3;
+                }
+                None => {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(out).unwrap_or_else(|_| file.to_string())
+    }
+}
+
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, in any case and
+/// with any extension: Windows opens the device instead of a file.
+fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        s => {
+            s.len() == 4
+                && (s.starts_with("COM") || s.starts_with("LPT"))
+                && s.as_bytes()[3].is_ascii_digit()
+        }
+    }
+}
+
+fn key_present(path: &Path) -> bool {
+    path.exists() || crate::build::icloud::is_still_in_the_cloud(path)
 }
 
 /// The keystore rooted at a project's `.moss/`.
@@ -128,15 +217,12 @@ impl Keystore {
         Self { root: project_path.join(".moss").join(KEYS_DIRNAME) }
     }
 
-    fn key_dir(&self, scope: &Scope) -> Result<PathBuf, KeystoreError> {
-        Ok(self.root.join(scope.dir_segment()?))
+    fn key_dir(&self, scope: &Scope) -> PathBuf {
+        self.root.join(scope.dir_segment())
     }
 
     fn key_path(&self, scope: &Scope, name: &str) -> Result<PathBuf, KeystoreError> {
-        validate_entry_name(name)?;
-        // `<name>.<algo>` — the algorithm is part of the filename so a key's
-        // algorithm is fixed at creation and a mismatched request is caught.
-        Ok(self.key_dir(scope)?.join(name))
+        Ok(EntryName::new(name)?.path_in(&self.key_dir(scope), key_present))
     }
 }
 
@@ -157,7 +243,7 @@ impl Keystore {
         // `exists()` reads the user's key as absent and the branch below mints
         // a replacement over it — the same key-loss shape `Identity::exists`
         // guards against (the identity-file bug).
-        if path.exists() || crate::build::icloud::is_still_in_the_cloud(&path) {
+        if key_present(&path) {
             let stored = StoredKey::load(&path)?;
             if stored.algorithm != algorithm {
                 return Err(KeystoreError::AlgorithmMismatch);
@@ -171,7 +257,7 @@ impl Keystore {
 
     /// Every key in the caller's scope.
     pub fn list(&self, scope: &Scope) -> Result<Vec<KeyInfo>, KeystoreError> {
-        let dir = self.key_dir(scope)?;
+        let dir = self.key_dir(scope);
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -183,7 +269,7 @@ impl Keystore {
             if !path.is_file() {
                 continue;
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = EntryName::decode(&entry.file_name().to_string_lossy());
             let stored = StoredKey::load(&path)?;
             out.push(stored.info(name));
         }
@@ -202,7 +288,7 @@ impl Keystore {
         let path = self.key_path(scope, name)?;
         // See `get_or_create`: an evicted key is not a missing key, and
         // reporting `NotFound` for one would tell a plugin its identity is gone.
-        if !path.exists() && !crate::build::icloud::is_still_in_the_cloud(&path) {
+        if !key_present(&path) {
             return Err(KeystoreError::NotFound);
         }
         StoredKey::load(&path)?.sign(payload)
@@ -256,11 +342,8 @@ impl StoredKey {
     }
 
     fn save(&self, path: &Path) -> Result<(), KeystoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| KeystoreError::Io)?;
-        }
         let body = format!("{}\n{}\n", self.algorithm.as_wire(), hex::encode(self.secret));
-        write_private(path, body.as_bytes())
+        crate::infra::atomic_write::write_private_atomic(path, body).map_err(|_| KeystoreError::Io)
     }
 
     fn public_key(&self) -> Vec<u8> {
@@ -302,32 +385,6 @@ impl StoredKey {
     }
 }
 
-/// Write `bytes` to `path` with `0600` on Unix, created atomically so there is
-/// no window where the secret is world-readable. Mirrors `keypair.rs`.
-pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeystoreError> {
-    use std::io::Write;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/ — 0600 perms require this open, and the path is never cloud-evicted output
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|_| KeystoreError::Io)?;
-        f.write_all(bytes).map_err(|_| KeystoreError::Io)?;
-    }
-    #[cfg(not(unix))]
-    {
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/
-        let mut f = std::fs::File::create(path).map_err(|_| KeystoreError::Io)?;
-        f.write_all(bytes).map_err(|_| KeystoreError::Io)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,8 +399,8 @@ mod tests {
     #[test]
     fn get_or_create_is_idempotent() {
         let (_t, ks) = store();
-        let a = ks.get_or_create(&Scope::Plugin("ipfs".into()), "ipns", Algorithm::Ed25519).unwrap();
-        let b = ks.get_or_create(&Scope::Plugin("ipfs".into()), "ipns", Algorithm::Ed25519).unwrap();
+        let a = ks.get_or_create(&Scope::plugin("ipfs").unwrap(), "ipns", Algorithm::Ed25519).unwrap();
+        let b = ks.get_or_create(&Scope::plugin("ipfs").unwrap(), "ipns", Algorithm::Ed25519).unwrap();
         assert_eq!(a.public_key, b.public_key, "same name must return the same key");
         assert_eq!(a.algorithm, Algorithm::Ed25519);
         assert_eq!(a.public_key.len(), 32, "ed25519 public key is 32 bytes");
@@ -352,27 +409,26 @@ mod tests {
     #[test]
     fn scopes_are_isolated() {
         let (_t, ks) = store();
-        let a = ks.get_or_create(&Scope::Plugin("a".into()), "k", Algorithm::Ed25519).unwrap();
-        let b = ks.get_or_create(&Scope::Plugin("b".into()), "k", Algorithm::Ed25519).unwrap();
+        let a = ks.get_or_create(&Scope::plugin("a").unwrap(), "k", Algorithm::Ed25519).unwrap();
+        let b = ks.get_or_create(&Scope::plugin("b").unwrap(), "k", Algorithm::Ed25519).unwrap();
         assert_ne!(a.public_key, b.public_key, "same name in different scopes = different keys");
-        assert_eq!(ks.list(&Scope::Plugin("a".into())).unwrap().len(), 1);
-        assert_eq!(ks.list(&Scope::Plugin("a".into())).unwrap()[0].name, "k");
+        assert_eq!(ks.list(&Scope::plugin("a").unwrap()).unwrap().len(), 1);
+        assert_eq!(ks.list(&Scope::plugin("a").unwrap()).unwrap()[0].name, "k");
     }
 
     #[test]
-    fn system_scope_is_distinct_from_plugins() {
-        let (_t, ks) = store();
-        let sys = ks.get_or_create(&SYSTEM, "identity", Algorithm::Secp256k1Schnorr).unwrap();
-        let plug = ks.get_or_create(&Scope::Plugin("system".into()), "identity", Algorithm::Ed25519);
-        assert_eq!(plug, Err(KeystoreError::InvalidScope));
-        assert_eq!(sys.algorithm, Algorithm::Secp256k1Schnorr);
+    fn a_scope_is_one_path_segment() {
+        for id in ["", "../ipfs", "a/b", "a\\b", "a\0b"] {
+            assert_eq!(Scope::plugin(id), Err(KeystoreError::InvalidScope), "{id:?}");
+        }
+        assert!(Scope::plugin("ipfs").is_ok());
     }
 
     #[test]
     fn ed25519_sign_verifies() {
         use ed25519_dalek::{Signature, Verifier, VerifyingKey};
         let (_t, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         let key = ks.get_or_create(&scope, "ipns", Algorithm::Ed25519).unwrap();
         let msg = b"ipns record bytes";
         let sig = ks.sign(&scope, "ipns", msg).unwrap();
@@ -386,9 +442,10 @@ mod tests {
     fn secp256k1_schnorr_sign_verifies() {
         use k256::schnorr::{signature::Verifier, Signature, VerifyingKey};
         let (_t, ks) = store();
-        let key = ks.get_or_create(&SYSTEM, "identity", Algorithm::Secp256k1Schnorr).unwrap();
+        let scope = Scope::plugin("nostr").unwrap();
+        let key = ks.get_or_create(&scope, "identity", Algorithm::Secp256k1Schnorr).unwrap();
         let msg = b"nostr event id";
-        let sig = ks.sign(&SYSTEM, "identity", msg).unwrap();
+        let sig = ks.sign(&scope, "identity", msg).unwrap();
         let pk: [u8; 32] = key.public_key.as_slice().try_into().unwrap();
         let vk = VerifyingKey::from_bytes(&pk.into()).unwrap();
         let sig = Signature::try_from(sig.as_slice()).unwrap();
@@ -398,7 +455,7 @@ mod tests {
     #[test]
     fn algorithm_mismatch_is_refused() {
         let (_t, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         ks.get_or_create(&scope, "k", Algorithm::Ed25519).unwrap();
         assert_eq!(
             ks.get_or_create(&scope, "k", Algorithm::Secp256k1Schnorr),
@@ -407,9 +464,32 @@ mod tests {
     }
 
     #[test]
+    fn list_names_a_key_as_it_was_created() {
+        let (_t, ks) = store();
+        let scope = Scope::plugin("p").unwrap();
+        let made = ks.get_or_create(&scope, "a:b", Algorithm::Ed25519).unwrap();
+        let listed = ks.list(&scope).unwrap();
+        assert_eq!(listed, [made]);
+    }
+
+    /// Minting a fresh key over one stored under its raw name would lose the
+    /// user's key.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_stored_under_its_raw_name_is_the_same_key() {
+        let (tmp, ks) = store();
+        let scope = Scope::plugin("p").unwrap();
+        let made = ks.get_or_create(&scope, "id:alice", Algorithm::Ed25519).unwrap();
+        let dir = tmp.path().join(".moss").join("keys").join("p");
+        std::fs::rename(dir.join("id%3Aalice"), dir.join("id:alice")).unwrap();
+        let again = ks.get_or_create(&scope, "id:alice", Algorithm::Ed25519).unwrap();
+        assert_eq!(again.public_key, made.public_key);
+    }
+
+    #[test]
     fn keys_are_stored_privately_under_moss_and_names_are_bounded() {
         let (tmp, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         ks.get_or_create(&scope, "ipns", Algorithm::Ed25519).unwrap();
         let key_file = tmp.path().join(".moss").join("keys").join("ipfs").join("ipns");
         assert!(key_file.exists(), "key must be written under .moss/keys/<scope>/<name>");

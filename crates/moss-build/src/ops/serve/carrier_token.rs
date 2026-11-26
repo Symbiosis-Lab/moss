@@ -18,7 +18,8 @@
 //! ## The token, and why a local file delivers it
 //!
 //! moss mints one random token per vault the server binds and writes it to a
-//! **loopback-readable local file** under that vault. A client proves it is a genuine local
+//! **owner-readable local file** in this computer's folder record, outside the vault
+//! (see [`token_path`]). A client proves it is a genuine local
 //! process — a coding agent, a Playwright driver, moss's own tooling — by
 //! reading that file and echoing the token in a custom request header
 //! ([`TOKEN_HEADER`], `X-Moss-Token`). Two properties make this defeat the
@@ -26,7 +27,7 @@
 //!
 //!   * **A browser page cannot read a local file.** `fetch('file:///…')` is
 //!     blocked; there is no API that hands a web page the bytes of
-//!     `.moss/build.nosync/http-token`. So a page cannot learn the token.
+//!     the folder's `http-token` record on this computer. So a page cannot learn the token.
 //!   * **A browser page cannot forge the custom header cross-origin without a
 //!     CORS preflight** the server never answers. `X-Moss-Token` is not a
 //!     CORS-safelisted header, so any cross-origin `fetch` that sets it triggers
@@ -46,13 +47,12 @@
 //!    persists across restarts: a new server, a new token, and the old file
 //!    is overwritten.
 //! 2. **Publish** — [`publish`] writes the token to
-//!    `<vault>/.moss/build.nosync/http-token` (see [`token_path`]) in the same bind.
-//!    `.moss/build.nosync/` is cloud-EXCLUDED and regenerable
-//!    (`moss_paths::MOSS_PATH_RULES`), so the file never syncs to another
-//!    machine and is never left dataless by an eviction — and the write goes
-//!    through `build::io_utils::write_output`, so it lands via
-//!    temp+rename and never materializes a dataless destination.
-//! 3. **Obtain (client)** — a local client reads the whole file, trims it, and
+//!    the folder's `http-token` record on this computer (see [`token_path`]) in the same bind.
+//!    This local record stays outside synced and served output and survives cache
+//!    purges; `build::io_utils::write_output` lands it via temp+rename.
+//! 3. **Obtain (client)** — after successful publication, stderr emits exactly one
+//!    `HTTP carrier token file: <JSON-encoded absolute path>` line, even in quiet
+//!    mode. A local client JSON-decodes the path, reads and trims the file, and
 //!    sends the value as `X-Moss-Token`.
 //! 4. **Verify (server)** — [`constant_time_eq`] compares the header against the
 //!    session token in the mutation middleware; a miss is `401`.
@@ -77,12 +77,11 @@ use crate::moss_paths::MossPaths;
 /// forced through a preflight the server never approves.
 pub const TOKEN_HEADER: &str = "x-moss-token";
 
-/// The loopback-readable file the session token is published to, relative to the
-/// vault root. Under `.moss/build.nosync/` deliberately: that tree is cloud-excluded
-/// and regenerable (never synced, never left dataless), so the secret cannot
-/// leak to a second machine and is always readable while the server runs.
+/// The file the session token is published to: in this computer's record for
+/// the folder, outside it, so the secret never reaches a second machine and no
+/// cache purge removes it while the server runs.
 pub fn token_path(vault_root: &Path) -> PathBuf {
-    MossPaths::new(vault_root).build_dir().join("http-token")
+    MossPaths::new(vault_root).http_token()
 }
 
 /// The token a local client reads from [`token_path`], or `None` while no
@@ -109,9 +108,8 @@ pub fn mint() -> String {
     )
 }
 
-/// Publish `token` to [`token_path`] so a local client can read it. Writes
-/// through `build::io_utils::write_output` (temp+rename, dataless-safe) because
-/// the destination is under `.moss/build.nosync/`.
+/// Publish `token` to [`token_path`] so a local client can read it, by temp
+/// and rename.
 ///
 /// The error string names the path only — never the token bytes.
 pub fn publish(vault_root: &Path, token: &str) -> Result<(), String> {
@@ -197,14 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn token_path_is_under_the_cloud_excluded_build_tree() {
-        let vault = Path::new("/tmp/some-vault");
-        let p = token_path(vault);
-        assert!(
-            p.ends_with(".moss/build.nosync/http-token"),
-            "token must live under the regenerable, cloud-excluded build tree; got {}",
-            p.display()
-        );
+    fn the_token_lives_outside_the_folder_in_its_record() {
+        let vault = tempfile::tempdir().unwrap();
+        let p = token_path(vault.path());
+        assert_eq!(p, MossPaths::new(vault.path()).record_dir().join("http-token"));
+        assert!(!p.starts_with(std::fs::canonicalize(vault.path()).unwrap()), "token must never sit in the synced folder; got {}", p.display());
     }
 
     #[test]
@@ -277,7 +272,7 @@ use axum::{
 /// `super::yield_route`), which need the same 401 and no body at all.
 pub(crate) async fn require_carrier_token(
     ctx: super::invoke::InvokeCtx,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     mut request: Request<Body>,
     next: axum::middleware::Next,
 ) -> Response {
@@ -329,7 +324,7 @@ pub(crate) async fn require_carrier_token(
 /// same check directly rather than growing a second token comparison.
 pub(crate) fn admit(
     ctx: &super::invoke::InvokeCtx,
-    site_dir: &Arc<RwLock<PathBuf>>,
+    site_dir: &crate::moss_paths::ServedCell,
     request: &Request<Body>,
 ) -> Result<Arc<super::invoke::Session>, Response> {
     // Bind BEFORE comparing: across a folder switch the presented token must
@@ -370,7 +365,7 @@ pub(crate) fn unauthorized() -> Response {
 /// Token gate for `GET /__moss/events` — [`admit`] and nothing else.
 pub(crate) async fn require_carrier_token_only(
     ctx: super::invoke::InvokeCtx,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     mut request: Request<Body>,
     next: axum::middleware::Next,
 ) -> Response {

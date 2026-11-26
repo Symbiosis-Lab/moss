@@ -9,6 +9,7 @@
 //! edit. The card is an output of the page render that just ran, so nothing
 //! else can be waiting on it.
 
+use moss_build::moss_paths::MossPaths;
 use crate::served_child;
 
 use served_child::*;
@@ -48,7 +49,7 @@ fn settle(child: &ServedChild, quiet: Duration) {
 }
 
 fn sealed_files(site: &Path) -> BTreeMap<String, String> {
-    let path = site.join(".moss/build.nosync/hashes.json");
+    let path = MossPaths::new(site).hashes();
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     json["files"]
@@ -60,7 +61,7 @@ fn sealed_files(site: &Path) -> BTreeMap<String, String> {
 }
 
 fn og_image(site: &Path, page: &str) -> String {
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/staging").join(page)).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(site).staging_dir().join(page)).unwrap();
     let marker = "og:image\" content=\"";
     let start = html.find(marker).unwrap_or_else(|| panic!("{page} has no og:image:\n{html}")) + marker.len();
     let end = start + html[start..].find('"').unwrap();
@@ -127,7 +128,7 @@ fn a_title_edit_rebuilds_once_and_matches_a_clean_build() {
         watched_files.contains_key(&card_after),
         "og:image {card_after} must be a sealed output: {watched_files:?}"
     );
-    assert!(site.join(".moss/build.nosync/staging").join(&card_after).is_file());
+    assert!(MossPaths::new(&site).staging_dir().join(&card_after).is_file());
     drop(watched);
 
     // A clean build of the edited vault, same mode, same source mtimes.

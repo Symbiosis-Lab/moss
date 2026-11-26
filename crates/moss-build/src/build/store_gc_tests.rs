@@ -321,19 +321,20 @@ fn sweep_refires_once_the_store_has_roughly_doubled() {
 #[test]
 fn watermark_round_trips_through_disk() {
     let tmp = tempfile::tempdir().unwrap();
-    assert_eq!(load_watermark(tmp.path()), None);
-    save_watermark(tmp.path(), 4_242);
-    assert_eq!(load_watermark(tmp.path()), Some(4_242));
+    let p = tmp.path().join("cache").join("gc-watermark.json");
+    assert_eq!(load_watermark(&p), None);
+    save_watermark(&p, 4_242);
+    assert_eq!(load_watermark(&p), Some(4_242));
 }
 
 #[test]
 fn corrupt_watermark_reads_as_never_swept() {
     let tmp = tempfile::tempdir().unwrap();
-    let p = watermark_path(tmp.path());
+    let p = tmp.path().join("cache").join("gc-watermark.json");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, b"{ not json").unwrap();
     assert_eq!(
-        load_watermark(tmp.path()),
+        load_watermark(&p),
         None,
         "an unreadable watermark must degrade to one extra sweep, not a panic"
     );
@@ -342,10 +343,10 @@ fn corrupt_watermark_reads_as_never_swept() {
 #[test]
 fn a_watermark_from_before_source_copies_moved_reads_as_never_swept() {
     let tmp = tempfile::tempdir().unwrap();
-    let p = watermark_path(tmp.path());
+    let p = tmp.path().join("cache").join("gc-watermark.json");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, br#"{"objects_after_gc":6811}"#).unwrap();
-    assert_eq!(load_watermark(tmp.path()), None, "the first sweep that moves source copies must not wait for growth");
+    assert_eq!(load_watermark(&p), None, "the first sweep that moves source copies must not wait for growth");
 }
 
 /// A writer stores blobs and transform records before the hash index that
@@ -455,7 +456,8 @@ fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
 
 
 /// Every record kept beside a generation goes with it: its original
-/// identities, its preview-only list, its article map and its seed record.
+/// identities, its preview-only list, its article map, its seed record and
+/// its promotion record.
 #[test]
 fn generation_receipts_lifetime_follows_their_generation() {
     let (_temp, generations) = make_generations(&["old", "current"]);
@@ -464,6 +466,7 @@ fn generation_receipts_lifetime_follows_their_generation() {
         crate::build::manifest::publish_view::receipt_path(&generations, "old"),
         crate::build::manifest::publish_view::articles_path(&generations, "old"),
         WholeGeneration::record_path(&generations, "old"),
+        crate::infra::folder_lock::promotion_record_path(&generations, "old"),
     ];
     for receipt in &receipts {
         std::fs::write(receipt, b"receipt").unwrap();

@@ -2,6 +2,7 @@
 //! case builds a real folder through the blocking render, the same entry the preview and the
 //! snapshot suite use, so what is asserted is what a site would serve.
 
+use crate::moss_paths::MossPaths;
 use crate::build::cli_output::take_cli_problems;
 use crate::build::render::blocking::SiteConfig;
 use std::fs;
@@ -39,7 +40,7 @@ fn build(files: &[(&str, &str)]) -> Built {
     let dir = tempfile::Builder::new().prefix("moss_redirect_table_").tempdir().unwrap();
     fs::write(dir.path().join("index.md"), HOME).unwrap();
     write_all(dir.path(), files);
-    let out = dir.path().join(".moss").join("build.nosync").join("site");
+    let out = MossPaths::new(dir.path()).build_dir().join("site");
     fs::create_dir_all(&out).unwrap();
     let structure = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
     let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));

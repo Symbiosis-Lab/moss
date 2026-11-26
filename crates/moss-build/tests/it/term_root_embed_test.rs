@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const DISTRICTS: &str = "\n[terms.districts]\nfields = [\"district\"]\ncount = \"{n} photograph|{n} photographs\"\n";
 
@@ -14,7 +14,7 @@ fn photo(stem: &str, district: &str, day: u8) -> (String, String) {
     )
 }
 
-fn harbour(home: &str, extra: &[(&str, &str)]) -> Site {
+fn harbour(home: &str, extra: &[(&str, &str)]) -> LoggedSite {
     let photos = [
         photo("quay", "Dockside", 1),
         photo("crane", "Dockside", 2),
@@ -24,7 +24,7 @@ fn harbour(home: &str, extra: &[(&str, &str)]) -> Site {
     let mut files: Vec<(&str, &str)> = vec![("index.md", home), ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n")];
     files.extend(photos.iter().map(|(p, b)| (p.as_str(), b.as_str())));
     files.extend_from_slice(extra);
-    Site::with_config(DISTRICTS, &files)
+    LoggedSite::with_config(DISTRICTS, &files)
 }
 
 fn cards(html: &str) -> Vec<(String, String)> {
@@ -112,7 +112,7 @@ fn an_edition_root_embeds_that_editions_terms() {
 
 #[test]
 fn a_kind_without_terms_still_warns() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         DISTRICTS,
         &[("index.md", "---\ntitle: Home\nchildren: false\n---\n\n![[/districts/|style:grid]]\n")],
     );

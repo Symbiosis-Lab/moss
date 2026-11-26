@@ -64,6 +64,36 @@ pub mod vault;
 #[cfg(test)]
 pub(crate) static ENV_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// [`ENV_TEST_MUTEX`] held with `MOSS_ENV` naming one environment, for a test
+/// whose result depends on which one it is: a server override on its own
+/// (`MOSS_SETA_URL`, which the mock servers set) reads as the local
+/// environment. The variable is put back on drop.
+#[cfg(test)]
+pub(crate) struct PinnedEnvironment {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    before: Option<String>,
+}
+
+#[cfg(test)]
+impl PinnedEnvironment {
+    pub(crate) fn pin(env: config::environment::HostingEnvironment) -> Self {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let before = std::env::var("MOSS_ENV").ok();
+        std::env::set_var("MOSS_ENV", env.name());
+        Self { _lock, before }
+    }
+}
+
+#[cfg(test)]
+impl Drop for PinnedEnvironment {
+    fn drop(&mut self) {
+        match self.before.take() {
+            Some(name) => std::env::set_var("MOSS_ENV", name),
+            None => std::env::remove_var("MOSS_ENV"),
+        }
+    }
+}
+
 /// Read one raw HTTP/1.1 request off `stream` — headers through the blank
 /// line, then exactly `Content-Length` more body bytes (0 if absent or
 /// unparsable) — without answering it. Returns the raw request bytes read,

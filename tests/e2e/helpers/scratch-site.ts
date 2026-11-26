@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { openCrateDir } from "../../support/crate-paths";
 import { resolveMossBin } from "../../support/moss-bin";
+import { pruneUnnamed } from "./prune-unnamed.mjs";
 
 // The dirs moss-build embeds its site scripts from, two of the outputs of
 // `scripts/build-backend-scripts.mjs`'s BUNDLES table, so the stamp below
@@ -101,7 +102,7 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   const stampPath = path.join(siteDir, ".moss/build-stamp.json");
   // The stamp hashes only the spec, so output built with a page now pruned
   // would pass as fresh; without a stamp every process waits for a rebuild.
-  if (pruneUnnamed(siteDir, spec.files)) fs.rmSync(stampPath, { force: true });
+  if (pruneUnnamed(siteDir, Object.keys(spec.files))) fs.rmSync(stampPath, { force: true });
   for (const [rel, content] of Object.entries(spec.files)) {
     writeOrRemove(path.join(siteDir, rel), content);
   }
@@ -145,15 +146,15 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
     // measurements, say) and a gate could not go red for a change in how they
     // are computed.
     fs.rmSync(path.join(siteDir, ".moss/cache"), { recursive: true, force: true });
-    execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins`, {
+    const report = execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins --json`, {
       cwd: siteDir,
-      stdio: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
       env: buildEnv(spec, siteDir),
     });
-    const builtDir = findBuiltDir(siteDir);
+    const builtDir: string | undefined = JSON.parse(report.toString("utf8")).output;
     if (!builtDir) {
-      throw new Error(`${tag} no build output under ${siteDir}/.moss/build/ after a build`);
+      throw new Error(`${tag} the build of ${siteDir} named no output: ${report}`);
     }
     if (spec.probe) {
       const indexHtml = fs.readFileSync(path.join(builtDir, "index.html"), "utf8");
@@ -290,19 +291,31 @@ export function syntheticTestClip(
 ): Buffer {
   // The original 2 s `testsrc` clip keeps its cache name, so existing caches stay valid.
   const tag = seconds === 2 && source === "testsrc" && !rich ? "" : `-${source}-${seconds}s${rich ? "-rich" : ""}`;
-  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/clip-${width}x${height}${tag}.mp4`);
+  return cachedFfmpeg(
+    `clip-${width}x${height}${tag}.mp4`,
+    `-f lavfi -i "${source}=size=${width}x${height}:rate=15${rich ? ",noise=alls=25:allf=t" : ""}" -t ${seconds} ` +
+      `${rich ? "-c:v libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k " : ""}-pix_fmt yuv420p`,
+    `the ${width}x${height} test clip`,
+  );
+}
+
+/**
+ * `ffmpeg <args> <output>` once per worktree, cached under target/test-tmp/fixtures.
+ * Gates running in parallel can ask for the same file, so ffmpeg writes a file of
+ * this process's own and renames it into place: no reader sees half a file.
+ */
+function cachedFfmpeg(name: string, args: string, what: string): Buffer {
+  const cachePath = path.join(WORKTREE, "target/test-tmp/fixtures", name);
   if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  // The extension stays last: ffmpeg picks the output format from it.
+  const tmp = path.join(path.dirname(cachePath), `.${process.pid}-${name}`);
   try {
-    execSync(
-      `ffmpeg -y -f lavfi -i "${source}=size=${width}x${height}:rate=15${rich ? ",noise=alls=25:allf=t" : ""}" -t ${seconds} ` +
-        `${rich ? "-c:v libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k " : ""}-pix_fmt yuv420p "${cachePath}"`,
-      { stdio: "pipe" },
-    );
+    execSync(`ffmpeg -y ${args} "${tmp}"`, { stdio: "pipe" });
+    fs.renameSync(tmp, cachePath);
   } catch (e) {
-    throw new Error(
-      `could not generate the ${width}x${height} test clip — is ffmpeg on PATH? (${(e as Error).message})`,
-    );
+    fs.rmSync(tmp, { force: true });
+    throw new Error(`could not generate ${what} — is ffmpeg on PATH? (${(e as Error).message})`);
   }
   return fs.readFileSync(cachePath);
 }
@@ -314,42 +327,14 @@ export function syntheticTestClip(
  * on. For the hero-overlay-legibility gate, which needs a real decoded
  * image (moss's dominant-colour scan reads actual pixels) rather than the
  * hand-set `data-hero-tone` the hero-tone gate above uses. Shells out to
- * `ffmpeg`'s `drawgrid` filter — same dependency and caching shape as
- * `syntheticTestClip` above, which already requires it be on PATH.
+ * `ffmpeg`'s `drawgrid` filter, cached like `syntheticTestClip`.
  */
 export function syntheticBusyImage(width: number, height: number): Buffer {
-  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/busy-${width}x${height}.png`);
-  if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
-  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  try {
-    execSync(
-      `ffmpeg -y -f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" ` +
-        `-frames:v 1 -update 1 "${cachePath}"`,
-      { stdio: "pipe" },
-    );
-  } catch (e) {
-    throw new Error(
-      `could not generate the ${width}x${height} busy image — is ffmpeg on PATH? (${(e as Error).message})`,
-    );
-  }
-  return fs.readFileSync(cachePath);
-}
-
-/** A renamed or dropped page would otherwise still be built. True when it
- *  removed one. */
-function pruneUnnamed(siteDir: string, files: ScratchSiteSpec["files"]): boolean {
-  if (!fs.existsSync(siteDir)) return false;
-  let pruned = false;
-  const named = new Set(Object.keys(files).map((rel) => path.normalize(rel)));
-  for (const rel of fs.readdirSync(siteDir, { recursive: true }) as string[]) {
-    if (rel.split(path.sep).some((part) => part.startsWith("."))) continue;
-    const abs = path.join(siteDir, rel);
-    if (!named.has(rel) && fs.statSync(abs).isFile()) {
-      fs.rmSync(abs);
-      pruned = true;
-    }
-  }
-  return pruned;
+  return cachedFfmpeg(
+    `busy-${width}x${height}.png`,
+    `-f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" -frames:v 1 -update 1`,
+    `the ${width}x${height} busy image`,
+  );
 }
 
 function writeOrRemove(filePath: string, content: string | Buffer | null): void {
@@ -368,22 +353,3 @@ function writeOrRemove(filePath: string, content: string | Buffer | null): void 
   fs.writeFileSync(filePath, content, "utf8");
 }
 
-/**
- * `.moss/build.nosync/current` is a symlink re-pointed at a new
- * `generations/<id>/` every build. `staging/` is the fallback for a build
- * that did not ship. Per-machine output moved from `.moss/build` to
- * `.moss/build.nosync` (moss_paths.rs's `build_dir()`) while this helper
- * still pointed at the old name, so every GATES_BUILD gate failed
- * `no build output` on a fresh scratch site — there was never a legacy
- * `.moss/build` to migrate from in the first place. See moss_paths.rs's
- * `current_ptr`/`staging_dir` for the paths this mirrors.
- */
-function findBuiltDir(siteDir: string): string | null {
-  const currentLink = path.join(siteDir, ".moss/build.nosync/current");
-  if (fs.existsSync(currentLink)) {
-    const target = fs.realpathSync(currentLink);
-    if (fs.statSync(target).isDirectory()) return target;
-  }
-  const staging = path.join(siteDir, ".moss/build.nosync/staging");
-  return fs.existsSync(staging) ? staging : null;
-}

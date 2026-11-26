@@ -28,7 +28,8 @@ Then, in Obsidian, open Settings → Community plugins, turn off Restricted mode
 
 On desktop:
 
-- "moss: Preview this folder" or the globe in the ribbon previews the open note's site; "Preview with moss" in a folder's menu previews that folder's site, or the folder itself when no site holds it. The site shows in a side pane. While it runs, the status bar says so; click it to show the pane. "moss: Stop preview" or closing the pane stops it.
+- "moss: Preview this folder" or the globe in the ribbon previews the open note's site; "Preview with moss" in a folder's menu previews that folder's site, or the folder itself when no site holds it. The site shows in a pane beside the note, on the page of the note you have open: it follows you to another note in the same site, shows an edit once Obsidian has saved it, and keeps the passage you are writing in view. Pin the pane to hold its page. A moss folder carries the moss mark in the file tree. While the preview runs, the status bar says so; click it to show the pane. "moss: Stop preview" or closing the pane stops it.
+- The pane's header has two buttons while a page shows. "Open in browser" opens that page in your browser, and is also the command "moss: Open in browser". "Publish this folder" hands the previewed site to the moss app.
 - "moss: Publish this folder" hands the open note's site to the moss app, which publishes it to its address, or to mosspub.com the first time. The plugin itself publishes nothing.
 
 ## What gets published
@@ -39,7 +40,7 @@ Every note in the site's folder becomes a page, except notes marked `draft: true
 
 Page checking and preview read the vault through Obsidian's Vault API and do not write files. The one-page preview includes page content and CSS; it does not run site scripts or build the site's navigation and listings.
 
-The desktop preview runs the moss program as a child process with the site's folder as its working folder. It writes only under that folder's `.moss/` (asking once, the first time) and reads the notes. The preview pane loads its local server. A note's `uid:` line is written when the moss app first publishes it. The plugin collects nothing.
+The desktop preview runs the moss program as a child process with the site's folder as its working folder. It writes only under that folder's `.moss/` (asking once, the first time) and reads the notes. The preview pane loads its local server, and the plugin asks that server, on this computer only, which page a note builds to and when the site was rebuilt. A note's `uid:` line is written when the moss app first publishes it. The plugin collects nothing.
 
 ## Tests
 

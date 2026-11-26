@@ -3,6 +3,7 @@
 //! the real pipeline, because the snapshot-aware image path is where the title
 //! used to be dropped.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,30 +11,6 @@ fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, body).unwrap();
-}
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
 }
 
 
@@ -65,8 +42,8 @@ fn an_image_title_becomes_the_img_title_attribute() {
         "index.md",
         "---\ntitle: Home\n---\n\n![Caption words](photos/a.png \"Hover \\\"words\\\" style=x\")\n\nText ![Inline alt](photos/a.png \"Inline title\") here.\n\n![No title](photos/a.png)\n\n:::gallery\n![G alt](photos/a.png \"Gallery title\")\n:::\n",
     );
-    build_sync(&root.to_string_lossy()).expect("build failed");
-    let html = fs::read_to_string(root.join(".moss/build.nosync/staging/index.html")).unwrap();
+    crate::site::build_full(&root.to_string_lossy()).expect("build failed");
+    let html = fs::read_to_string(MossPaths::new(&root).staging_dir().join("index.html")).unwrap();
 
     assert!(html.contains(r#"title="Hover &quot;words&quot; style=x""#), "figure image keeps its title: {html}");
     assert!(html.contains("<figcaption>Caption words</figcaption>"), "the bracket text stays the caption");

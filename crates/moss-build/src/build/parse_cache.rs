@@ -18,25 +18,30 @@
 //! inherited cascade/translation state forward, which is why the boundary is
 //! the whole soundness argument here.
 //!
-//! # Why the store is in-memory, not a `parse-cache.json`
+//! # Where the store lives
 //!
-//! The design doc proposed a file mirroring `HashIndex`/`FacadeCache`. Two
-//! facts moved it in-process instead:
+//! In memory for the life of the process, holding ONE root's entries (a
+//! folder switch replaces it rather than accumulating), and in a file kept
+//! for the next process (`persist`). The app proves an unchanged site from
+//! its seal when it opens and builds nothing, so without the file the first
+//! edit of every session would parse every page.
 //!
-//! 1. `ParsedDocument` is not round-trippable through serde. `body_plan`
-//!    (what the render phase actually renders) and `outgoing_links`
-//!    are `#[serde(skip)]`, and `BodyPlan`/`OutgoingLink` do not implement
-//!    `Serialize` at all. A JSON cache would silently replay documents with no
-//!    body plan, i.e. HTML missing every grid/cover enhancement — the exact
-//!    "silently stale" failure this cache must not have. Making the whole
-//!    moss-core `Block` tree serializable is a far larger change than this cache.
-//! 2. A file would never be read anyway. The cache is only ever consulted under
-//!    `BuildTrigger::ContentOnly`, which only the watch loop produces, inside a
-//!    long-lived process. Every cross-process entry point (`moss build`,
-//!    `moss preview`, deploy) passes `Full` and would cold-miss by construction.
+//! A sealed build hands its entries to its own seal, which writes them once
+//! that generation is promoted: off the edit path, in the seal's debounced
+//! phase, which a folder close, switch or quit also completes. The file names
+//! that generation. A process reads it only at its first eligible build of
+//! the root, and only when a proof showed that nothing but page text moved
+//! since that same seal ([`note_proven_seal`]): the open's stop at its
+//! entry, or a build proved from the manifest. The per-page checks below then
+//! run as for an entry kept in memory. Without that proof an image could have
+//! changed between the two processes while no page did, and a replayed page
+//! would carry the old image's dimensions.
 //!
-//! So the cache lives for the life of the dev-server process and holds ONE
-//! root's entries (a folder switch replaces it rather than accumulating).
+//! `persist` names every `ParsedDocument` field explicitly, so a new field
+//! requires a capture decision. Supported values use its own serde shape plus
+//! the fields that shape skips. Typed fields, AST-backed render plans and
+//! later-pass term cards, term lines or section accents are not kept: a page
+//! holding any of them is parsed again.
 //!
 //! # Validity
 //!
@@ -126,7 +131,7 @@
 //! of its own text (plus two process-wide constants), so a HIT, when there is
 //! one, is correct forever — there is no per-build eligibility to gate a
 //! lookup on, unlike `entries` above. RETENTION is a separate question, and
-//! it does share `STORE`'s shape: [`math_cache_finish_build`] persists a
+//! it does share `ROOT`'s shape: [`math_cache_finish_build`] persists a
 //! root-scoped snapshot that gets replaced wholesale on a root switch, the
 //! same as `entries`, and additionally drops whichever of a root's own
 //! equations are no longer in its corpus — see that function's doc for why
@@ -143,7 +148,7 @@ use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(test)]
 use std::{cell::Cell, sync::MutexGuard};
 
@@ -159,7 +164,7 @@ struct ParseCacheEntry {
 }
 
 /// One thing a parse read beyond its own bytes, with what it read then.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Read {
     /// A file in the page's transitive embed closure, by content hash.
     /// Materialized at write time so checking it does not re-derive the graph.
@@ -231,9 +236,66 @@ struct ParseCache {
     entries: HashMap<String, ParseCacheEntry>,
 }
 
-/// The process-global store. One root at a time — switching folders in the dev
-/// server replaces it, so this does not grow with the number of folders opened.
-static STORE: Mutex<Option<(PathBuf, ParseCache)>> = Mutex::new(None);
+/// What the process knows about the one root it is building. Switching folders
+/// replaces the whole record, so this does not grow with the folders opened.
+struct RootParse {
+    root: PathBuf,
+    /// The last build's cache, which the next build replays.
+    cache: Option<Arc<ParseCache>>,
+    /// The last build's seal has not yet taken `cache` ([`take_for_seal`]).
+    unsealed: bool,
+    /// A seal generation that nothing but page text has moved since, as a
+    /// proof showed it. The next [`ParseSession::begin`] takes it whether or
+    /// not that build may consult the cache, so a build that changed an image
+    /// in between leaves no proof for the one after it.
+    proven: Option<String>,
+}
+
+static ROOT: Mutex<Option<RootParse>> = Mutex::new(None);
+
+/// The record for `root`, replacing one kept for another root.
+fn root_record<'a>(slot: &'a mut Option<RootParse>, root: &Path) -> &'a mut RootParse {
+    if slot.as_ref().is_none_or(|r| r.root != root) {
+        *slot = Some(RootParse { root: root.to_path_buf(), cache: None, unsealed: false, proven: None });
+    }
+    slot.as_mut().expect("just set")
+}
+
+mod persist;
+
+/// Record that `generation`'s seal holds for `root` but for page text: the
+/// next build of `root` may start from the cache kept for that generation.
+pub(crate) fn note_proven_seal(root: &Path, generation: String) {
+    if let Ok(mut slot) = ROOT.lock() {
+        root_record(&mut slot, root).proven = Some(generation);
+    }
+}
+
+/// The cache kept in a file for the seal generation a proof showed holds.
+fn kept_for(root: &Path, generation: String) -> Option<Arc<ParseCache>> {
+    let started = std::time::Instant::now();
+    let kept = persist::read(&crate::moss_paths::MossPaths::new(root).memo_dir(), &generation)?;
+    log::info!(target: "incremental", "parse cache: {} pages loaded from the kept cache in {:?}", kept.entries.len(), started.elapsed());
+    Some(Arc::new(kept))
+}
+
+/// One build's parse cache, carried to its seal.
+pub(crate) struct KeptParse(Arc<ParseCache>);
+
+impl KeptParse {
+    /// Keep it in `memo_dir` as the parse of the generation sealed as `generation`.
+    pub(crate) fn write(&self, memo_dir: &Path, generation: &str) {
+        persist::write(memo_dir, generation, &self.0);
+    }
+}
+
+/// The cache the build of `root` that is sealing now left, if it left one.
+pub(crate) fn take_for_seal(root: &Path) -> Option<KeptParse> {
+    let mut slot = ROOT.lock().ok()?;
+    let record = slot.as_mut().filter(|r| r.root == root && r.unsealed)?;
+    record.unsealed = false;
+    record.cache.clone().map(KeptParse)
+}
 
 /// What the last build's parse cache did. Read by tests and by anyone reading
 /// the `incremental` log target.
@@ -277,9 +339,7 @@ pub fn last_stats() -> Option<ParseCacheStats> {
 pub fn reset_for_tests() {
     #[cfg(test)]
     assert!(cache_test_is_active(), "reset_for_tests requires store_lock_for_tests");
-    if let Ok(mut store) = STORE.lock() {
-        *store = None;
-    }
+    ROOT.lock().unwrap_or_else(|e| e.into_inner()).take();
     #[cfg(test)]
     if let Ok(mut stats) = LAST_STATS.lock() {
         *stats = None;
@@ -289,8 +349,8 @@ pub fn reset_for_tests() {
 /// Every document the store holds, as the next build would replay it.
 #[cfg(test)]
 pub(crate) fn cached_documents() -> Vec<ParsedDocument> {
-    let store = STORE.lock().unwrap_or_else(|e| e.into_inner());
-    store.iter().flat_map(|(_, cache)| cache.entries.values().map(|entry| entry.doc.clone())).collect()
+    let slot = ROOT.lock().unwrap_or_else(|e| e.into_inner());
+    slot.iter().flat_map(|r| r.cache.iter()).flat_map(|cache| cache.entries.values().map(|entry| entry.doc.clone())).collect()
 }
 
 /// Opt a test into owning the process-global parse cache.
@@ -441,7 +501,7 @@ pub struct ParseSession {
     root: PathBuf,
     index_path: PathBuf,
     /// The previous build's cache, present only when this build may consult it.
-    previous: Option<ParseCache>,
+    previous: Option<Arc<ParseCache>>,
     inputs_fingerprint: String,
     shadow: bool,
     hasher: FileHasher,
@@ -474,16 +534,18 @@ impl ParseSession {
         inputs_fingerprint: String,
     ) -> Self {
         let shadow = std::env::var("MOSS_PARSE_CACHE_SHADOW").is_ok();
-        let stored = STORE
+        let (held, proven) = ROOT
             .lock()
             .ok()
-            .and_then(|s| s.as_ref().filter(|(r, _)| r == root).map(|(_, c)| c.clone()));
+            .and_then(|mut slot| slot.as_mut().filter(|r| r.root == root).map(|r| (r.cache.clone(), r.proven.take())))
+            .unwrap_or_default();
+        let stored = held.or_else(|| kept_for(root, proven.filter(|_| enabled)?));
 
         let (previous, reason) = if !enabled {
             (None, "not an incremental-eligible build".to_string())
         } else {
             match stored {
-                None => (None, "cold cache (no previous build in this process)".to_string()),
+                None => (None, "cold cache (no previous build in this process, none kept for a proved seal)".to_string()),
                 Some(cache) if cache.inputs_fingerprint != inputs_fingerprint => (
                     None,
                     "build-level parse inputs changed (page_map/url overrides/site flags)"
@@ -767,12 +829,14 @@ impl ParseSession {
                 *last = Some(stats);
             }
 
-            let cache = ParseCache {
+            let cache = Arc::new(ParseCache {
                 inputs_fingerprint: self.inputs_fingerprint,
                 entries,
-            };
-            if let Ok(mut store) = STORE.lock() {
-                *store = Some((self.root, cache));
+            });
+            if let Ok(mut slot) = ROOT.lock() {
+                let record = root_record(&mut slot, &self.root);
+                record.cache = Some(cache);
+                record.unsealed = true;
             }
         }
 
@@ -877,7 +941,7 @@ pub fn math_cache_store(key: String, value: TypesetMath) {
 /// [`math_cache_finish_build`] persists and the next call for the SAME root
 /// reads back, purely to compute which of THAT root's keys it contributed
 /// last time. Root-scoped and replaced wholesale — the same shape as
-/// [`STORE`] — so a folder switch drops the old root's accounting instead of
+/// [`ROOT`] — so a folder switch drops the old root's accounting instead of
 /// accumulating across roots. (The equations themselves stay shareable in
 /// [`MATH_RENDER_CACHE`] regardless of which root asked for them first —
 /// content-addressed, so a hit is correct no matter who populated it; only

@@ -630,6 +630,19 @@ interface CopyRef {
   url: string;
 }
 /**
+ * One piece of a long article: a run of HTML, or a picture (absolute `url`) between runs.
+ *
+ * @category Copies
+ */
+type ArticleBlock = {
+  html: string;
+} | {
+  picture: {
+    url: string;
+    alt: string;
+  };
+};
+/**
  * The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
  * receives, already shaped to the limits its manifest declares
  * under `contributes.channel.syndication`.
@@ -641,6 +654,11 @@ interface CopyJob {
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
+  /** The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host. */
+  site: {
+    url: string;
+    name: string;
+  };
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: {
     url: string;
@@ -668,8 +686,16 @@ interface CopyJob {
   article?: {
     title: string;
     html: string;
+    /** The page as written, in plain text: no title and no link back. */
+    text?: string;
     description?: string | null;
     cover?: string | null;
+    /**
+     * `html` as an editor is given it, split at its pictures in reading order:
+     * head elements, a leading h1 repeating the title and footnote back-links
+     * removed, embeds as links, a heading over the notes. Formula pictures stay inline.
+     */
+    blocks?: ArticleBlock[];
   } | null;
   /** The copy already on the network (for an update or lookup), or the draft a hand-off left there. */
   previous?: (CopyRef & {
@@ -879,6 +905,32 @@ interface HookResult {
     title: string;
   } | null;
 }
+/**
+ * What a channel's `login` answers. moss records the folder as signed in to
+ * `account.id`, the provider's stable identifier for the account (a DID, a
+ * numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+ * `host` is the account's own server, for a channel whose accounts live on
+ * many servers: moss takes a `syndicated:` address on it as this channel's copy.
+ * Answer `cancelled` when the person stopped the sign-in, as when
+ * {@link BrowserSignIn.open} rejects with {@link SignInCancelled}. A `login`
+ * that returns nothing is read the older way, from its own config. Needs moss
+ * 0.15.29; raise `min_moss_version` to it when `login` returns this.
+ *
+ * @category Hooks
+ */
+type LoginResult = {
+  status: "completed";
+  account: {
+    id: string;
+    name?: string;
+    host?: string;
+  };
+} | {
+  status: "cancelled";
+} | {
+  status: "failed";
+  message: string;
+};
 /**
  * One field of a {@link SetupForm} — the same vocabulary a manifest's
  * `settings[]` declares, minus `when` (in a stepped flow, the steps are the
@@ -1302,17 +1354,38 @@ interface BrowserSignIn {
   /**
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
-   * included; check `state` yourself. Rejects with "sign-in cancelled" when the
-   * person closes the sign-in panel or another sign-in starts, and with "the
-   * sign-in took longer than ten minutes" at that limit.
+   * included; check `state` yourself. Rejects with {@link SignInCancelled}
+   * when the person closes the sign-in panel or another sign-in starts. Any
+   * other rejection is a failure, such as "the sign-in took longer than ten
+   * minutes" or "the sign-in stopped listening".
    */
   open(authorizeUrl: string): Promise<URLSearchParams>;
+}
+/**
+ * The person stopped the sign-in: they closed it, or another sign-in started.
+ * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   reply = await signIn.open(authorizeUrl);
+ * } catch (e) {
+ *   if (e instanceof SignInCancelled) return { status: "cancelled" };
+ *   throw e;
+ * }
+ * ```
+ * @category Browser
+ */
+declare class SignInCancelled extends Error {
+  constructor();
 }
 /**
  * Start a sign-in that finishes in the person's own browser, where they are
  * usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
  * moss listens on this computer for the provider's redirect, once; starting
- * another sign-in ends this one.
+ * another sign-in ends this one. moss hands back whatever reached the
+ * redirect: the caller sends a fresh `state` and refuses a reply whose
+ * `state` differs, since only it knows which request it made.
  *
  * Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
  *
@@ -1462,6 +1535,88 @@ declare function showBrowserForm<T>(html: string, options?: {
   timeoutMs?: number;
   closeDelayMs?: number;
 }): Promise<T | null>;
+/**
+ * A run of the article, or a picture given as its bytes, for {@link fillEditor}.
+ * @category Browser
+ */
+type EditorFillPart = {
+  html: string;
+} | {
+  picture: {
+    url: string;
+    name: string;
+    type: string;
+    base64: string;
+  };
+};
+/**
+ * What {@link fillEditor} puts where: the editor's elements on the network's
+ * page, the article in parts, and which of moss's reshapings the editor needs.
+ * @category Browser
+ */
+interface EditorFill {
+  editor: {
+    /** The editable body. */
+    body: string;
+    /** The title field, an input, a textarea or an editable element. */
+    title?: string;
+    /** Present once the editor has loaded; `body` when absent. */
+    ready?: string;
+    /**
+     * A file field (`input[type=file]`) for a network whose post starts from
+     * pictures: they are given to it first, as many as it allows and of the
+     * kinds it accepts, then the editor is filled once it appears. Picture parts go
+     * to the field, not the editor. No such field answers `no-editor`; a field
+     * that takes none of them, or an editor that never appears after them,
+     * `refused`.
+     */
+    upload?: string;
+  };
+  title?: string;
+  parts: EditorFillPart[];
+  rules?: {
+    /** The article's top heading level becomes h1, every deeper one h2. */
+    headings?: "two-levels";
+    /** One paragraph per table row, cells joined by " · ". */
+    tables?: "rows";
+    /** One paragraph per line of code. */
+    code?: "paragraphs";
+  };
+  /** How long to wait for the editor. Default 20 s. */
+  timeout_ms?: number;
+  /** How long each picture may take to appear. Default 15 s. */
+  picture_ms?: number;
+}
+/**
+ * How a fill went. `refused`: the editor's content did not change after the
+ * first paste. `no-editor`: the editor did not appear in time (its page
+ * changed, or the panel shows a sign-in). `missing` names each picture, and
+ * the title, that the editor did not take; `url` is where the panel is now.
+ * @category Browser
+ */
+interface EditorFillAnswer {
+  result: "filled" | "no-editor" | "refused";
+  placed: number;
+  missing: string[];
+  url: string;
+}
+/**
+ * Put an article into the network's editor that this plugin opened in the
+ * panel, as the author would paste it: moss runs its own script there with
+ * this data, never the plugin's code, and only on a page of one of the
+ * plugin's declared domains.
+ *
+ * Only in the moss app; elsewhere it rejects.
+ *
+ * @example
+ * ```typescript
+ * await openBrowser("https://network.example/editor/new");
+ * const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+ * if (answer.result !== "filled") showCopyPage();
+ * ```
+ * @category Browser
+ */
+declare function fillEditor(fill: EditorFill): Promise<EditorFillAnswer>;
 //#endregion
 //#region src/utils/filesystem.d.ts
 /**
@@ -2544,4 +2699,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, IdentityProof, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleBlock, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, EditorFill, EditorFillAnswer, EditorFillPart, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, IdentityProof, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, LoginResult, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SignInCancelled, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };

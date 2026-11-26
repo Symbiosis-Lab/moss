@@ -36,8 +36,12 @@ describe("oneRowFits — the split decision", () => {
   test("splits exactly when name + gaps + links + icons exceed the row", () => {
     // 180+24+300+32+108 = 644.
     expect(oneRowFits({ ...row, container: 644 })).toBe(true);
-    expect(oneRowFits({ ...row, container: 643 })).toBe(true); // 1px subpixel slack
-    expect(oneRowFits({ ...row, container: 642 })).toBe(false);
+    expect(oneRowFits({ ...row, container: 643.5 })).toBe(false);
+  });
+
+  test("a row over by a fraction of a pixel wraps, so it does not fit", () => {
+    // A trail page at 412px: 206.09 + 8 + 58.19 + 8 + 100.41 = 380.69 into 380.
+    expect(oneRowFits({ container: 380, name: 206.09, outerGap: 8, links: 58.19, innerGap: 8, icons: 100.41 })).toBe(false);
   });
 
   test("a wider toggle cluster tips the same row over", () => {
@@ -112,11 +116,9 @@ describe("initNavSplit — which mastheads it manages", () => {
     navContent().style.writingMode = "vertical-rl";
     // Room for everything down the column, none across it.
     const sizes = (el: Element, width: number, height: number) => {
-      Object.defineProperty(el, "offsetWidth", { value: width });
-      Object.defineProperty(el, "offsetHeight", { value: height });
+      el.getBoundingClientRect = () => ({ width, height }) as DOMRect;
     };
-    Object.defineProperty(navContent(), "clientWidth", { value: 40 });
-    Object.defineProperty(navContent(), "clientHeight", { value: 600 });
+    sizes(navContent(), 40, 600);
     sizes(document.querySelector(".site-name")!, 30, 150);
     sizes(document.querySelector(".nav-links a")!, 30, 80);
     sizes(document.querySelector(".nav-icons")!, 36, 36);

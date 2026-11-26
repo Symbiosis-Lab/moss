@@ -21,4 +21,5 @@ How-tos:
 - [[Share to Matters]] — share a new post back to your profile.
 - [[Send a newsletter]] — let readers follow you by email.
 - [[Give Your Site an Address]] — use your own domain.
+- [[AI and search engines]] — choose who may read your site and train on it.
 - [[deploy|Deploy anywhere]] — host the finished site yourself.

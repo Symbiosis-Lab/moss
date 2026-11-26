@@ -890,6 +890,52 @@ describe("NavigationManager.reload()", () => {
   });
 });
 
+describe("a link click the bridge announces", () => {
+  let iframe: HTMLIFrameElement;
+  let navManager: NavigationManager;
+  let rpcCall: ReturnType<typeof vi.fn>;
+  let rpcMorph: ReturnType<typeof vi.fn>;
+  const start = (url: unknown, source: MessageEventSource | null = iframe.contentWindow) =>
+    window.dispatchEvent(new MessageEvent("message", { source, data: { type: "moss-navigation-start", url } }));
+
+  beforeEach(() => {
+    iframe = document.createElement("iframe");
+    iframe.src = "http://localhost:8080/?__moss_shell=1";
+    document.body.appendChild(iframe);
+    navManager = new NavigationManager(iframe);
+    rpcCall = vi.fn().mockResolvedValue(undefined);
+    rpcMorph = vi.fn().mockResolvedValue({ applied: false, error: "Load failed" });
+    // @ts-ignore — accessing private for testing
+    Object.assign(navManager.rpc, { call: rpcCall, morph: rpcMorph });
+  });
+
+  afterEach(() => {
+    navManager.destroy();
+    document.body.innerHTML = "";
+  });
+
+  test("a build landing before the new page reports in neither morphs nor reloads the page being left", async () => {
+    start("http://localhost:8080/pictures/?__moss_shell=1");
+    expect(navManager.isNavigationPending()).toBe(true);
+    await expect(navManager.morph()).resolves.toBe(false);
+    await expect(navManager.reload()).resolves.toBe(true);
+    expect(rpcMorph).not.toHaveBeenCalled();
+    expect(rpcCall).not.toHaveBeenCalled();
+  });
+
+  test("an announcement from another window, or of another origin, is dropped", () => {
+    start("http://localhost:8080/pictures/", window);
+    start("https://elsewhere.example/pictures/");
+    start(42);
+    expect(navManager.isNavigationPending()).toBe(false);
+  });
+
+  test("a navigation report from another window is dropped", () => {
+    window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "moss-navigation", url: "http://localhost:8080/elsewhere/" } }));
+    expect(navManager.getActivePage()).toBeNull();
+  });
+});
+
 /**
  * Tests for NavigationManager.morph() — the in-place idiomorph path.
  * morph() posts `moss-morph` to the iframe bridge and resolves on the bridge's
@@ -1042,6 +1088,7 @@ describe("NavigationManager navigation-result listener", () => {
   function navMessage(url: string, notFound?: boolean): void {
     window.dispatchEvent(
       new MessageEvent("message", {
+        source: document.querySelector("iframe")!.contentWindow,
         data: { type: "moss-navigation", url, notFound },
       }),
     );
@@ -1123,6 +1170,7 @@ describe("getCurrentUrl reflects editor-driven follow (activePage, not history)"
   function navMessage(url: string, canGoBack = false): void {
     window.dispatchEvent(
       new MessageEvent("message", {
+        source: document.querySelector("iframe")!.contentWindow,
         data: { type: "moss-navigation", url, canGoBack, canGoForward: false },
       }),
     );

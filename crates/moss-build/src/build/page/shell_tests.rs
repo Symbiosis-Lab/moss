@@ -436,18 +436,21 @@ fn test_css_main_nav_has_bottom_margin() {
 
 /// A CSS length in px, at the 16px root font size the nav is authored against.
 ///
-/// Accepts a literal (`0.25rem`, `18px`, `1.125em`) or a single
-/// `var(--moss-space-*)` reference, which is resolved through tokens.json so
-/// this test carries no second copy of the spacing scale.
+/// Accepts a literal (`0.25rem`, `18px`, `1.125em`) or a single `var(--name)`
+/// reference, resolved through tokens.json, or else through a custom property
+/// declared on site.css's `:root`, so this test carries no second copy of either.
 fn css_px(value: &str) -> f32 {
     use moss_core::contract::tokens::{find_token, load_tokens};
     let value = value.trim();
     if let Some(rest) = value.strip_prefix("var(") {
         let name = rest.trim_end_matches(')').trim().trim_start_matches("--");
         let tokens = load_tokens().expect("tokens.json must parse");
-        let (light, _) = find_token(&tokens, name)
-            .unwrap_or_else(|| panic!("unknown token in a nav length: {}", value));
-        return css_px(light);
+        if let Some((light, _)) = find_token(&tokens, name) {
+            return css_px(light);
+        }
+        let root = get_css_rule(DEFAULT_CSS, ":root").expect(":root CSS rule should exist");
+        let declared = decl(&root, &format!("--{}", name));
+        return css_px(declared.split(';').next().unwrap_or_default());
     }
     let (num, unit) = value.split_at(
         value
@@ -704,34 +707,36 @@ fn test_css_nav_right_edge_aligns_toggles_when_it_wraps() {
 
 #[test]
 fn test_css_nav_split_name_and_toggles_on_row_one_then_links() {
-    // `data-nav-split` (set by nav-split.ts on a plain-site-name masthead that
-    // has to wrap) re-stacks the nav: the site name and the toggles share row
-    // 1, and the links take row 2 alone. `display: contents` lifts the two
-    // groups out of .nav-right so they can be ordered independently; flex
-    // wrapping alone can never float a later sibling back up. Where the
-    // groups actually land is the nav-split-order render gate's concern.
+    // `data-nav-split` (set by nav-split.ts on a masthead that has to wrap)
+    // re-stacks the nav as a grid of named areas: the name and the toggles
+    // share row 1, and the links take row 2 alone. `display: contents` lifts
+    // the two groups out of .nav-right so they can be placed independently.
+    // Where the groups actually land is the nav-split-order render gate's
+    // concern.
+    let content = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split]")
+        .expect("split .nav-content rule should exist");
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
-    let left = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-left")
-        .expect("split .nav-left rule should exist");
-    let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
-        .expect("split .nav-links rule should exist");
 
+    assert!(
+        content.contains("display: grid")
+            && content.contains(r#"grid-template: "name icons" "links links" / minmax(0, 1fr) auto"#),
+        "split mode puts the name, filling row 1, and the toggles at its end edge, \
+         then the links alone on row 2, got: {}",
+        content
+    );
     assert!(
         right.contains("display: contents"),
         "split mode must lift links + icons out of .nav-right, got: {}",
         right
     );
-    assert!(
-        left.contains("flex: 1 1 0"),
-        "split .nav-left fills row 1 beside the toggles, got: {}",
-        left
-    );
-    assert!(
-        links.contains("order: 1") && links.contains("flex: 1 1 100%"),
-        "split links come after the toggles, on a row of their own, got: {}",
-        links
-    );
+    for placement in [
+        ".nav-left { grid-area: name; }",
+        ".nav-icons { grid-area: icons; }",
+        ".nav-right,\n.nav-links { grid-area: links; }",
+    ] {
+        assert!(DEFAULT_CSS.contains(placement), "site.css must place `{}`", placement);
+    }
 }
 
 #[test]

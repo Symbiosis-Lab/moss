@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::job::{CopyJob, Op, PostRef, Previous};
+use super::job::{CopyJob, Op, PostRef, Previous, SiteRef};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
 use super::sign_ins::SignIns;
@@ -610,6 +610,10 @@ fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, opt
         op,
         channel: record.channel.clone(),
         idempotency_key: idempotency_key(&record.uid, &record.channel),
+        site: SiteRef {
+            url: site_url.trim_end_matches('/').to_string(),
+            name: super::shape::site_name(options, site_url).unwrap_or_else(|| site_url.to_string()),
+        },
         post: PostRef {
             url: page_url(site_url, &post.url_path),
             source_path: post.source_path.clone(),
@@ -833,6 +837,22 @@ mod tests {
         assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
         assert!(job.copy.is_none());
         assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org").is_err());
+    }
+
+    #[test]
+    fn a_job_names_the_site_its_post_lives_on() {
+        let record = CopyRecord::due("u", "one", "page.md", "page/");
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Hi", "url_path": "page/", "date": null })).unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org/").unwrap();
+        assert_eq!(job.site.url, "https://example.org");
+        assert!(job.post.url.starts_with(&job.site.url), "the post's address is built on the same base");
+        assert_eq!(job.site.name, "example.org");
+        let named = ShapeOptions { site_name: Some("山居".into()), ..Default::default() };
+        let (job, _) = build_job(&record, &channel, &post, &named, Op::Publish, "https://example.org").unwrap();
+        assert_eq!(job.site.name, "山居");
+        let json = serde_json::to_value(&job).unwrap();
+        assert_eq!(json["site"], serde_json::json!({ "url": "https://example.org", "name": "山居" }));
     }
 
     #[test]

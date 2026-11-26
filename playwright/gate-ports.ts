@@ -8,6 +8,7 @@
 // checkout path alone.
 //
 // Override with MOSS_GATE_PORT_BASE to pin an exact base.
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -46,148 +47,24 @@ function computeBase(): number {
 
 const BASE = computeBase();
 
-// One slot per port a gate needs, named once. ui-accent-seam needs two
-// (its two scratch sites are served simultaneously, so they must never
-// collide with each other, not just across worktrees). Append new keys at
-// the end — reordering existing ones just churns which literal port a gate
-// gets, for no benefit, since uniqueness (not any particular value) is the
-// property that matters.
-const GATE_PORT_KEYS = [
-  'customization-cascade',
-  'comments-cascade',
-  'no-important-cascade',
-  'dark-layer-order',
-  'heading-weight',
-  'reading-scale-order',
-  'pre-paint-dark',
-  'ui-accent-seam:default',
-  'ui-accent-seam:override',
-  'nav-toggle-cluster',
-  'nav-mobile',
-  'grid-mobile-collapse',
-  'collage',
-  'card-cover-ratio',
-  'card-cover-auto',
-  'lead-listing',
-  'listing-picture-strip',
-  'marquee',
-  'field-place-end',
-  'grid-card-image-inline-size',
-  'hero-caption',
-  'content-width-escape',
-  'hero-tone',
-  'heading-anchor',
-  'footnote-target',
-  'share-card',
-  'notebook-loads',
-  'nav-island',
-  'edge-clamp',
-  'vertical-nav-chrome',
-  'iframe-open-url',
-  'place-map-tokens',
-  'place-map-align',
-  'place-map-cut',
-  'cluster-layer-zoom',
-  'country-map',
-  'country-map-interaction',
-  'preview-parity-gate:static',
-  'preview-parity-gate:preview',
-  'plain-tab-reload',
-  'header-hit-areas',
-  'lightbox-github-shapes',
-  'grid-card-no-cover',
-  'grid-tile-scope',
-  'touch-targets:footer-md',
-  'touch-targets:footer-fallback',
-  'place-map-route',
-  'place-dot-links',
-  'places-explorer-boot',
-  'places-explorer-camera',
-  'places-explorer-ring',
-  'places-explorer-cards',
-  'places-explorer-labels',
-  'hero-overlay-legibility',
-  'places-explorer-chip',
-  'places-explorer-embed',
-  'places-explorer-real',
-  'places-explorer-perf',
-  'places-explorer-vertical',
-  'places-explorer-single',
-  'header-over-ink',
-  'header-over-band',
-  'hero-pause',
-  'hero-caption-stack',
-  'bridge-capture',
-  'contents-ruler',
-  'nav-split-order',
-  'nav-split-pack',
-  'nav-one-row',
-  'nav-current-mark',
-  'theme-floor-hooks',
-  'hls-short-clip',
-  'request-form',
-  'colophon-credit:long',
-  'colophon-credit:short',
-  'colophon-credit:band',
-  'colophon-credit:archival-band',
-  'footer-end-space:hidden',
-  'footer-end-space:default',
-  'facts-margin:widened',
-  'facts-margin:default',
-  'contents-ruler:home',
-  'hero-from',
-  'closing-picture',
-  'closing-picture:busy',
-  'header-none',
-  'header-none:band',
-  'header-scroll',
-  'header-scroll:sticky',
-  'folded-callouts',
-  'contents-lens',
-  'contents-lens:fallback',
-  'content-grid:default',
-  'content-grid:full',
-  'closing-picture:sky',
-  'closing-picture:archival',
-  'closing-picture:archival-caption',
-  'content-grid:end',
-  'content-grid:center',
-  'closing-picture:fade',
-  'closing-picture:busy-fade',
-  'closing-picture:plain',
-  'closing-picture:capped',
-  'closing-picture:landscape',
-  'wcag-output',
-  'diagrams',
-  'archival-footer',
-  'type-defaults',
-  'closing-picture:wordless',
-  'hero-links',
-  'browser-editor:ui',
-  'browser-editor:preview',
-  'stream-listing',
-  'series-nav',
-  'card-min-token',
-  'nav-submenu',
-  'page-chrome-none',
-  'missing-file-box',
-  'focus-point:ui',
-  'focus-point:preview',
-  'hosted-bold',
-  'link-card-cover-slot',
-  'address-bar:ui',
-  'address-bar:preview',
-] as const;
-
-type GatePortKey = (typeof GATE_PORT_KEYS)[number];
+// One slot per port a gate needs, one key per line in gate-ports.txt, which merges by union so two
+// branches that each append a key both keep it. ui-accent-seam needs two (its two scratch sites are
+// served at once). Append new keys at the end: reordering changes which port a gate gets.
+const GATE_PORT_KEYS = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'gate-ports.txt'), 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean);
+if (new Set(GATE_PORT_KEYS).size !== GATE_PORT_KEYS.length) {
+  throw new Error('gate-ports: gate-ports.txt lists a key twice');
+}
 
 const OFFSETS: Map<string, number> = new Map(GATE_PORT_KEYS.map((key, index) => [key, index]));
 
 /** This checkout's port for the given gate slot. Stable across runs; differs across worktrees. */
-export function gatePort(key: GatePortKey): number {
+export function gatePort(key: string): number {
   const offset = OFFSETS.get(key);
   if (offset === undefined) {
-    throw new Error(`gate-ports: unknown key ${JSON.stringify(key)} (add it to GATE_PORT_KEYS)`);
+    throw new Error(`gate-ports: unknown key ${JSON.stringify(key)} (add it to playwright/gate-ports.txt)`);
   }
   return BASE + offset;
 }

@@ -44,8 +44,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--moss-nav-toggle-size);
+  height: var(--moss-nav-toggle-size);
   box-sizing: border-box;
   background: none;
   border: none;

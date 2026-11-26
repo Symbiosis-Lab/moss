@@ -15,7 +15,7 @@ pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, 
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventFields {
     pub start: moss_core::event::EventTime,
     pub end: Option<moss_core::event::EventTime>,
@@ -513,6 +513,10 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub cascade: Option<std::collections::BTreeMap<String, serde_yaml::Value>>,
+    /// What cascade filled in on this page, for the inventory.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub inherited: Vec<crate::build::emit::inventory::Inherited>,
     /// Folder paths where this article also appears in lists
     pub also_in: Option<Vec<String>>,
     /// Whether to show comments on this page (default: true)
@@ -643,6 +647,11 @@ pub struct ParsedDocument {
     /// published uid is the join key for the page's comment thread, its signed
     /// moderation events and its copies.
     pub uid: Option<String>,
+    /// The build derived `uid` from the page's path and bytes, so it changes
+    /// with each edit until a publish records it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub uid_derived: bool,
     /// Typesetting direction: "horizontal" or "vertical" (from frontmatter)
     #[serde(skip)]
     #[specta(skip)]
@@ -700,6 +709,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub field_errors: std::collections::BTreeMap<String, String>,
+    /// The pages joined to this one by `in_reply_to`, this page among them,
+    /// root first; empty when none. Set once per build by `replies::mark_threads`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub thread: Vec<crate::build::scan::replies::ThreadMember>,
     /// The declared fields this page draws: each declaration with a `place`
     /// and the page's valid value for it, in declaration order. Empty on a
     /// folder index. Drawn at render by `components::field_places`.
@@ -1035,6 +1049,13 @@ impl ParsedDocument {
     pub fn hidden_from_search_engines(&self) -> bool {
         self.search_engines == Some(false) || self.hidden_home.is_some()
     }
+
+    /// Where this page's copies go. A copy posted elsewhere names the page to
+    /// everyone, so a page reached only by its link posts none, whatever a
+    /// folder cascades.
+    pub fn channels(&self) -> Option<Vec<String>> {
+        if self.hidden_from_search_engines() { Some(Vec::new()) } else { self.syndicate.clone() }
+    }
 }
 
 /// Sets every page's [`ParsedDocument::hidden_home`]: the folder of the
@@ -1067,7 +1088,7 @@ pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
 /// fires (typically a shortcode arm or markdown processor), and read it in
 /// `build/features.rs` to gate CSS/JS injection. Do not add ad-hoc bools
 /// elsewhere on `ParsedDocument` for this purpose.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PageFeatures {
     /// True if the page contains a `:::form`, nested ones included. Gates the forms
     /// stylesheet and script, and tells `commerce.json` which pages to read.
@@ -1223,7 +1244,7 @@ pub struct SiteAssets {
     pub field_places: bool,
     /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
     pub diagrams: bool,
-    /// Some page draws a `style:stream` listing. Gates the `stream` stylesheet partial.
+    /// Some page draws a `style:stream` listing, a thread or a reply line. Gates the `stream` stylesheet partial.
     pub stream: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
@@ -1309,7 +1330,7 @@ impl SiteAssets {
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
-            out.stream |= page.features.stream;
+            out.stream |= page.features.stream || page.declared.contains_key(moss_core::fields::IN_REPLY_TO);
             out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }

@@ -703,13 +703,10 @@ pub(crate) fn collect_images_for_conversion(
     for media_meta in &project_structure.image_files {
         let file_path = on_disk(Path::new(&project_structure.root_path), &media_meta.path);
 
-        // Resolve the source OID by STAT-MATCH ONLY — never hash here. This runs
-        // in the blocking phase that gates first paint, and hashing hundreds of
-        // MB of images (SHA-256 of every 5-15 MB photo) previously added tens of
-        // seconds before the preview could appear. On a cold/changed miss we
-        // leave the OID empty; the background worker (`run_image_conversion`)
-        // resolves it — hashing OFF the blocking path and persisting the index
-        // so the next build stat-matches. Mirrors videos' deferred hashing.
+        // Resolve the source OID by STAT-MATCH ONLY — never hash here: the scan
+        // has hashed every local image and saved the index. A miss (a file still
+        // in the cloud, or one changed since the scan) leaves the OID empty, and
+        // the background worker (`run_image_conversion`) resolves it.
         let source_oid = std::fs::metadata(&file_path)
             .ok()
             .and_then(|m| {
@@ -1060,7 +1057,7 @@ pub(crate) fn convert_single_image(
             if let Err(e) = objects.link_to(&cached_oid, &output_webp) {
                 log::info!("Failed to link cached WebP to staging: {}", e);
             }
-            settle_placeholder(transforms, meta_stat_key, source_file, original_size, None);
+            settle_placeholder(transforms, meta_stat_key, source_oid, source_file, original_size, None);
             // Rungs ride the warm path too: registered rungs must land in
             // THIS build's staging even when the base is a cache hit — on
             // the first build after upgrading to a rung-aware moss, the
@@ -1128,7 +1125,7 @@ pub(crate) fn convert_single_image(
     };
 
     // ---- Step 3b: placeholder metadata (deferred from the blocking scan) ----
-    settle_placeholder(transforms, meta_stat_key, source_file, original_size, Some(&img));
+    settle_placeholder(transforms, meta_stat_key, source_oid, source_file, original_size, Some(&img));
 
     // ---- Step 4: resize ----
     // The decoded ORIENTED original outlives the base resize when a ladder
@@ -1329,7 +1326,9 @@ pub(crate) fn convert_single_image(
 }
 
 /// Records the colour and blur the preview scan left to this phase, under the
-/// scan's stat key, so a later scan bakes them into the page. They are for the
+/// scan's stat key, so a later scan bakes them into the page, and under the
+/// picture's content hash when the record there is missing or out of date, so a
+/// fresh copy of the folder finds them too. They are for the
 /// published page only, never the preview's AssetRegistry: an author judging a
 /// photo cannot tell a blurred stand-in from a bad encode, so the preview shows
 /// the original.
@@ -1339,10 +1338,13 @@ pub(crate) fn convert_single_image(
 /// that made them, so every picture on a machine new to the folder is one,
 /// though its encodes arrived with the folder. With no record at all no scan is
 /// waiting (a build that is not a preview), and a hit stays decode-free.
-fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_stat_key: Option<&str>, source_file: &Path, original_size: u64, decoded: Option<&image::DynamicImage>) {
+fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_stat_key: Option<&str>, source_oid: &str, source_file: &Path, original_size: u64, decoded: Option<&image::DynamicImage>) {
+    use crate::build::scan::scan::{read_cached_meta, write_media_meta};
     let Some(key) = meta_stat_key else { return };
-    let prev = crate::build::scan::scan::read_cached_meta(transforms, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or(""));
-    if prev.as_ref().is_some_and(|prev| prev.dominant_color.is_some()) {
+    let extension = source_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let prev = read_cached_meta(transforms, key, extension);
+    if let Some(prev) = prev.as_ref().filter(|prev| prev.dominant_color.is_some()) {
+        write_media_meta(transforms, None, Some(source_oid), extension, original_size, prev);
         return;
     }
     let decoded_here;
@@ -1358,7 +1360,7 @@ fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_sta
     let (dominant_color, lqip_data_uri) = crate::build::scan::scan::compute_color_and_lqip_from_image(img);
     // The scan sniffed `is_animated`; this write replaces the whole entry.
     let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((img.width(), img.height())), dominant_color, lqip_data_uri, is_animated: prev.map_or(false, |prev| prev.is_animated) };
-    crate::build::scan::scan::write_cached_meta(transforms, key, original_size, &meta);
+    write_media_meta(transforms, Some(key), Some(source_oid), extension, original_size, &meta);
 }
 
 // ---------------------------------------------------------------------------
@@ -1424,6 +1426,38 @@ struct ImageLedger {
     /// The render of each build blocked in [`wait_for_joined_images`] (`None`
     /// where the build has no render number).
     join_waiters: Vec<Option<u64>>,
+    /// Marks ever made. Every mark leaves `pending` once, so the ones gone
+    /// are this less what `pending` still holds.
+    queued: u64,
+}
+
+/// Images handed to a worker since the process started, and how many of
+/// those are done: delivered, failed, replaced by a newer dispatch, or
+/// dropped with their page. Both only grow; `queued - finished` is in flight.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageWork {
+    pub queued: u64,
+    pub finished: u64,
+}
+
+impl ImageLedger {
+    fn work(&self) -> ImageWork {
+        ImageWork { queued: self.queued, finished: self.queued.saturating_sub(self.pending.len() as u64) }
+    }
+}
+
+/// [`ImageWork`] over every folder, for a reader that samples it over time.
+pub fn image_work() -> ImageWork {
+    let ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.values().map(ImageLedger::work).fold(ImageWork::default(), |a, w| ImageWork {
+        queued: a.queued + w.queued,
+        finished: a.finished + w.finished,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn image_work_in(folder: &str) -> ImageWork {
+    with_image_ledger(folder, |ledger| ledger.work())
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an
@@ -1495,7 +1529,10 @@ pub(crate) fn wait_for_joined_images(folder: &str, joined: &[(String, Arc<ImageF
 #[must_use]
 pub(crate) fn mark_image_items_pending(folder: &str, items: impl IntoIterator<Item = (String, Arc<ImageFingerprint>)>) -> PendingImageMarks {
     let marked: Vec<_> = items.into_iter().collect();
-    with_image_ledger(folder, |ledger| ledger.pending.extend(marked.iter().cloned()));
+    with_image_ledger(folder, |ledger| {
+        ledger.queued += marked.len() as u64;
+        ledger.pending.extend(marked.iter().cloned());
+    });
     PendingImageMarks { folder: folder.to_string(), marked }
 }
 

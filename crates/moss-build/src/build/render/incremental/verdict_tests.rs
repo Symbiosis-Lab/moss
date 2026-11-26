@@ -84,6 +84,7 @@ struct Harness {
     sealed_render_id: Option<String>,
     staged_render_id: Option<String>,
     build_day: chrono::NaiveDate,
+    layout: crate::build::page::layout::LayoutConfig,
 }
 
 impl Harness {
@@ -103,6 +104,7 @@ impl Harness {
             render_id: None,
             sealed_render_id: None,
             staged_render_id: None,
+            layout: crate::build::page::layout::LayoutConfig::new("site", None),
         }
     }
 
@@ -121,9 +123,8 @@ impl Harness {
                 asset_versions: "v1",
                 dir_overrides: &self.overrides,
                 site_lang: crate::i18n::Language::En,
-                typesetting: None,
                 math: false,
-                term_nav: &[],
+                layout: &self.layout,
                 build_day: self.build_day,
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),

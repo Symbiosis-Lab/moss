@@ -108,6 +108,7 @@ pub(crate) fn url_collision_diagnostic(project_root: &std::path::Path, file_path
 
 #[cfg(test)]
 mod url_collision_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::scan::article_map::ArticleMap;
     use crate::build::scan::slug::UrlCollision;
 
@@ -116,7 +117,7 @@ mod url_collision_tests {
     fn vault_with_collision() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let moss = dir.path().join(".moss");
-        std::fs::create_dir_all(moss.join("build.nosync")).unwrap();
+        std::fs::create_dir_all(MossPaths::from_moss_dir(moss.to_path_buf()).build_dir()).unwrap();
         let mut map = ArticleMap::new();
         map.url_collisions.insert(
             "評選/散文組/散文組.md".to_string(),

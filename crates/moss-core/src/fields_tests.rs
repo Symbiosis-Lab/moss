@@ -194,6 +194,16 @@ fn page_needs_a_wikilink_and_takes_an_alias() {
 }
 
 #[test]
+fn page_takes_an_http_address_for_a_page_elsewhere_and_no_other_scheme() {
+    assert_eq!(ok(FieldKind::Page, json!("https://example.social/@a/1")), json!({"url": "https://example.social/@a/1"}));
+    assert_eq!(ok(FieldKind::Page, json!("http://example.org/post")), json!({"url": "http://example.org/post"}));
+    for bad in ["javascript:alert(1)", "data:text/html,x", "/notes/a/", "ftp://example.org/a", "https://", "https://a b"] {
+        assert!(err(FieldKind::Page, json!(bad)).contains("[[name]]"), "{bad} must be refused");
+    }
+    assert_eq!(ok(FieldKind::Pages, json!(["[[A]]", "https://example.org/b"])), json!([{"target": "A"}, {"url": "https://example.org/b"}]));
+}
+
+#[test]
 fn pages_takes_a_list_or_one_link_and_names_the_bad_item() {
     assert_eq!(
         ok(FieldKind::Pages, json!(["[[A]]", "[[B|alias]]"])),
@@ -306,4 +316,11 @@ fn in_folders_counts_a_language_tree_as_inside_its_folder() {
     assert!(in_folders(&scope, "de/Housing/court.md"));
     assert!(!in_folders(&scope, "de/Notes/court.md"));
     assert!(in_folders(&[], "anything.md"));
+}
+
+#[test]
+fn a_bad_in_reply_to_is_reported_though_its_schema_row_is_a_plain_string() {
+    let reply = &moss_decls()[0];
+    let bad = serde_yaml::Value::String("ftp://example.org/a".into());
+    assert!(matches!(declare_one(reply, "notes/a.md", Some(&bad), EN), Some(Err(_))));
 }

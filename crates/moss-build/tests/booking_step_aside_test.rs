@@ -2,6 +2,7 @@
 //! plugin declares `public_data`: moss's own reader then leaves the table alone.
 //!
 //! Its own test binary: `log::set_logger` is process-global and one-shot.
+use moss_build::moss_paths::MossPaths;
 use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
 use serde_json::json;
 use std::path::Path;
@@ -49,7 +50,7 @@ fn build(root: &Path) -> Vec<String> {
         watch: false,
         start_server: false,
         host: moss_build::cli::host::cli_host_ports(root.to_str().unwrap()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".into()),
         server_port: None,
@@ -63,7 +64,7 @@ fn build(root: &Path) -> Vec<String> {
 }
 
 fn commerce(root: &Path) -> Option<String> {
-    std::fs::read_to_string(root.join(".moss/build.nosync/current/_moss/commerce.json")).ok()
+    std::fs::read_to_string(MossPaths::new(root).current_ptr().join("_moss/commerce.json")).ok()
 }
 
 const OFFER: &str = r#"schema_version = 6
@@ -125,7 +126,7 @@ fn the_booking_plugin_owns_its_table_and_core_stays_out() {
     let lines = build(tmp.path());
     assert_eq!(lines, ["[services.booking] is read by the booking plugin; moss's own booking reader is off"]);
     assert_eq!(commerce(tmp.path()), None, "with no forms and no booking object from core there is no commerce.json");
-    let published = std::fs::read_to_string(tmp.path().join(".moss/build.nosync/current/_moss/extensions/booking.json")).unwrap();
+    let published = std::fs::read_to_string(MossPaths::new(tmp.path()).current_ptr().join("_moss/extensions/booking.json")).unwrap();
     assert!(published.contains("Walk"), "{published}");
 }
 

@@ -544,6 +544,17 @@ fn a_term_claim_page_hosts_the_terms_group_and_its_membership_moves_with_authors
     assert_ne!(digest(&more, &key("authors/林小滿")).membership, before.membership);
 }
 
+/// A folder index that claims a term ends in the term's listing in place of
+/// its own folder's, so a page added to its folder does not re-render it.
+#[test]
+fn a_folder_index_claiming_a_term_reads_only_the_terms_group() {
+    let mut docs = vault();
+    let writings = docs.iter_mut().find(|d| d.url_path == "writings/index.html").unwrap();
+    writings.term_listing = Some("authors/林小滿".to_string());
+    let writings = writings.clone();
+    assert_eq!(groups_read_by(&writings, &docs), Some(vec![key("authors/林小滿")]));
+}
+
 // ---- series-chain steps as listing-group readers ---------------------------
 
 fn series_vault() -> Vec<ParsedDocument> {

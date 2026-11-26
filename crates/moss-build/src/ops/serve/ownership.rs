@@ -6,7 +6,7 @@
 //! shadows the first. This is the record that lets a second process find the
 //! first instead of racing it: one owner per folder per machine.
 //!
-//! Two files per folder, both named by [`folder_id`] (the same hash
+//! Two files per folder, both named by [`name_for`] (the same hash
 //! [`crate::infra::folder_lock`] already uses for its cross-process build
 //! lock, so a folder has one identity everywhere this crate names one):
 //!
@@ -17,10 +17,11 @@
 //!   owner, full stop.
 //! * `<moss_home>/servers/<folder-id>.json` — an [`OwnerRecord`] naming the
 //!   current or the last holder: its host kind, pid, version, and the URL
-//!   a client can reach it at. Written on every acquire and never deleted,
-//!   so it is stale from the moment its writer stops — which is why
-//!   [`find_live_owner`] never trusts it alone and always confirms it
-//!   against the URL's own health endpoint.
+//!   a client can reach it at. Written on every acquire and removed when
+//!   the server stops. A killed holder leaves its record behind until the
+//!   next acquire sweeps records whose pid is gone, so a record can still be
+//!   stale, which is why [`find_live_owner`] never trusts it alone and always
+//!   confirms it against the URL's own health endpoint.
 //!
 //! [`acquire`] writes both; [`find_live_owner`] reads only the record and
 //! verifies it over HTTP. A caller that wants the authoritative answer
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 
 use crate::infra::atomic_write;
-use crate::infra::folder_lock::folder_id;
+use crate::infra::folder_store::{name_for, pid_alive};
 use crate::infra::home::moss_home;
 
 /// Which kind of process holds a folder's ownership record.
@@ -54,7 +55,7 @@ pub enum HostKind {
 /// One process's claim on one folder: who, running what, reachable where,
 /// since when.
 ///
-/// `folder` is stored canonicalized (the same path [`folder_id`] hashed),
+/// `folder` is stored canonicalized (the same path [`name_for`] hashed),
 /// so a reader never has to re-resolve it to know what this record is
 /// about.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -75,7 +76,7 @@ pub struct OwnerRecord {
 /// `<moss_home>/servers/<folder-id>.json` — where [`acquire`] writes and
 /// [`find_live_owner`] reads a folder's [`OwnerRecord`].
 fn record_path(folder: &Path) -> Result<PathBuf, String> {
-    Ok(moss_home()?.join("servers").join(format!("{}.json", folder_id(folder))))
+    Ok(moss_home()?.join("servers").join(format!("{}.json", name_for(folder))))
 }
 
 /// The name of the `infra::folder_lock` lock [`acquire`] takes,
@@ -86,11 +87,16 @@ fn record_path(folder: &Path) -> Result<PathBuf, String> {
 /// other.
 const OWNER_LOCK: &str = "owner";
 
-/// The folder's owner lock is held by another process. Who that is comes from
-/// [`find_live_owner`], never from the record alone: the record on disk can
-/// still be the previous holder's.
+/// Contention and storage failure are separate: neither grants ownership.
+/// A contended lock's holder is discovered over HTTP, never trusted from its
+/// announcement alone.
 #[derive(Debug)]
-pub struct Held;
+pub enum AcquireError {
+    /// Another process holds the kernel lock.
+    Held,
+    /// Ownership could not be established or recorded; never serve untracked.
+    Storage(String),
+}
 
 /// What a server start does when another process serves the folder.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -118,20 +124,36 @@ pub enum OnConflict {
 /// `acquire` for a folder THIS process already holds upgrades the weak
 /// reference and reuses the held lock instead of attempting — and losing —
 /// a second lock against itself.
-static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>>> =
+static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Claim>>>> =
     std::sync::OnceLock::new();
 
-fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>> {
+fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Claim>>> {
     HELD.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// The owner lock and the record it vouches for. The record goes first, while
+/// the lock is still held, so it can never remove a record the next owner
+/// wrote.
+#[derive(Debug)]
+struct Claim {
+    record: PathBuf,
+    _lock: crate::infra::folder_lock::Held,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        // allow:unlink an owner record under <moss_home>/servers, never staging
+        let _ = std::fs::remove_file(&self.record);
+    }
 }
 
 /// The held owner lock. Dropping the last guard a process holds for a folder
 /// releases the lock; the kernel does the same on a hard kill.
 #[derive(Debug)]
 pub struct OwnerGuard {
-    /// `None` when ownership could not be tracked at all (home directory
-    /// unresolvable, lock file unopenable) — see [`acquire`]'s fallback.
-    _lock: Option<std::sync::Arc<crate::infra::folder_lock::Held>>,
+    _lock: std::sync::Arc<Claim>,
+    /// A previous announcement was replaced after acquiring its released lock.
+    pub replaced_stale_record: bool,
 }
 
 /// Try to become `folder`'s recorded owner, without blocking.
@@ -142,39 +164,46 @@ pub struct OwnerGuard {
 /// * **Lock held by this process**: share it, and write the record again, so
 ///   it names the server started last. If that server stops before the
 ///   earlier one, the folder is held and unnamed until the earlier one stops.
-/// * **Lock held elsewhere**: [`Held`].
+/// * **Lock held elsewhere**: [`AcquireError::Held`].
 ///
 /// Resolving `moss_home()` or opening the lock file can fail (an
 /// unresolvable home directory, a permissions error) independently of
-/// contention. That is logged and the folder is served untracked, rather
-/// than making ownership tracking a reason a folder can't be served at all.
-pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> Result<OwnerGuard, Held> {
+/// contention. These failures are errors: no guard means no writing authority.
+pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> Result<OwnerGuard, AcquireError> {
     acquire_with_ui(folder, kind, version, url, None)
 }
 
-fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<OwnerGuard, Held> {
+fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<OwnerGuard, AcquireError> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let id = folder_id(&canonical);
-    let untracked = || Ok(OwnerGuard { _lock: None });
+    let id = name_for(&canonical);
+    let path = record_path(&canonical).map_err(AcquireError::Storage)?;
+    let mut replaced_stale_record = false;
 
     let mut table = held().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let lock = match table.get(&id).and_then(std::sync::Weak::upgrade) {
+        Some(lock) if url.is_empty() => return Ok(OwnerGuard { _lock: lock, replaced_stale_record: false }),
         Some(lock) => lock,
         None => match crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK) {
             Ok(Some(lock)) => {
-                let lock = std::sync::Arc::new(lock);
+                replaced_stale_record = path.try_exists().map_err(|e| AcquireError::Storage(e.to_string()))?;
+                let lock = std::sync::Arc::new(Claim { record: path.clone(), _lock: lock });
                 table.insert(id, std::sync::Arc::downgrade(&lock));
                 lock
             }
-            Ok(None) => return Err(Held),
-            Err(e) => {
-                log::warn!("could not take the owner lock for {}: {e}", canonical.display());
-                return untracked();
-            }
+            Ok(None) => return Err(AcquireError::Held),
+            Err(e) => return Err(AcquireError::Storage(e)),
         },
     };
     drop(table);
 
+    // A build reserves only its own folder. Sweeping unrelated announcements
+    // here delays source scanning and can miss a folder's cancellation. Leave
+    // collection to server announcements, outside the process-wide mutex.
+    if !url.is_empty() {
+        if let Some(dir) = path.parent() {
+            sweep_dead_records(dir, &path);
+        }
+    }
     let record = OwnerRecord {
         folder: canonical.clone(),
         pid: std::process::id(),
@@ -184,73 +213,206 @@ fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, 
         ui_url,
         started_at: crate::system::now_iso(),
     };
-    match record_path(&canonical) {
-        Ok(path) => {
-            if let Err(e) = atomic_write::write_json_atomic(&path, &record) {
-                log::warn!("could not persist the owner record at {}: {e}", path.display());
+    atomic_write::write_json_atomic(&path, &record).map_err(AcquireError::Storage)?;
+    Ok(OwnerGuard { _lock: lock, replaced_stale_record })
+}
+
+/// Removes every record in `dir` but `keep` whose process is gone (a holder
+/// killed before it could remove its own) or that does not parse. A server
+/// start is rare, and once the litter is gone the directory holds one record
+/// per running server, so the pass is synchronous.
+fn sweep_dead_records(dir: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep || path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let live = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<OwnerRecord>(&text).ok())
+            .is_some_and(|record| pid_alive(record.pid));
+        // allow:unlink a dead owner record under <moss_home>/servers, never staging
+        if !live && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        log::info!("removed {removed} owner records of servers that are gone from {}", dir.display());
+    }
+}
+
+/// Whether `folder`'s owner record names a live process other than this one.
+/// Unlike [`find_live_owner`] it asks the process nothing, so an older moss,
+/// which may not answer this one's token, still counts.
+pub(crate) fn live_foreign_owner(folder: &Path) -> bool {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    read_record(&canonical).ok().flatten().is_some_and(|record| record.pid != std::process::id() && pid_alive(record.pid))
+}
+
+/// Write `record` as `folder`'s owner, for tests standing in for another process.
+#[cfg(test)]
+pub(crate) fn write_record_for_tests(folder: &Path, record: &OwnerRecord) {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let path = record_path(&canonical).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();
+}
+
+fn read_record(folder: &Path) -> Result<Option<OwnerRecord>, String> {
+    let path = record_path(folder)?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(serde_json::from_str(&text).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read owner record {}: {e}", path.display())),
+    }
+}
+
+/// Capabilities observed at the endpoint, independent of product-version order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerCapabilities {
+    pub preview: bool,
+    /// A token was accepted by the events route. This does not promise editing,
+    /// publishing or cooperative yield; those operations still check their responses.
+    pub authenticated_events: bool,
+}
+
+/// A folder/PID/marker-verified endpoint and its observed capabilities.
+/// Credentials stay private and are never included in diagnostics.
+pub struct VerifiedOwner {
+    pub record: OwnerRecord,
+    pub capabilities: OwnerCapabilities,
+    /// Legacy health may report the library version instead of the product version.
+    pub health_version: String,
+    token: Option<String>,
+}
+
+impl VerifiedOwner {
+    /// The credential accepted by the owner's token-gated events route.
+    pub fn token(&self) -> Option<&str> { self.token.as_deref() }
+}
+
+/// The shared admission result for any interface. Only `Acquired` authorizes
+/// local writes; discovery failure is never evidence that the lock is free.
+pub enum Ownership {
+    Acquired(OwnerGuard),
+    Verified(VerifiedOwner),
+    Unresponsive,
+}
+
+/// Try the authoritative lock, then discover its holder. Storage errors remain
+/// errors, distinct from an owner that is starting, stopping or unreachable.
+pub async fn resolve_owner(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<Ownership, String> {
+    match acquire_with_ui(folder, kind, version, url, ui_url) {
+        Ok(guard) => Ok(Ownership::Acquired(guard)),
+        Err(AcquireError::Storage(e)) => Err(e),
+        Err(AcquireError::Held) => Ok(match discover_owner(folder).await? {
+            Some(owner) => Ownership::Verified(owner),
+            None => Ownership::Unresponsive,
+        }),
+    }
+}
+
+fn local_endpoint(endpoint: &str) -> bool {
+    url::Url::parse(endpoint).is_ok_and(|url| {
+        url.scheme() == "http" && url.username().is_empty() && url.password().is_none()
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+            && url.path() == "/" && url.query().is_none() && url.fragment().is_none()
+    })
+}
+
+fn credentials(folder: &Path) -> Result<Vec<String>, String> {
+    // Current first, but a stale current token must not mask a live legacy one.
+    let mut tokens = Vec::new();
+    for path in [super::carrier_token::token_path(folder), folder.join(".moss/build.nosync/http-token")] {
+        match std::fs::read_to_string(&path) {
+            Ok(token) if !token.trim().is_empty() => tokens.push(token.trim().to_owned()),
+            Ok(_) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(format!("read owner credential {}: {e}", path.display())),
+        }
+    }
+    Ok(tokens)
+}
+
+/// Discover without acquiring. Health establishes endpoint identity, never
+/// authentication. The legacy events GET is token-gated even when health is
+/// anonymous; checking its headers closes the stream without waiting for events.
+pub async fn discover_owner(folder: &Path) -> Result<Option<VerifiedOwner>, String> {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let Some(record) = read_record(&canonical)? else { return Ok(None) };
+    if record.folder != canonical || !local_endpoint(&record.url)
+        || record.ui_url.as_ref().is_some_and(|url| !local_endpoint(url))
+    {
+        return Ok(None);
+    }
+    let tokens = credentials(&canonical)?;
+    let endpoint = record.url.clone();
+    let folder_id = name_for(&canonical);
+    let pid = record.pid;
+    let verified = tokio::task::spawn_blocking(move || {
+        let agent = super::carrier_token::agent(std::time::Duration::from_secs(1));
+        let mut health = None;
+        for token in std::iter::once(None).chain(tokens.iter().map(|s| Some(s.as_str()))) {
+            let mut request = agent.get(&format!("{endpoint}{}", super::port::MOSS_HEALTH_PATH));
+            if let Some(token) = token { request = request.set(super::carrier_token::TOKEN_HEADER, token); }
+            let response = match request.call() {
+                Ok(response) if response.status() == 200 => response,
+                // A public owner can reject a stale token but accept the next.
+                Err(ureq::Error::Status(401, _)) if token.is_some() => continue,
+                _ => return None,
+            };
+            let body = response.into_json::<serde_json::Value>().ok()?;
+            if body["server"] != "moss-preview-server" || body["schema"].as_u64().unwrap_or(0) < 2 {
+                return None;
+            }
+            // Readiness-only health may omit identity until authenticated.
+            // Contradictory identity must stop before sending any credential.
+            if body.get("folder_id").is_some_and(|id| id.as_str() != Some(&folder_id))
+                || body.get("pid").is_some_and(|seen| seen.as_u64() != Some(pid as u64))
+            {
+                return None;
+            }
+            if body.get("folder_id").is_some() && body.get("pid").is_some() {
+                health = Some(body);
+                break;
             }
         }
-        Err(e) => log::warn!("could not resolve the owner-record path for {}: {e}", canonical.display()),
+        let body = health?;
+        let version = body["version"].as_str()?.to_owned();
+        let token = tokens.into_iter().find(|token| {
+            agent.get(&format!("{endpoint}/__moss/events"))
+                .set(super::carrier_token::TOKEN_HEADER, token).call().is_ok_and(|response| {
+                    response.status() == 200 && response.header("content-type")
+                        .is_some_and(|value| value.split(';').next() == Some("text/event-stream"))
+                })
+        });
+        Some((version, body["preview"] == true, token))
+    }).await.map_err(|e| format!("owner discovery failed: {e}"))?;
+    let Some((version, preview, token)) = verified else { return Ok(None) };
+    // An announcement replaced while probing belongs to another session.
+    if read_record(&canonical)?.as_ref() != Some(&record) {
+        return Ok(None);
     }
-    Ok(OwnerGuard { _lock: Some(lock) })
+    Ok(Some(VerifiedOwner {
+        record,
+        capabilities: OwnerCapabilities { preview, authenticated_events: token.is_some() },
+        health_version: version,
+        token,
+    }))
 }
 
-fn read_record(folder: &Path) -> Option<OwnerRecord> {
-    let path = record_path(folder).ok()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-/// Is `folder` served, right now, by a process this machine can still
-/// reach? Reads the folder's [`OwnerRecord`] if one exists, then confirms it
-/// by probing the record's own `url` at [`super::port::MOSS_HEALTH_PATH`]:
-/// a record alone is never enough, because its writer could have crashed
-/// (the lock already answers that, but reading the lock state from outside
-/// the holding process is not portable) or — same process, same lock,
-/// different folder now — been re-pointed at another folder without
-/// releasing this one's lock, which a later folder-switch change may do.
-///
-/// The one HTTP check this performs is [`super::port::blocking_get`], the
-/// GET [`super::port::verify_server_ready`] makes, with the folder's token,
-/// since an owner behind a public URL names its folder only to a token
-/// holder. It does not reuse the whole of that function, because the two probes disagree on retry
-/// policy as much as on what they're checking: `verify_server_ready` polls
-/// for up to a second while a server it already decided to wait for is
-/// still binding, where this is a single-shot "does anyone answer at all
-/// right now" used for discovery, not for a server this caller is itself
-/// starting.
-///
-/// `None` for every negative: no record, the record's process gone quiet,
-/// a 4xx/5xx (a 401 for a token from before the owner published its own),
-/// a body with no `folder_id` (an older moss, schema 1 — the schema's own
-/// doc comment calls for exactly this `>=` gate rather than a hard equality,
-/// so a newer schema 3 reader still accepts this one — or an owner behind a
-/// public URL answering a caller without its token), or a
-/// `folder_id` that names a different folder (the same owner process, moved
-/// on).
+/// Compatibility wrapper for read-only callers. `None` never grants ownership.
 pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
-    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let record = read_record(&canonical)?;
-    let url = format!("{}{}", record.url, super::port::MOSS_HEALTH_PATH);
-    let body = super::port::blocking_get(url, super::carrier_token::read(&canonical)).await.ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
-    let schema = parsed.get("schema").and_then(serde_json::Value::as_u64).unwrap_or(0);
-    if schema < 2 {
-        return None;
-    }
-    let seen_folder_id = parsed.get("folder_id").and_then(serde_json::Value::as_str)?;
-    if seen_folder_id == folder_id(&canonical) {
-        Some(record)
-    } else {
-        None
-    }
+    discover_owner(folder).await.ok().flatten().map(|owner| owner.record)
 }
 
 /// Whether another process's desktop app answers as the server of the
 /// folder `site_dir` resolves to. A CLI holder yields to the app when asked;
 /// another desktop app is never asked, so it is still answering after a
 /// start it refused.
-pub async fn open_in_another_app(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> bool {
+pub async fn open_in_another_app(site_dir: &crate::moss_paths::ServedCell) -> bool {
     let Some(folder) = resolve_vault_folder(site_dir) else { return false };
     find_live_owner(&folder)
         .await
@@ -281,11 +443,11 @@ pub const ALREADY_SERVED_EXIT_CODE: i32 = 3;
 /// resolves it once up front and passes the result on to
 /// [`wait_for_owner_to_leave`], which takes the already-resolved path rather
 /// than re-resolving it itself.
-fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> Option<PathBuf> {
+fn resolve_vault_folder(site_dir: &crate::moss_paths::ServedCell) -> Option<PathBuf> {
     site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir).map(|v| v.path().to_path_buf()))
+        .map(|served| served.folder.path().to_path_buf())
 }
 
 /// [`acquire`] for whichever folder `site_dir` currently resolves to, for
@@ -297,7 +459,7 @@ fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -
 /// A held lock is handled as `on_conflict` says. The wait is a timer, never
 /// a blocked thread, and ends when the caller drops this future.
 pub async fn acquire_for_site_dir(
-    site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>,
+    site_dir: &crate::moss_paths::ServedCell,
     kind: HostKind,
     version: String,
     url: String,
@@ -307,20 +469,28 @@ pub async fn acquire_for_site_dir(
     let Some(folder) = resolve_vault_folder(site_dir) else {
         return Ok(None);
     };
+    acquire_for_folder(&folder, kind, version, url, on_conflict, ui_url).await.map(Some)
+}
+
+/// Admit a build before it creates or migrates any output. A blank URL reserves
+/// ownership until the server announces its bound endpoint using the shared guard.
+pub async fn acquire_for_folder(folder: &Path, kind: HostKind, version: String, url: String, on_conflict: OnConflict, ui_url: Option<String>) -> Result<OwnerGuard, String> {
     let started = std::time::Instant::now();
     loop {
-        if let Ok(guard) = acquire_with_ui(&folder, kind, version.clone(), url.clone(), ui_url.clone()) {
-            return Ok(Some(guard));
-        }
+        let owner = match resolve_owner(folder, kind, version.clone(), url.clone(), ui_url.clone()).await? {
+            Ownership::Acquired(guard) => return Ok(guard),
+            Ownership::Verified(owner) => Some(owner.record),
+            Ownership::Unresponsive => None,
+        };
         match on_conflict {
             OnConflict::Wait(patience) if started.elapsed() < patience => {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             OnConflict::Refuse | OnConflict::Wait(_) => {
-                return Err(already_served_message(find_live_owner(&folder).await.as_ref()));
+                return Err(already_served_message(owner.as_ref()));
             }
             OnConflict::StandBy => {
-                let interrupted = match find_live_owner(&folder).await {
+                let interrupted = match owner {
                     Some(owner) => {
                         crate::cli_eprintln!("{}", preview_ready_line(&owner.url));
                         crate::cli_eprintln!("{}", standing_by_message(&owner));
@@ -473,7 +643,7 @@ pub enum YieldOutcome {
     Accepted,
     /// The owner is a [`HostKind::Desktop`] host, which a yield never moves.
     RefusedDesktop,
-    /// Nobody is recorded as serving `folder` right now — nothing to yield.
+    /// No verified endpoint answered. This does not imply the lock is free.
     NoOwner,
 }
 
@@ -481,20 +651,16 @@ pub enum YieldOutcome {
 /// `POST /__moss/yield`, so a fuller engine elsewhere on the machine (the
 /// desktop app) can take the folder over. Reads the live owner's record
 /// (for its URL), then the vault's
-/// `.moss/build.nosync/http-token` (for the same bearer token the carrier
+/// the folder's `http-token` record on this computer (for the same bearer token the carrier
 /// checks — see [`super::carrier_token`]), and reports what the owner
 /// answered rather than assuming the request landed.
 pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let Some(owner) = find_live_owner(&canonical).await else {
+    let Some(owner) = discover_owner(&canonical).await? else {
         return Ok(YieldOutcome::NoOwner);
     };
-    let vault = crate::vault::paths::VaultRoot::find_containing(&canonical)
-        .ok_or_else(|| format!("{} is not inside a vault", canonical.display()))?;
-    let token = super::carrier_token::read(vault.path()).ok_or_else(|| {
-        format!("could not read the HTTP carrier token at {}", super::carrier_token::token_path(vault.path()).display())
-    })?;
-    let url = format!("{}/__moss/yield", owner.url);
+    let token = owner.token().ok_or("could not authenticate the live owner")?.to_owned();
+    let url = format!("{}/__moss/yield", owner.record.url);
     let post_url = url.clone();
     let result = tokio::task::spawn_blocking(move || {
         super::carrier_token::agent(std::time::Duration::from_secs(5))
@@ -524,21 +690,14 @@ mod tests {
         crate::infra::folder_lock::lock_path_named(folder, OWNER_LOCK)
     }
 
-    /// Serializes the handful of tests here that set `MOSS_HOME` — the same
-    /// process-global hazard `infra::home`'s own test documents.
-    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     /// The timeout fallback: nobody ever claims the folder (an empty,
     /// freshly-made `MOSS_HOME` has no record for it at all), so the wait
     /// must give up and return `None` rather than hang — the ablation target
     /// for the yield arm's "serve it myself again" fallback.
     #[tokio::test]
     async fn wait_for_owner_to_appear_gives_up_and_returns_none_within_the_timeout() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the unclaimed folder");
 
         let timeout = std::time::Duration::from_millis(300);
@@ -551,14 +710,12 @@ mod tests {
             elapsed < timeout + std::time::Duration::from_secs(2),
             "the wait must return at or shortly after its timeout, not hang; took {elapsed:?}"
         );
-        std::env::remove_var("MOSS_HOME");
     }
 
     #[test]
     fn acquire_writes_a_record_that_round_trips_through_the_atomic_writer() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let owned = acquire(folder.path(), HostKind::Cli, "9.9.9".to_string(), "http://127.0.0.1:1234".to_string())
@@ -575,10 +732,10 @@ mod tests {
         assert!(!on_disk.started_at.is_empty());
 
         drop(owned);
+        assert!(!path.exists(), "a stopped server leaves no record");
         assert!(!owner_lock_path(&canonical).unwrap().exists(), "a released owner lock leaves no file");
         let next = crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK).unwrap();
         assert!(next.is_some(), "dropping the guard frees the folder");
-        std::env::remove_var("MOSS_HOME");
     }
 
     /// One process runs two servers against a vault for a moment during a
@@ -586,9 +743,8 @@ mod tests {
     /// another port: the record must name the server started last.
     #[test]
     fn a_second_acquire_in_the_same_process_succeeds_and_rewrites_the_record() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let first =
@@ -606,7 +762,26 @@ mod tests {
         let foreign = std::fs::File::open(owner_lock_path(&canonical).unwrap()).unwrap();
         assert!(foreign.try_lock().is_err(), "the folder stays held while `second` lives");
         drop(second);
-        std::env::remove_var("MOSS_HOME");
+    }
+
+    #[test]
+    fn build_admission_leaves_unrelated_records_for_server_start() {
+        let home = crate::infra::home::scratch_moss_home();
+        let _home = crate::infra::home::thread_moss_home(&home);
+        let folder = tempfile::tempdir().unwrap();
+        let servers = home.join("servers");
+        std::fs::create_dir_all(&servers).unwrap();
+        let garbage = servers.join("gone.json");
+        std::fs::write(&garbage, "not a record").unwrap();
+
+        let build = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        assert!(garbage.exists(), "build admission must not scan unrelated owner records");
+        assert!(crate::infra::folder_lock::try_acquire_named(folder.path(), OWNER_LOCK).unwrap().is_none());
+        let server = acquire(folder.path(), HostKind::Cli, "test".into(), "http://127.0.0.1:4321".into()).unwrap();
+        assert!(!garbage.exists(), "server startup still collects stale announcements");
+        let rebuild = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        assert_eq!(read_record(folder.path()).unwrap().unwrap().url, "http://127.0.0.1:4321");
+        drop((build, server, rebuild));
     }
 
     /// The real cross-process shape: a lock held by a file THIS process
@@ -619,9 +794,8 @@ mod tests {
     /// branch without needing to spawn one.
     #[test]
     fn acquire_is_refused_by_a_lock_held_outside_this_process_registry() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
@@ -632,9 +806,10 @@ mod tests {
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         let foreign = std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock_path).unwrap();
         foreign.try_lock().expect("the foreign handle must win the uncontended lock");
+        // A live pid, so the start's sweep keeps the record.
         let foreign_record = OwnerRecord {
             folder: canonical.clone(),
-            pid: 777,
+            pid: std::process::id(),
             kind: HostKind::Desktop,
             version: "7.0.0".to_string(),
             url: "http://127.0.0.1:7777".to_string(),
@@ -646,10 +821,10 @@ mod tests {
         let result = acquire(folder.path(), HostKind::Cli, "1.2.3".to_string(), "http://127.0.0.1:9999".to_string());
         result.expect_err("a lock held outside this process's own registry must refuse");
 
-        // The record on disk names pid 777 at an address nothing answers on:
+        // The record on disk names an address nothing answers on:
         // the refusal must not repeat it as the holder.
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
-        let cell = std::sync::Arc::new(std::sync::RwLock::new(folder.path().join(".moss")));
+        let cell = crate::moss_paths::Served::test_cell(folder.path().join(".moss"));
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let refusal = runtime
             .block_on(acquire_for_site_dir(&cell, HostKind::Cli, "1.2.3".to_string(), "http://127.0.0.1:9999".to_string(), OnConflict::Refuse, None))
@@ -664,20 +839,58 @@ mod tests {
         assert_eq!(refusal, "this folder is already served by another moss process");
 
         drop(foreign);
-        std::env::remove_var("MOSS_HOME");
+    }
+
+    /// A killed server cannot remove its record; the next start does, and
+    /// keeps the records of servers still running.
+    #[test]
+    fn a_start_removes_the_records_of_servers_that_are_gone() {
+        let home = moss_home_dir();
+        let _home = crate::infra::home::thread_moss_home(&home);
+        let gone = tempfile::tempdir().unwrap();
+        let running = tempfile::tempdir().unwrap();
+        let mut exited = std::process::Command::new(std::env::current_exe().unwrap()).arg("--list").stdout(std::process::Stdio::null()).spawn().unwrap();
+        let dead_pid = exited.id();
+        exited.wait().unwrap();
+        let record = |folder: &Path, pid: u32| {
+            let canonical = std::fs::canonicalize(folder).unwrap();
+            let path = record_path(&canonical).unwrap();
+            let record = OwnerRecord {
+                folder: canonical,
+                pid,
+                kind: HostKind::Cli,
+                version: "1.0.0".to_string(),
+                url: "http://127.0.0.1:1".to_string(),
+                ui_url: None,
+                started_at: crate::system::now_iso(),
+            };
+            atomic_write::write_json_atomic(&path, &record).unwrap();
+            path
+        };
+        let gone_record = record(gone.path(), dead_pid);
+        let running_record = record(running.path(), std::process::id());
+        let garbage = home.join("servers").join("garbage.json");
+        std::fs::write(&garbage, "not a record").unwrap();
+
+        let next = tempfile::tempdir().unwrap();
+        let owned = acquire(next.path(), HostKind::Cli, "1.0.0".to_string(), "http://127.0.0.1:2".to_string()).unwrap();
+
+        assert!(!gone_record.exists(), "the record of a server that is gone is removed");
+        assert!(!garbage.exists(), "a record that does not parse is removed");
+        assert!(running_record.exists(), "a running server keeps its record");
+        drop(owned);
     }
 
     /// A holder that has been asked to yield lets go a moment later; the
     /// requester's wait is on the lock itself.
     #[test]
     fn wait_gets_a_folder_its_holder_releases_in_time() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
-        let cell = std::sync::Arc::new(std::sync::RwLock::new(folder.path().join(".moss")));
+        let cell = crate::moss_paths::Served::test_cell(folder.path().join(".moss"));
 
         let lock_path = owner_lock_path(&canonical).unwrap();
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
@@ -698,7 +911,6 @@ mod tests {
             None,
         ));
         release.join().unwrap();
-        std::env::remove_var("MOSS_HOME");
 
         assert!(matches!(waited, Ok(Some(_))), "the wait must end with the folder: {waited:?}");
     }
@@ -717,6 +929,7 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         use std::io::{Read, Write};
+                        blocking(&stream);
                         let mut buf = [0u8; 1024];
                         let _ = stream.read(&mut buf);
                         let body = format!(
@@ -740,7 +953,7 @@ mod tests {
             folder: folder.to_path_buf(),
             pid,
             kind,
-            version: "0.0.0".to_string(),
+            version: "x".to_string(),
             url: format!("http://127.0.0.1:{port}"),
             ui_url: None,
             started_at: crate::system::now_iso(),
@@ -756,8 +969,7 @@ mod tests {
     /// process that happens to use the same loopback port) reads as unowned.
     #[tokio::test]
     async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
         let stop = recorded_holder(&canonical, "not-the-right-folder".to_string(), 4242, HostKind::Cli);
@@ -765,7 +977,6 @@ mod tests {
         let found = find_live_owner(&canonical).await;
 
         stop();
-        std::env::remove_var("MOSS_HOME");
         assert!(
             found.is_none(),
             "a health body naming a different folder must not read as this folder's live owner, got {:?}",
@@ -775,21 +986,19 @@ mod tests {
 
     #[tokio::test]
     async fn open_in_another_app_is_another_process_answering_as_the_desktop_app() {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         std::fs::create_dir(folder.path().join(".moss")).unwrap();
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
-        let site_dir = std::sync::Arc::new(std::sync::RwLock::new(canonical.join(".moss")));
+        let site_dir = crate::moss_paths::Served::test_cell(canonical.join(".moss"));
         let other_pid = std::process::id().wrapping_add(1);
         let mut seen = vec![open_in_another_app(&site_dir).await];
         for (pid, kind) in [(other_pid, HostKind::Desktop), (other_pid, HostKind::Cli), (std::process::id(), HostKind::Desktop)] {
-            let stop = recorded_holder(&canonical, folder_id(&canonical), pid, kind);
+            let stop = recorded_holder(&canonical, name_for(&canonical), pid, kind);
             seen.push(open_in_another_app(&site_dir).await);
             stop();
         }
         seen.push(open_in_another_app(&site_dir).await);
-        std::env::remove_var("MOSS_HOME");
 
         assert_eq!(
             seen,
@@ -797,4 +1006,209 @@ mod tests {
             "nobody recorded, another app, another program, this process, a record that no longer answers"
         );
     }
+    /// On macOS an accepted socket inherits its listener's non-blocking mode, so a
+    /// fixture's read of a request that has not arrived yet fails at once.
+    fn blocking(stream: &std::net::TcpStream) {
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    }
+
+    #[test]
+    fn a_fixture_answers_a_request_that_arrives_late() {
+        use std::io::{Read, Write};
+        let folder = tempfile::tempdir().unwrap();
+        let server = FixtureServer::new(legacy_health(folder.path()), false);
+        let mut client = std::net::TcpStream::connect(server.url.trim_start_matches("http://")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        client.write_all(b"GET /__moss_health/ HTTP/1.1\r\nHost: fixture\r\n\r\n").unwrap();
+        let mut response = String::new();
+        let _ = client.read_to_string(&mut response);
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    }
+
+    struct FixtureServer {
+        url: String,
+        credential_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FixtureServer {
+        fn new(health: serde_json::Value, redirect: bool) -> Self {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopping = stop.clone();
+            let credential_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let credentials_seen = credential_requests.clone();
+            let worker = std::thread::spawn(move || {
+                while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        continue;
+                    };
+                    blocking(&stream);
+                    let mut buffer = [0; 4096];
+                    let mut size = 0;
+                    // TCP can split the request line or headers across reads.
+                    while size < buffer.len() && !buffer[..size].windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        match stream.read(&mut buffer[size..]) {
+                            Ok(0) | Err(_) => break,
+                            Ok(read) => size += read,
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&buffer[..size]).to_ascii_lowercase();
+                    if request.contains("x-moss-token:") {
+                        credentials_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let authenticated = request.contains("x-moss-token: legacy-secret\r\n");
+                    let (status, content_type, body) = if redirect {
+                        (302, "application/json", health.to_string())
+                    } else if request.starts_with("get /__moss_health/") {
+                        // Legacy loopback health is anonymous; a public owner
+                        // withholds identity until its token is accepted.
+                        if health["private"] == true && !authenticated {
+                            if request.contains("x-moss-token:") {
+                                (401, "application/json", "{}".into())
+                            } else {
+                                (200, "application/json", serde_json::json!({"server":"moss-preview-server", "schema":2}).to_string())
+                            }
+                        } else {
+                            (200, "application/json", health.to_string())
+                        }
+                    } else if request.starts_with("get /__moss/events ") && request.contains("x-moss-token: legacy-secret\r\n") {
+                        (200, "text/event-stream", String::new())
+                    } else {
+                        (401, "application/json", "{}".into())
+                    };
+                    let _ = write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nLocation: http://127.0.0.1:1/\r\n\r\n{body}", body.len());
+                }
+            });
+            Self { url, credential_requests, stop, worker: Some(worker) }
+        }
+    }
+
+    impl Drop for FixtureServer {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+
+    fn legacy_health(folder: &Path) -> serde_json::Value {
+        serde_json::json!({
+            "server": "moss-preview-server", "schema": 2, "preview": true,
+            "version": "0.8.0", "pid": std::process::id(), "folder_id": name_for(folder),
+        })
+    }
+
+    fn fixture_record(folder: &Path, url: String) -> OwnerRecord {
+        OwnerRecord {
+            folder: folder.to_path_buf(), pid: std::process::id(), kind: HostKind::Cli,
+            version: "0.15.23".into(), url, ui_url: None, started_at: "fixture-session".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_auth_with_missing_machine_token() {
+        legacy_auth_fixture(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_auth_with_stale_machine_token() {
+        legacy_auth_fixture(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_auth_with_private_health_and_stale_machine_token() {
+        legacy_auth_fixture(true, true).await;
+    }
+
+    async fn legacy_auth_fixture(stale: bool, private: bool) {
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path().canonicalize().unwrap();
+        let mut health = legacy_health(&folder);
+        health["private"] = private.into();
+        let server = FixtureServer::new(health, false);
+        atomic_write::write_json_atomic(&record_path(&folder).unwrap(), &fixture_record(&folder, server.url.clone())).unwrap();
+        let legacy = folder.join(".moss/build.nosync/http-token");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "legacy-secret\n").unwrap();
+        if stale { super::super::carrier_token::publish(&folder, "stale-machine-secret").unwrap(); }
+        let owner = discover_owner(&folder).await.unwrap().unwrap();
+        assert_eq!(owner.record.version, "0.15.23");
+        assert_eq!(owner.health_version, "0.8.0");
+        assert!(owner.capabilities.preview);
+        assert!(owner.capabilities.authenticated_events, "stale current: {stale}");
+        assert_eq!(owner.token(), Some("legacy-secret"));
+        std::fs::remove_file(legacy).unwrap();
+        super::super::carrier_token::publish(&folder, "legacy-secret").unwrap();
+        assert!(discover_owner(&folder).await.unwrap().unwrap().capabilities.authenticated_events, "current token still works without a legacy file");
+        super::super::carrier_token::publish(&folder, "stale-machine-secret").unwrap();
+        let found = discover_owner(&folder).await.unwrap();
+        if private {
+            assert!(found.is_none(), "readiness-only health cannot verify folder identity");
+        } else {
+            let owner = found.unwrap();
+            assert!(owner.capabilities.preview, "anonymous health still works");
+            assert!(!owner.capabilities.authenticated_events, "health must not prove the stale credential");
+            assert!(owner.token().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_rejects_wrong_marker_pid_folder_record_and_redirects() {
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path().canonicalize().unwrap();
+        super::super::carrier_token::publish(&folder, "legacy-secret").unwrap();
+        for case in ["marker", "pid", "folder", "record", "redirect", "endpoint"] {
+            let mut health = legacy_health(&folder);
+            match case {
+                "marker" => health["server"] = "foreign-server".into(),
+                "pid" => health["pid"] = 1.into(),
+                "folder" => health["folder_id"] = "another-folder".into(),
+                _ => {},
+            }
+            let server = FixtureServer::new(health, case == "redirect");
+            let mut record = fixture_record(&folder, server.url.clone());
+            if case == "record" { record.folder = folder.join("elsewhere"); }
+            if case == "endpoint" { record.url.push_str("/wrong-path"); }
+            atomic_write::write_json_atomic(&record_path(&folder).unwrap(), &record).unwrap();
+            assert!(discover_owner(&folder).await.unwrap().is_none(), "{case}");
+            assert_eq!(server.credential_requests.load(std::sync::atomic::Ordering::Relaxed), 0, "credentials sent to {case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_owner_distinguishes_stale_replacement_unresponsive_and_storage_failure() {
+        let home = moss_home_dir();
+        let _home = crate::infra::home::thread_moss_home(&home);
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path().canonicalize().unwrap();
+        let record = fixture_record(&folder, "http://127.0.0.1:1".into());
+        atomic_write::write_json_atomic(&record_path(&folder).unwrap(), &record).unwrap();
+        let foreign = crate::infra::folder_lock::try_acquire_named(&folder, OWNER_LOCK).unwrap().unwrap();
+        let resolve = || resolve_owner(&folder, HostKind::Cli, "new".into(), String::new(), None);
+        assert!(matches!(resolve().await.unwrap(), Ownership::Unresponsive));
+        assert_eq!(read_record(&folder).unwrap(), Some(record));
+        drop(foreign);
+        let Ownership::Acquired(guard) = resolve().await.unwrap() else { panic!("released lock must be acquired") };
+        assert!(guard.replaced_stale_record);
+        let shared = acquire(&folder, HostKind::Cli, "new".into(), String::new()).unwrap();
+        assert!(!shared.replaced_stale_record);
+        drop(guard);
+        drop(shared);
+        std::fs::remove_dir_all(home.join("locks")).unwrap();
+        std::fs::write(home.join("locks"), "not a directory").unwrap();
+        assert!(resolve().await.is_err(), "lock IO failure must never yield a guard");
+        std::fs::remove_file(home.join("locks")).unwrap();
+        std::fs::remove_dir_all(home.join("servers")).unwrap();
+        std::fs::write(home.join("servers"), "not a directory").unwrap();
+        assert!(resolve().await.is_err(), "announcement IO failure must remain an error");
+    }
+
 }

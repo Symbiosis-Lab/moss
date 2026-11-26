@@ -220,12 +220,6 @@
 .moss-info-grid > .moss-settings-section-title {
   grid-column: 1 / -1;
 }
-/* The credentials-intro paragraph SchemaFieldRenderer drops into the same
-   grid is prose, not a row — same span rule as
-   the heading above, or it would render squeezed into the label column. */
-.moss-info-grid > .moss-settings-description {
-  grid-column: 1 / -1;
-}
 /* `.moss-field--inline` gets `display: contents` from the rule above, an
    author-origin rule that always beats the UA `[hidden] { display: none; }`
    regardless of selector specificity — without this override a `when`-hidden
@@ -1706,6 +1700,36 @@ body.own-titlebar.controls-trailing .moss-caption-btn {
 .moss-caption-btn:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--moss-color-accent);
+}
+
+/* Linux: the buttons the desktop's layout names, on the side and in the order
+   it gives (placeWindowButtons, utils/fullscreen-class.ts), round as in a GTK
+   header bar and centred in the title row, `--moss-caption-slot` cells in from
+   their side's edge. A button the layout leaves out has no side and stays
+   hidden. */
+body.own-titlebar.platform-linux [data-window-button]:not([data-caption-side]) {
+  display: none;
+}
+body.own-titlebar.platform-linux [data-window-button][data-caption-side] {
+  display: grid;
+  top: var(--moss-caption-linux-inset);
+  width: var(--moss-space-md);
+  height: var(--moss-space-md);
+  border-radius: var(--moss-radius-capsule);
+  background: var(--moss-hover-overlay);
+  color: var(--moss-chrome-icon-color);
+}
+body.own-titlebar.platform-linux [data-window-button][data-caption-side="end"] {
+  inset-inline: auto calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot, 0) * var(--moss-caption-linux-pitch));
+}
+body.own-titlebar.platform-linux [data-window-button][data-caption-side="start"] {
+  inset-inline: calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot, 0) * var(--moss-caption-linux-pitch)) auto;
+}
+body.own-titlebar.platform-linux [data-window-button][data-caption-side]:hover {
+  background: var(--moss-active-overlay);
+}
+body.own-titlebar.platform-linux [data-window-button][data-caption-side]:focus-visible {
+  box-shadow: var(--moss-focus-ring);
 }
 
 /* Maximize/restore glyph swap — the same two-elements-one-svg technique as

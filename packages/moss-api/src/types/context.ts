@@ -180,6 +180,13 @@ export interface CopyRef {
 }
 
 /**
+ * One piece of a long article: a run of HTML, or a picture (absolute `url`) between runs.
+ *
+ * @category Copies
+ */
+export type ArticleBlock = { html: string } | { picture: { url: string; alt: string } };
+
+/**
  * The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
  * receives, already shaped to the limits its manifest declares
  * under `contributes.channel.syndication`.
@@ -191,6 +198,8 @@ export interface CopyJob {
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
+  /** The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host. */
+  site: { url: string; name: string };
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
   /** Payload fields may be absent for a lookup whose copy no longer fits. */
@@ -204,7 +213,20 @@ export interface CopyJob {
   omitted_pictures?: number;
 
   teaser?: { title: string; description: string; url: string; cover?: string | null } | null;
-  article?: { title: string; html: string; description?: string | null; cover?: string | null } | null;
+  article?: {
+    title: string;
+    html: string;
+    /** The page as written, in plain text: no title and no link back. */
+    text?: string;
+    description?: string | null;
+    cover?: string | null;
+    /**
+     * `html` as an editor is given it, split at its pictures in reading order:
+     * head elements, a leading h1 repeating the title and footnote back-links
+     * removed, embeds as links, a heading over the notes. Formula pictures stay inline.
+     */
+    blocks?: ArticleBlock[];
+  } | null;
   /** The copy already on the network (for an update or lookup), or the draft a hand-off left there. */
   previous?: (CopyRef & { parts?: CopyRef[] }) | null;
   /** The channel's resolved settings. */

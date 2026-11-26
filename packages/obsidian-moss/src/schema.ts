@@ -11,6 +11,7 @@ export interface FieldSpec {
   type: string;
   description: string;
   group: string;
+  widget?: string;
   enumValues?: string[];
 }
 
@@ -23,7 +24,7 @@ export function siteSchema(site: MossSite): MossSchema {
   const fields = new Map<string, FieldSpec>();
   for (const [name, field] of Object.entries(schema.frontmatter.fields)) {
     fields.set(name, {
-      name, type: field.type, description: field.description ?? "", group: field.group ?? "",
+      name, type: field.type, description: field.description ?? "", group: field.group ?? "", widget: field.widget ?? undefined,
       enumValues: field.enum_values ?? undefined,
     });
   }

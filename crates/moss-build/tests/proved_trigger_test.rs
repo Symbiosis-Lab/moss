@@ -3,6 +3,7 @@
 //! rest. Each guard below is one input no page's markdown shows; moving it must
 //! render every page again.
 
+use moss_build::moss_paths::MossPaths;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ fn run(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMod
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: site_url.map(str::to_string),
         server_port,
@@ -53,7 +54,7 @@ fn run(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMod
 }
 
 fn last_profile(root: &Path) -> serde_json::Value {
-    let text = fs::read_to_string(root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let text = fs::read_to_string(MossPaths::new(root).profile()).unwrap();
     serde_json::from_str(text.lines().last().unwrap()).unwrap()
 }
 
@@ -79,7 +80,8 @@ impl Site {
         self.0.path()
     }
 
-    fn write(&self, rel: &str, text: &str) {
+    /// `rel` may also be an absolute path, such as one `MossPaths` names.
+    fn write(&self, rel: impl AsRef<Path>, text: &str) {
         let path = self.root().join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
@@ -128,15 +130,15 @@ fn a_stop_needs_the_sealed_generation_current_and_its_media_settled() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     type Move = fn(&Site);
     fn generation(s: &Site) -> PathBuf {
-        s.root().join(".moss/build.nosync/generations").join(fs::read_to_string(s.root().join(".moss/build.nosync/current.generation")).unwrap().trim())
+        MossPaths::new(s.root()).generations_dir().join(fs::read_to_string(MossPaths::new(s.root()).current_generation_marker()).unwrap().trim())
     }
     let moves: &[(&str, Move)] = &[
-        ("current names another generation", |s| s.write(".moss/build.nosync/current.generation", "0123456789abcdef")),
+        ("current names another generation", |s| s.write(MossPaths::new(s.root()).current_generation_marker(), "0123456789abcdef")),
         ("the generation is gone", |s| fs::remove_dir_all(generation(s)).unwrap()),
         ("the seal left work to later passes", |s| rewrite_manifest(s, |m| m["build_inputs"]["complete"] = false.into())),
         ("media settled after the render", |s| rewrite_manifest(s, |m| m["build_inputs"]["media_settled"] = false.into())),
-        ("no list of waiting cards", |s| fs::remove_file(s.root().join(".moss/build.nosync/link-cards-waiting.json")).unwrap()),
-        ("an unreadable list of waiting cards", |s| s.write(".moss/build.nosync/link-cards-waiting.json", "[\"cut off")),
+        ("no list of waiting cards", |s| fs::remove_file(MossPaths::new(s.root()).build_dir().join("link-cards-waiting.json")).unwrap()),
+        ("an unreadable list of waiting cards", |s| s.write(MossPaths::new(s.root()).build_dir().join("link-cards-waiting.json"), "[\"cut off")),
     ];
     let control = Site::new();
     control.sealed();
@@ -266,7 +268,7 @@ fn every_input_outside_the_page_tree_keeps_the_build_full() {
         ("a deleted page", |s| fs::remove_file(s.root().join("notes/beta.md")).unwrap()),
         ("a redirect table", |s| s.write(".moss/redirects.json", "{\"/old/\": \"/about/\"}\n")),
         ("a data file", |s| s.write(".moss/data/people.json", "[\"Ada\"]\n")),
-        ("deleted link cards", |s| fs::remove_dir_all(s.root().join(".moss/build.nosync/cache/link-meta")).unwrap()),
+        ("deleted link cards", |s| fs::remove_dir_all(MossPaths::new(s.root()).cache_link_meta()).unwrap()),
         ("a new image", |s| s.write("notes/pic.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>")),
         ("another moss binary", |s| rewrite_manifest(s, |m| m["builder_fingerprint"] = "an older moss".into())),
         ("a manifest with no input record", |s| rewrite_manifest(s, |m| { m.as_object_mut().unwrap().remove("build_inputs"); })),
@@ -274,7 +276,7 @@ fn every_input_outside_the_page_tree_keeps_the_build_full() {
     let setup = || {
         let site = Site::new();
         site.write(".moss/data/people.json", "[]\n");
-        site.write(&format!(".moss/build.nosync/cache/link-meta/{}.json", "a".repeat(64)), "{}\n");
+        site.write(MossPaths::new(site.root()).cache_link_meta().join(format!("{}.json", "a".repeat(64))), "{}\n");
         site.sealed();
         site
     };
@@ -343,10 +345,9 @@ fn a_build_that_carries_from_no_record_leaves_the_next_one_unproved() {
 }
 
 /// A process hook that writes its own state under `.moss/plugins/<name>/` on
-/// every build moves a measured `.moss/` input after the build measured it, so
-/// the next build cannot prove anything and renders every page. The same holds
-/// for anything a build fetches and renders in one go: its record is the
-/// state before the write.
+/// every build moves a measured `.moss/` input during each build: the build
+/// measures again after the hook, finds its record broken and renders every
+/// page, recording the state the hook left.
 #[test]
 fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
     use moss_build::build::PluginMode;
@@ -359,7 +360,7 @@ fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
     }
     build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let first = fs::read_to_string(site.root().join(STATE)).expect("the hook ran");
-    assert!(recorded_moss_input(&site, STATE).is_none(), "the first build measured before its hook wrote");
+    assert!(recorded_moss_input(&site, STATE).is_some(), "the first build measured after its hook wrote");
     let record = build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let second = fs::read_to_string(site.root().join(STATE)).unwrap();
     assert_ne!(first, second, "the hook writes new bytes every build");
@@ -424,7 +425,8 @@ fn turning_plugins_on_keeps_the_build_full() {
 }
 
 /// Every build of a site with a comment server records the refresh's outcome,
-/// which no page reads, so it must not count as an input.
+/// which no page reads. An older moss on another computer still rewrites it in
+/// the folder on every attempt, so that file must not count as an input.
 #[test]
 fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -444,16 +446,17 @@ fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
     site.sealed();
     let state = ".moss/data/comment-sync-state.json";
     for n in 1..=2 {
+        site.write(state, &format!(r#"{{"last_success_at": null, "last_attempt_at": {n}.0, "last_error": null}}"#));
         let record = build(site.root(), BuildTrigger::Unobserved);
-        let written = fs::read_to_string(site.root().join(state)).expect("the refresh ran and recorded its outcome");
-        assert!(written.contains("last_error") && !written.contains("\"last_error\": null"), "{written}");
+        let recorded = moss_build::build::features::sync::load_comment_sync_state(site.root().to_str().unwrap());
+        assert!(recorded.last_error.is_some(), "the refresh ran and recorded its outcome");
         assert!(unchanged(&record), "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
     }
 }
 
 fn recorded_moss_input(site: &Site, rel: &str) -> Option<serde_json::Value> {
     let manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(MossPaths::new(site.root()).hashes()).unwrap()).unwrap();
     manifest["build_inputs"]["moss"].get(rel).cloned()
 }
 
@@ -495,7 +498,7 @@ fn a_proved_build_after_staging_is_cleared_publishes_what_a_full_render_does() {
     let site = Site::new();
     site.sealed();
     site.write("about.md", "---\ntitle: About\n---\n\nAbout us, at length.\n");
-    let _ = fs::remove_dir_all(site.root().join(".moss/build.nosync/staging"));
+    let _ = fs::remove_dir_all(MossPaths::new(site.root()).staging_dir());
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     let proved = published(site.root());
@@ -525,10 +528,10 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
         .unwrap();
     let blur = "background-image:url(data:image";
     build_previewing(site.root(), BuildTrigger::Unobserved);
-    let page = || fs::read_to_string(site.root().join(".moss/build.nosync/staging/notes/alpha/index.html")).unwrap();
+    let page = || fs::read_to_string(MossPaths::new(site.root()).staging_dir().join("notes/alpha/index.html")).unwrap();
     assert!(!page().contains(blur), "the first preview render left the blur to the media phase");
 
-    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
+    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled { edited: false });
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_rendered") >= 1, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
@@ -538,7 +541,7 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let full = Site(tempfile::tempdir().unwrap());
     copy_source(site.root(), full.root());
     build_previewing(full.root(), BuildTrigger::Full);
-    build_previewing(full.root(), BuildTrigger::ImagesSettled);
+    build_previewing(full.root(), BuildTrigger::ImagesSettled { edited: false });
     let reference = published(full.root());
     let differing: Vec<_> = reference.keys().chain(settled.keys())
         .filter(|k| reference.get(*k) != settled.get(*k))
@@ -621,7 +624,7 @@ fn inputs_a_build_moves_itself_still_let_the_next_build_prove() {
     let site = Site::new();
     let url = "https://example.com";
     site.write("notes/alpha.md", &format!("---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n:::grid 1\n[External]({url})\n:::\n"));
-    let old_card = format!(".moss/build.nosync/cache/link-meta/{}.json", sha256_hex(url));
+    let old_card = MossPaths::new(site.root()).cache_link_meta().join(format!("{}.json", sha256_hex(url)));
     site.write(&old_card, "{\"title\": \"Example\"}\n");
     site.write(".moss/redirects.json", "{\"qr/notes/alpha.svg\": \"notes/alpha/\"}\n");
     build_previewing(site.root(), BuildTrigger::Unobserved);
@@ -629,7 +632,7 @@ fn inputs_a_build_moves_itself_still_let_the_next_build_prove() {
     assert!(!site.root().join(&old_card).exists());
     assert!(!fs::read_to_string(site.root().join(".moss/redirects.json")).unwrap().contains("qr/"), "the saved QR stub was dropped");
 
-    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
+    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled { edited: false });
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
 }
 
@@ -640,12 +643,18 @@ struct Heard {
     change_sets: Mutex<Vec<Option<moss_build::build::manifest::change_set::ChangeSet>>>,
     stage_ready: std::sync::atomic::AtomicUsize,
     completed_on: Mutex<Vec<Option<u16>>>,
+    page_ticks: std::sync::atomic::AtomicUsize,
 }
 
 struct Ear(std::sync::Arc<Heard>);
 
 impl moss_build::build::ports::reporter::BuildReporter for Ear {
     fn report(&self, event: &moss_build::build::progress::PipelineEvent) {
+        if let moss_build::build::progress::PipelineEvent::BackgroundProgress { task, .. } = event {
+            if task == "markdown" || task == "html_pages" {
+                self.0.page_ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         if let moss_build::build::progress::PipelineEvent::Progress { step, completed: true, port, .. } = event {
             if step == "build" {
                 self.0.completed_on.lock().unwrap().push(*port);
@@ -672,7 +681,11 @@ const PREVIEW_PORT: u16 = 47_311;
 /// A build that opens a preview, as the app's folder open does, on `cell`: the
 /// preview cell the server reads. Its server is a stand-in that answers with a
 /// port.
-fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (serde_json::Value, std::sync::Arc<Heard>) {
+fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json::Value, std::sync::Arc<Heard>) {
+    serve_as(root, cell, BuildTrigger::Unobserved)
+}
+
+fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger) -> (serde_json::Value, std::sync::Arc<Heard>) {
     use moss_build::build::{run_pipeline, PipelineConfig};
     let heard = std::sync::Arc::new(Heard::default());
     let folder = root.to_string_lossy().into_owned();
@@ -689,7 +702,7 @@ fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (ser
         watch: false,
         start_server: true,
         host,
-        trigger: BuildTrigger::Unobserved,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -701,12 +714,17 @@ fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (ser
     (last_profile(root), heard)
 }
 
-fn new_cell() -> std::sync::Arc<std::sync::RwLock<PathBuf>> {
-    std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()))
+/// A preview cell still on another folder, as a server left by an earlier folder is.
+fn new_cell() -> moss_build::moss_paths::ServedCell {
+    moss_build::moss_paths::Served {
+        folder: moss_build::vault_root::VaultRoot::resolve("/moss-test/no-folder"),
+        dir: PathBuf::new(),
+    }
+    .into_cell()
 }
 
-fn served(cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> PathBuf {
-    cell.read().unwrap().clone()
+fn served(cell: &moss_build::moss_paths::ServedCell) -> PathBuf {
+    cell.read().unwrap().dir.clone()
 }
 
 /// Every file under `dir`, by path.
@@ -718,12 +736,12 @@ fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 fn staging(root: &Path) -> PathBuf {
-    root.canonicalize().unwrap().join(".moss/build.nosync/staging")
+    MossPaths::new(&root.canonicalize().unwrap()).staging_dir()
 }
 
 /// Two serving opens: the second proves from the first's seal, so the next one
 /// has a settled seal to stop on.
-fn served_site() -> (Site, std::sync::Arc<std::sync::RwLock<PathBuf>>) {
+fn served_site() -> (Site, moss_build::moss_paths::ServedCell) {
     let site = Site::new();
     let cell = new_cell();
     serve(site.root(), &cell);
@@ -743,7 +761,7 @@ fn a_serving_open_with_nothing_changed_shows_the_sealed_staging_without_scanning
     records.record_content_hashes(&folder, Default::default());
     let (record, heard) = serve(site.root(), &cell);
     assert!(stopped(&record), "{record}");
-    let sealed: serde_json::Value = serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    let sealed: serde_json::Value = serde_json::from_str(&fs::read_to_string(MossPaths::new(site.root()).hashes()).unwrap()).unwrap();
     let baseline = records.content_hashes(&folder).expect("the watcher has a baseline");
     assert_eq!(serde_json::to_value(&baseline.files).unwrap(), sealed["files"], "the watcher diffs the next edit against the seal");
     assert!(record["phases"].as_array().unwrap().iter().all(|p| p["name"] != "scan"), "{record}");
@@ -752,6 +770,21 @@ fn a_serving_open_with_nothing_changed_shows_the_sealed_staging_without_scanning
     assert_eq!(heard.stage_ready.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(*heard.completed_on.lock().unwrap(), vec![Some(PREVIEW_PORT)]);
     assert_publishes_a_full_render(&site);
+}
+
+/// The preview's progress line reads a page count as a build starting, so a
+/// re-render nobody asked for must not send one to the host.
+#[test]
+fn a_settle_render_counts_no_pages_to_the_host_where_a_full_render_does() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    let ticks = |heard: &Heard| heard.page_ticks.load(std::sync::atomic::Ordering::SeqCst);
+    let (_, full) = serve_as(site.root(), &cell, BuildTrigger::Full);
+    assert!(ticks(&full) > 0, "premise: a full render counts its pages to the host");
+    let (record, settle) = serve_as(site.root(), &cell, BuildTrigger::VideosSettled);
+    assert!(count(&record, "pages_rendered") > 0, "premise: the settle rendered pages: {record}");
+    assert_eq!(ticks(&settle), 0, "a settle render announced itself");
+    assert_eq!(settle.stage_ready.load(std::sync::atomic::Ordering::SeqCst), full.stage_ready.load(std::sync::atomic::Ordering::SeqCst), "the settle still hands its stage to the server");
 }
 
 /// The stopped open publishes the change set a proved open would: the same
@@ -819,7 +852,7 @@ fn a_build_that_neither_serves_nor_exits_does_not_stop() {
         watch: false,
         start_server: false,
         host: moss_build::cli::host::cli_host_ports(&folder),
-        trigger: BuildTrigger::Unobserved,
+        trigger: BuildTrigger::Unobserved, reason: None,
         exits_after_build: false,
         site_url_override: None,
         server_port: None,
@@ -868,7 +901,7 @@ fn assert_publishes_a_full_render(site: &Site) {
 }
 
 fn rewrite_manifest(site: &Site, edit: impl FnOnce(&mut serde_json::Value)) {
-    let path = site.root().join(".moss/build.nosync/hashes.json");
+    let path = MossPaths::new(site.root()).hashes();
     let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     edit(&mut manifest);
     fs::write(&path, serde_json::to_string(&manifest).unwrap()).unwrap();
@@ -876,7 +909,7 @@ fn rewrite_manifest(site: &Site, edit: impl FnOnce(&mut serde_json::Value)) {
 
 /// Every HTML file the current generation serves, by path.
 fn published(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let current = root.join(".moss/build.nosync/current");
+    let current = MossPaths::new(root).current_ptr();
     walkdir::WalkDir::new(&current).follow_links(true).into_iter().filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "html"))
         .map(|e| (e.path().strip_prefix(&current).unwrap().to_string_lossy().into_owned(), fs::read(e.path()).unwrap()))
@@ -897,4 +930,37 @@ fn copy_source(from: &Path, to: &Path) {
             filetime::set_file_mtime(&dest, mtime).unwrap();
         }
     }
+}
+
+/// Two sections of 80 words each: enough for the floating island to list.
+fn long_page(title: &str) -> String {
+    let words = "The harbour keeps its own hours and the boats come in with the tide. ".repeat(12);
+    format!("---\ntitle: {title}\n---\n\n## Morning\n\n{words}\n\n## Evening\n\n{words}\n")
+}
+
+/// `[site].floating_nav` changes only the pages that can show the island, so a
+/// watch save of `config.toml` that flips it renders those and carries the
+/// rest; any other change to the file still renders everything.
+#[test]
+fn a_floating_nav_toggle_renders_only_the_pages_it_changes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write("notes/long.md", &long_page("Long"));
+    site.sealed();
+    let config = site.root().join(".moss/config.toml");
+    let save = |text: &str| {
+        site.write(".moss/config.toml", text);
+        build(site.root(), BuildTrigger::ContentOnly(vec![config.clone()]))
+    };
+
+    for flag in ["true", "false"] {
+        let record = save(&format!("[site]\ndomain = \"example.com\"\nfloating_nav = {flag}\n"));
+        assert_eq!(count(&record, "pages_rendered"), 1, "floating_nav = {flag}: {record}");
+        assert!(count(&record, "pages_carried") > 0, "floating_nav = {flag}: {record}");
+        assert_publishes_a_full_render(&site);
+    }
+
+    let record = save("[site]\ndomain = \"example.org\"\nfloating_nav = false\n");
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
 }

@@ -8,7 +8,9 @@ use super::types::*;
 use engine_adapter::PluginEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
+pub mod accounts;
 pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
@@ -196,6 +198,23 @@ pub struct PluginManager {
     /// shared (Arc) with the engine's dispatch task. Re-snapshotted by
     /// `rediscover_plugins` — the ONE place a grant may change while moss runs.
     grants: crate::engine::host_fns::GrantRegistry,
+
+    watchdog: HookWatchdog,
+}
+
+/// How long a hook may go without progress before it is cancelled, and how
+/// often that is checked. A test that needs a person slower than the limit
+/// shortens both instead of waiting a minute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookWatchdog {
+    pub limit: Duration,
+    pub check: Duration,
+}
+
+impl Default for HookWatchdog {
+    fn default() -> Self {
+        Self { limit: Duration::from_secs(60), check: Duration::from_secs(5) }
+    }
 }
 
 /// Build the hook-dispatch engine.
@@ -270,6 +289,7 @@ impl PluginManager {
             engine: build_engine(host.clone(), project_path, grants.clone()),
             grants,
             host,
+            watchdog: HookWatchdog::default(),
         };
 
         // Nothing to spawn: every plugin self-initializes per-Context on its
@@ -277,6 +297,11 @@ impl PluginManager {
         // went with the hidden runtime webview.
 
         Ok(manager)
+    }
+
+    pub fn with_watchdog(mut self, watchdog: HookWatchdog) -> Self {
+        self.watchdog = watchdog;
+        self
     }
 
     /// Find a plugin by name
@@ -451,7 +476,7 @@ impl PluginManager {
                 &context_json,
                 asked_by,
             ).await {
-                Ok(result) => self.restate_offer(plugin, asked_by, result),
+                Ok((result, _)) => self.restate_offer(plugin, asked_by, result),
                 Err(e) => {
                     log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
                     if !has_login {
@@ -506,7 +531,7 @@ impl PluginManager {
             Capability::Process.hook_name(),
             &context_json,
             asked_by,
-        ).await?;
+        ).await?.0;
         self.restate_offer(&plugin, asked_by, result);
         Ok(())
     }
@@ -534,27 +559,6 @@ impl PluginManager {
         });
     }
 
-    /// Dispatch a named plugin export by hook name — public entry point for
-    /// commands that need to invoke an export that isn't a routed `Capability`
-    /// (e.g. the `login` export invoked by `connect_account`).
-    ///
-    /// The caller is responsible for passing a pre-initialized plugin and a
-    /// pre-serialized context JSON. The watchdog suppression, singleflight dedup,
-    /// and hook-state lifecycle are all handled inside `execute_plugin_javascript`.
-    ///
-    /// # Design note
-    /// `execute_plugin_javascript` is private so callers can't accidentally bypass
-    /// the initialization and state-management guards. This thin public wrapper
-    /// exposes the dispatch surface without relaxing those guards — the caller
-    /// must already hold an initialized `Plugin` reference.
-    pub async fn execute_plugin_javascript_pub(
-        &self,
-        plugin: &Plugin,
-        hook_name: &str,
-        context_json: &str,
-    ) -> Result<Option<HookResult>, String> {
-        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await
-    }
 
 
     /// Execute deploy capability (publish to hosting platforms)
@@ -616,9 +620,7 @@ impl PluginManager {
         let plugin_context = context_for_plugin(project_path, context, &plugin);
         match self.execute_hook_with_result(&plugin, hook, &plugin_context).await {
             Ok(result) => Ok(result),
-            // The engine reports a missing export by this exact substring
-            // — see `engine_tests.rs`.
-            Err(e) if e.contains("Hook function not found") => Ok(None),
+            Err(e) if crate::engine::is_missing_export(&e) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -680,7 +682,7 @@ impl PluginManager {
 
         // Execute with activity-based timeout (timeout is managed inside the function)
         // The inner function uses inactivity detection: if no progress messages
-        // arrive within INACTIVITY_TIMEOUT, the hook is considered stuck.
+        // arrive within the watchdog's limit, the hook is considered stuck.
         self.execute_plugin_javascript_with_result(plugin, hook_name, &context_json).await
     }
 
@@ -701,7 +703,7 @@ impl PluginManager {
         hook_name: &str,
         context_json: &str,
         asked_by: AskedBy,
-    ) -> Result<Option<HookResult>, String> {
+    ) -> Result<(Option<HookResult>, Option<serde_json::Value>), String> {
         let hook_state = &self.host.state.hooks;
 
         // --- Singleflight: deduplicate concurrent dispatch of the same hook ---
@@ -741,7 +743,7 @@ impl PluginManager {
             let _ = rx.changed().await;
             return match rx.borrow().clone() {
                 Some(result) => result,
-                None => Ok(None), // Aborted — treat as no-op
+                None => Ok((None, None)), // Aborted — treat as no-op
             };
         }
 
@@ -766,7 +768,6 @@ impl PluginManager {
             // The select! loop produced a verdict (success or timeout) —
             // disarm the guard and share it with any waiters.
             HookRun::Finished(result) => {
-                let result = result.map(|(hook_result, _)| hook_result);
                 sf_guard.disarm();
                 hook_state.in_flight_hooks.complete(&singleflight_key, result.clone());
                 result
@@ -900,8 +901,7 @@ impl PluginManager {
 
         // Activity-based timeout: check for inactivity instead of fixed timeout.
         // This allows plugins to run as long as they're making progress.
-        const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
-        const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+        let HookWatchdog { limit, check } = self.watchdog;
 
         let result = loop {
             tokio::select! {
@@ -926,12 +926,12 @@ impl PluginManager {
                         Err(_) => Err("Completion channel closed unexpectedly".to_string()),
                     };
                 }
-                _ = tokio::time::sleep(CHECK_INTERVAL) => {
+                _ = tokio::time::sleep(check) => {
                     if hook_state.is_making_progress(&plugin.manifest.name, hook_name) {
                         continue;
                     }
                     let last_activity = hook_state.get_last_activity(&plugin.manifest.name, hook_name);
-                    if last_activity.elapsed() > INACTIVITY_TIMEOUT {
+                    if last_activity.elapsed() > limit {
                         // Condition 6: kill the orphaned engine-side hook so it does
                         // not keep running invisibly. Late Complete after this break
                         // is harmless: hook_state.clear below removed the completion
@@ -949,7 +949,7 @@ impl PluginManager {
                         );
                         break Err(format!(
                             "Hook '{}::{}' timed out - no progress for {} seconds",
-                            plugin.manifest.name, hook_name, INACTIVITY_TIMEOUT.as_secs()
+                            plugin.manifest.name, hook_name, limit.as_secs()
                         ));
                     }
                 }
@@ -963,6 +963,18 @@ impl PluginManager {
         // Teardown — unregister the executing hook so a
         // future invocation of a different hook name for this plugin starts clean.
         hook_state.unregister_executing_hook(&plugin.manifest.name);
+
+        // A page left open waits on nobody once its hook is over. A sign-in's
+        // page is also closed: a click on it would reach a listener that died
+        // with the hook.
+        let page_left_open = hook_state.take_window(&plugin.manifest.name);
+        if page_left_open && hook_name == crate::plugins::types::Capability::Login.hook_name() {
+            if let Some(app) = &self.host.app {
+                if let Err(e) = app.close_action_panel().await {
+                    log::warn!(target: "plugin", "{}: could not close the sign-in page: {e}", plugin.manifest.name);
+                }
+            }
+        }
 
         // Signal the shell that this hook's progress task is done
         self.host.reporter.report(&crate::build::progress::PipelineEvent::PluginProgress(

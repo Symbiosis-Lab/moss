@@ -263,8 +263,9 @@ fn relative_source_path(root: &VaultRoot, raw: &str) -> Result<String, String> {
     Ok(logical_path(rel))
 }
 
-/// `<id>` is a record filename stem, or an unambiguous prefix of one — typed
-/// once by a person copying the first few characters off a timeline row.
+/// `<id>` is a record filename stem, or an unambiguous prefix of one. A
+/// timeline row shows the version's commit, not its id, so a prefix of that
+/// commit is accepted when no id starts with it.
 /// Exact match wins outright, so a full id already on disk is never
 /// second-guessed by a coincidental prefix collision.
 fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Result<&'a str, String> {
@@ -276,14 +277,43 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
         .map(|(id, _)| id.as_str())
         .filter(|id| id.starts_with(needle))
         .collect();
-    match matches.len() {
-        0 => Err(format!("no such version: {needle}")),
-        1 => Ok(matches[0]),
-        _ => Err(format!(
-            "'{needle}' matches more than one version: {}",
-            matches.join(", ")
-        )),
+    if !matches.is_empty() || needle.is_empty() {
+        return match matches.len() {
+            0 => Err(format!("no such version: {needle}")),
+            1 => Ok(matches[0]),
+            _ => Err(format!("'{needle}' matches more than one version: {}", matches.join(", "))),
+        };
     }
+    // Every version saved between two commits shows the same commit, so the
+    // choices are named as their rows read, each with an --at that picks it.
+    let on_commit: Vec<&(String, PublishRecord)> = records
+        .iter()
+        .filter(|(_, r)| r.git_head.as_deref().is_some_and(|h| h.starts_with(needle)))
+        .collect();
+    match on_commit.as_slice() {
+        [] => Err(format!("no such version: {needle}")),
+        [(id, _)] => Ok(id.as_str()),
+        many => {
+            let rows: Vec<String> = many
+                .iter()
+                .map(|(id, r)| {
+                    let when = chrono::DateTime::parse_from_rfc3339(&r.published_at)
+                        .map_or_else(|_| r.published_at.clone(), |t| t.format("%B %-d, %Y  %H:%M").to_string());
+                    format!("  {when}  {}  --at {}", row_what(r.trigger, r.label.as_deref()), shortest_unique_prefix(records, id))
+                })
+                .collect();
+            Err(format!("{needle} is the commit of more than one version; pick one:\n{}", rows.join("\n")))
+        }
+    }
+}
+
+/// The shortest start of `id`, at least its date and minute, that no other
+/// version's id shares.
+fn shortest_unique_prefix<'a>(records: &[(String, PublishRecord)], id: &'a str) -> &'a str {
+    (16..id.len())
+        .filter_map(|end| id.get(..end))
+        .find(|prefix| !records.iter().any(|(other, _)| other != id && other.starts_with(prefix)))
+        .unwrap_or(id)
 }
 
 /// The site's currently configured publish target, or moss's own target for
@@ -695,6 +725,15 @@ fn print_json(rows: &[DisplayRow]) {
 /// A person reads the built-in target as the service it publishes to.
 fn target_label(t: &str) -> &str { if t == "moss" || t.starts_with("moss:") { "mosspub.com" } else { t } }
 
+/// What a timeline row says happened.
+fn row_what(trigger: Trigger, label: Option<&str>) -> String {
+    match trigger {
+        Trigger::Publish => "Published".to_string(),
+        Trigger::Displaced => "Outside edit, kept when yours was saved".to_string(),
+        _ => label.map_or_else(|| "Saved by you".to_string(), str::to_string),
+    }
+}
+
 /// Newest-first, grouped by calendar day (the day key and the header both
 /// come from the record's own `published_at`, which is always UTC — see
 /// [`record::format_date`], the same convention this reuses).
@@ -713,12 +752,7 @@ fn render_human(rows: &[DisplayRow], show_target: bool, show_counts: bool) {
             current_day = Some(day);
         }
 
-        let what = match row.trigger {
-            Trigger::Publish => "Published".to_string(),
-            Trigger::Displaced => "Outside edit, kept when yours was saved".to_string(),
-            _ => row.label.clone().unwrap_or_else(|| "Saved by you".to_string()),
-        };
-        let mut line = format!("  {}  {}", parsed.format("%H:%M"), what);
+        let mut line = format!("  {}  {}", parsed.format("%H:%M"), row_what(row.trigger, row.label.as_deref()));
         if row.live {
             line.push_str("  live");
         }
@@ -1060,6 +1094,32 @@ mod tests {
         let records = vec![record("2026-01-01T00-00-00Z-abc", "t"), record("2026-01-02T00-00-00Z-def", "t")];
         let err = resolve_id(&records, "2026-01-0").unwrap_err();
         assert!(err.contains("more than one"), "{err}");
+    }
+
+    #[test]
+    fn resolve_id_accepts_the_commit_a_timeline_row_shows() {
+        let mut shown = record("2026-09-12T00-08-19Z-336c", "t");
+        shown.1.git_head = Some("c8925c4cc1b5762e57376649907caa1227a6d7dd".to_string());
+        let records = vec![record("2026-09-24T15-51-00Z-5d47", "t"), shown];
+        assert_eq!(resolve_id(&records, "c8925c4c").unwrap(), "2026-09-12T00-08-19Z-336c");
+    }
+
+    #[test]
+    fn resolve_id_names_each_version_on_a_shared_commit_as_its_row_reads() {
+        let on = |id: &str, at: &str| {
+            let mut r = record(id, "t");
+            r.1.git_head = Some("b861b4990000".to_string());
+            r.1.published_at = at.to_string();
+            r
+        };
+        let records = vec![
+            on("2026-09-12T00-08-19Z-aaaa", "2026-09-12T00:08:19Z"),
+            on("2026-09-12T00-44-57Z-bbbb", "2026-09-12T00:44:57Z"),
+        ];
+        let err = resolve_id(&records, "b861b499").unwrap_err();
+        assert!(err.contains("September 12, 2026  00:08  Published  --at 2026-09-12T00-08\n"), "{err}");
+        assert!(err.ends_with("September 12, 2026  00:44  Published  --at 2026-09-12T00-44"), "{err}");
+        assert_eq!(resolve_id(&records, "2026-09-12T00-44").unwrap(), "2026-09-12T00-44-57Z-bbbb");
     }
 
     #[test]

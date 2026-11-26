@@ -15,15 +15,16 @@ pub(super) struct RecordedOriginal {
 
 /// Read source identities only from evidence bound to the selected generation.
 pub(super) async fn recorded_original(
-    root: &Path, url: &str,
+    served: &crate::moss_paths::Served, url: &str,
 ) -> Option<RecordedOriginal> {
-    let root = root.canonicalize().ok()?;
-    let vault = crate::vault::paths::VaultRoot::find_containing(&root)?;
-    let mp = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss"));
+    let root = served.dir.canonicalize().ok()?;
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(served.folder.path().join(".moss"));
     let generation = root.file_name()?.to_str()?.to_string();
     if mp.sealed_generation_dir(&generation)? != root { return None; }
-    contained_candidate(mp.project_root(), &crate::build::manifest::preview_originals::receipt_path(&mp.generations_dir(), &generation))?;
-    let hashes = contained_candidate(mp.project_root(), &mp.hashes())?;
+    // The output lives in the build root, which need not be inside the folder.
+    let output = mp.build_dir();
+    contained_candidate(&output, &crate::build::manifest::preview_originals::receipt_path(&mp.generations_dir(), &generation))?;
+    let hashes = contained_candidate(&output, &mp.hashes())?;
     let generations = mp.generations_dir();
     let url = url.to_string();
     let read = tokio::task::spawn_blocking(move || {
@@ -110,11 +111,15 @@ fn prepare_original(
     if !crate::platform::fail_fast_on_this_thread() { return OriginalBytes::Pending(None); }
     // Test the local replica before the optional shared replica. Neither a
     // cloud-only cache query nor an unused author source starts a download.
-    for base in [mp.cache_local_objects(), mp.cache_objects()] {
+    // Each store is checked against the root it lives in: this computer's
+    // facts for the local one, the folder for the synced one.
+    let facts = mp.facts_dir();
+    let _ = crate::build::io_utils::create_output_dir_all(&facts);
+    for (root, base) in [(facts.as_path(), mp.cache_local_objects()), (mp.project_root(), mp.cache_objects())] {
         let store = ObjectStore::new(base.clone());
         let path = store.blob_path(&original.oid);
-        let Some(owner) = contained_candidate(mp.project_root(), &base) else { return OriginalBytes::Invalid; };
-        let Some(path) = contained_candidate(mp.project_root(), &path)
+        let Some(owner) = contained_candidate(root, &base) else { return OriginalBytes::Invalid; };
+        let Some(path) = contained_candidate(root, &path)
             .filter(|path| path.starts_with(owner)) else { return OriginalBytes::Invalid; };
         if is_evicted(&path) || crate::build::icloud::is_still_in_the_cloud(&path) { continue; }
         if let Some(path) = store.get_path(&original.oid) { return OriginalBytes::Ready(path); }
@@ -142,13 +147,13 @@ fn prepare_original(
     if is_evicted(&source) || crate::build::icloud::is_still_in_the_cloud(&source) {
         return OriginalBytes::Pending(Some(source));
     }
-    if contained_candidate(mp.project_root(), &mp.cache_tmp()).is_none()
-        || contained_candidate(mp.project_root(), &mp.cache_local_objects()).is_none()
-        || crate::build::io_utils::create_output_dir_all(&mp.cache_tmp()).is_err() { return OriginalBytes::Invalid; }
-    let snapshot = mp.cache_tmp().join(format!("preview-original-{}.pending", uuid::Uuid::new_v4()));
+    if contained_candidate(&facts, &mp.local_tmp()).is_none()
+        || contained_candidate(&facts, &mp.cache_local_objects()).is_none()
+        || crate::build::io_utils::create_output_dir_all(&mp.local_tmp()).is_err() { return OriginalBytes::Invalid; }
+    let snapshot = mp.local_tmp().join(format!("preview-original-{}.pending", uuid::Uuid::new_v4()));
     let pinned = (|| -> std::io::Result<OriginalBytes> {
         let mut input = std::fs::File::open(&source)?;
-        // allow:raw_write an owned source snapshot under the local build cache
+        // allow:raw_write an owned source snapshot in this computer's store for the folder
         let mut output = std::fs::File::create(&snapshot)?;
         std::io::copy(&mut input, &mut output)?;
         if output.metadata()?.len() != original.size { return Ok(OriginalBytes::Invalid); }
@@ -157,7 +162,7 @@ fn prepare_original(
             return Ok(OriginalBytes::Invalid);
         }
         let local = ObjectStore::new(mp.cache_local_objects());
-        if contained_candidate(mp.project_root(), &local.blob_path(&original.oid)).is_none() { return Ok(OriginalBytes::Invalid); }
+        if contained_candidate(&facts, &local.blob_path(&original.oid)).is_none() { return Ok(OriginalBytes::Invalid); }
         let oid = local.store_file(&snapshot).map_err(std::io::Error::other)?;
         match local.get_path(&oid) {
             Some(path) => Ok(OriginalBytes::Ready(path)),
@@ -196,10 +201,9 @@ mod tests;
 
 /// Compare resolved generation directories, not path names: a server may hold
 /// either the `current` symlink or the generation it names.
-pub(super) fn serves_current(root: &Path) -> bool {
-    let Some(vault) = crate::vault::paths::VaultRoot::find_containing(root) else { return false; };
-    let current = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss")).current_ptr();
-    matches!((root.canonicalize(), current.canonicalize()), (Ok(a), Ok(b)) if a == b)
+pub(super) fn serves_current(served: &crate::moss_paths::Served) -> bool {
+    let current = crate::moss_paths::MossPaths::from_moss_dir(served.folder.path().join(".moss")).current_ptr();
+    matches!((served.dir.canonicalize(), current.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 /// Find a unique original output in the selected generation. The URL is

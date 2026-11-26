@@ -13,7 +13,31 @@ use std::path::PathBuf;
 /// already overrides `stacks/` alone for tests that need a root that is not
 /// the developer's own `~/.moss`.
 pub fn moss_home() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(home) = THREAD_HOME.with(|home| home.borrow().clone()) {
+        return Ok(home);
+    }
     resolve(std::env::var_os("MOSS_HOME"), default_home())
+}
+
+#[cfg(test)]
+thread_local! {
+    static THREAD_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Points this thread's [`moss_home`] at `home` until the guard drops, without
+/// touching `$MOSS_HOME`: a parallel test never sees it, and it never sees
+/// theirs. Only for a test whose home is read on its own thread (a
+/// current-thread runtime); a build's worker threads keep the process's home.
+#[cfg(test)]
+pub(crate) fn thread_moss_home(home: &std::path::Path) -> impl Drop {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            THREAD_HOME.with(|home| *home.borrow_mut() = self.0.take());
+        }
+    }
+    Restore(THREAD_HOME.with(|slot| slot.borrow_mut().replace(home.to_path_buf())))
 }
 
 fn resolve(over: Option<std::ffi::OsString>, default: Option<PathBuf>) -> Result<PathBuf, String> {
@@ -38,11 +62,10 @@ fn default_home() -> Option<PathBuf> {
     Some(HOME.get_or_init(|| std::env::temp_dir().join(format!("moss-test-home-{}", std::process::id())).join(".moss")).clone())
 }
 
-/// Serializes every test in the crate that reads or writes `$MOSS_HOME` —
-/// env vars are process-global and cargo runs tests in parallel by default,
-/// so two tests each doing their own save/set/restore race each other
-/// without this. `pub(crate)` because `infra::folder_lock`'s tests set the
-/// same var and must take the same lock, not a lock of their own.
+/// Serializes the tests that set or clear `$MOSS_HOME` ([`with_moss_home`],
+/// [`without_moss_home`]) with those that need it left alone: the variable is
+/// process-global. A test whose home is read only on its own thread uses
+/// [`thread_moss_home`] instead and needs no lock.
 #[cfg(test)]
 pub(crate) static MOSS_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -112,6 +135,17 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_home_is_this_threads_alone_and_ends_with_its_guard() {
+        let home = scratch_moss_home();
+        {
+            let _home = thread_moss_home(&home);
+            assert_eq!(moss_home().unwrap(), home);
+            assert_ne!(std::thread::spawn(|| moss_home().unwrap()).join().unwrap(), home, "another thread keeps the process's home");
+        }
+        assert_ne!(moss_home().unwrap(), home);
+    }
+
+    #[test]
     fn an_overridden_home_outlives_the_override() {
         let home = with_moss_home(|home| home.to_path_buf());
         assert!(home.is_dir(), "a parallel build may still be opening its lock under {home:?}");
@@ -127,10 +161,10 @@ mod tests {
             progress: crate::build::null_sink(), plugins: PluginMode::Skip,
             watch: false, start_server: false,
             host: crate::build::ports::host::test_host_ports(),
-            trigger: BuildTrigger::Full, exits_after_build: true,
+            trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         }).await.expect("fixture builds");
-        let id = crate::infra::folder_lock::folder_id(site.path());
+        let id = crate::infra::folder_store::name_for(site.path());
         let real_locks = dirs::home_dir().unwrap().join(".moss").join("locks");
         let leaked: Vec<_> = std::fs::read_dir(&real_locks).into_iter().flatten().flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(&id)).map(|e| e.path()).collect();

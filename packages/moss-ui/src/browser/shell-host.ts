@@ -6,6 +6,7 @@
 import type { ProgressUpdate } from '@symbiosis-lab/moss-ui';
 import { host, type UiHost } from '../ui/host';
 import { framesApi, type EditorLayout } from './frames';
+import { on } from './carrier';
 
 /** What `/__moss/config` answers. */
 export interface ServeConfig {
@@ -20,11 +21,18 @@ export function shellHost(config: ServeConfig, folder: { path: string; name: str
   const ok = { status: 'ok', data: null } as const;
   const preview = new URL(config.preview_url);
   const port = Number(preview.port) || (preview.protocol === 'https:' ? 443 : 80);
+  // The app's build channel dies with each build() call; this subscription
+  // must too, or every earlier caller's onProgress hears each later frame.
+  let stopProgress: (() => void) | null = null;
   return {
     previewUrl: () => config.preview_url,
     openedFolder: () => ({ folder_path: folder.path, auto_serve: true, target_file: null, folder_name: folder.name ?? undefined }),
     build: async (_folder, _autoServe, onProgress: (update: ProgressUpdate) => void) => {
       onProgress({ step: 'serving', message: '', percentage: 100, completed: true, port, is_empty: false });
+      // Each rebuild's progress, as the app's build channel delivers it: the
+      // line and the bar settle on its completion when no paint follows.
+      stopProgress?.();
+      stopProgress = await on<ProgressUpdate>('build-progress', onProgress);
       return '';
     },
     editorPanel: {

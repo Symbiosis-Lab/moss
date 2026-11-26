@@ -1,6 +1,7 @@
 //! A `page` field placed at `end` closes the page with a card for each page it
 //! links to, through the real binary. All names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -46,7 +47,7 @@ fn build(s: &Site, strict: bool) -> Output {
 }
 
 fn built(s: &Site, rel: &str) -> String {
-    std::fs::read_to_string(s.root.join(".moss/build.nosync/current").join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    std::fs::read_to_string(MossPaths::new(&s.root).current_ptr().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
 #[test]

@@ -12,7 +12,7 @@
 // - Preview content: Loads in the iframe via iframe.src
 // - Communication: Direct iframe.src manipulation for navigation
 
-import type { ProgressUpdate, BuildComplete, DeployProgress, BackgroundProgress, EngineResult } from "@symbiosis-lab/moss-ui";
+import type { ProgressUpdate, BuildComplete, DeployProgress, EngineResult } from "@symbiosis-lab/moss-ui";
 import { host } from "../host";
 import { onMossEvent } from "../utils/moss-events";
 import { FullWindowScreen, type ScreenContent } from "./screen/surface";
@@ -148,16 +148,6 @@ export class PreviewManager {
    */
   private panelContentPresent = false;
   private ambientTooltip: string | null = null;
-  /**
-   * Background tasks that finish what a page shows (`PAGE_FINISHING_TASKS`)
-   * still in flight. The blocking build finishing (percentage=100) does not
-   * mean the page is ready: image webp, video transcode and a document's text
-   * run in the BACKGROUND after. While any is running the hairline keeps
-   * advancing and the blocking-done dissolve is deferred until every one
-   * reports completed. The dissolveAfter timer armed at blocking-done stays as
-   * the backstop for a dropped `completed:true` tick.
-   */
-  private readonly bgPageTasksInFlight = new Set<string>();
   /**
    * The persistent seam owns the quiet resting line and advisory dot on the
    * pill-sibling titlebar layer. Both
@@ -1003,13 +993,6 @@ export class PreviewManager {
       if (this.newPageWait) this.handleFileChangeEvent(null);
     });
 
-    // Bug 1: drive the nav-pill hairline from the media-conversion BACKGROUND
-    // stream (image webp / video transcode run after the blocking build) so the
-    // bar keeps advancing while they run and only dissolves once they finish.
-    await onMossEvent("BackgroundProgress", (msg) => {
-      this.handleBackgroundProgress(msg.payload);
-    });
-
     // Recorded, not rendered: the panel owns the detail. This is the evidence
     // separating a real server failure from a rebuild that never started one;
     // see `noteServerFailed`.
@@ -1120,7 +1103,7 @@ export class PreviewManager {
   // and re-acquires once the site work ends.
 
   private siteWorkBusy(): boolean {
-    return this.buildPassActive || this.uploadingStarted || this.bgPageTasksInFlight.size > 0;
+    return this.buildPassActive || this.uploadingStarted;
   }
 
   /**
@@ -1525,6 +1508,12 @@ export class PreviewManager {
     // this fallback completes the bar after the served preview loads.
     const buildDone = update.completed && update.percentage >= 100;
     this.buildPassActive = !buildDone;
+    // The line settles by the bar's rule: a paint ends both ("Updated"). A
+    // build that says no paint follows is its own update; one that does not
+    // say settles on the bar's fallback. A failed build, or one inside a
+    // deploy pass, gets no fallback, so it settles now.
+    const settleLine = () => this.progressPanel?.buildSettled();
+    if (update.completed && (!buildDone || this.uploadingStarted)) settleLine();
     if (this.uploadingStarted) {
       // A deploy pass OWNS the hairline. `Preparing` fires before the deploy
       // drains in-flight work, so a pre-publish rebuild's ticks arrive here
@@ -1532,8 +1521,10 @@ export class PreviewManager {
       // "site updated", dissolved, and handed the deploy a restarted bar
       // (0 → 90 → 100+flash → 27, within one publish). State/panel updates
       // below still run; only the hairline is off-limits.
+    } else if (buildDone && update.reloads === false) {
+      this.onRefreshApplied();
     } else if (buildDone) {
-      this.hairline.dissolveAfter(1500);
+      this.hairline.dissolveAfter(1500, settleLine);
     } else {
       // A build tick preempts any borrowed download pass (site work wins);
       // the download producer re-acquires after the build completes.
@@ -1565,60 +1556,6 @@ export class PreviewManager {
     const isComplete = update.completed && update.percentage >= 100;
     if (isComplete && this.state.lastCompletionWasEmpty()) {
       this.onEmptyFolder?.();
-    }
-  }
-
-  /**
-   * Drive the hairline from the BACKGROUND work that finishes a page.
-   * The blocking build reaching 100% only means the HTML/text is ready; image
-   * webp + video transcode run in the background AFTER (blocking.rs registers
-   * them Pending, a BackgroundHandle worker encodes them, emitting Tier-2
-   * `BackgroundProgress{task:"images"|"videos"}`), as a document's text read
-   * does (`derive`). While any such task is in
-   * flight the bar keeps advancing; the completed path dissolves it (1.5s)
-   * once every one reports done.
-   *
-   * Backstop: a `completed:true` tick is NOT guaranteed — the image
-   * worker returns early without one when a rebuild supersedes an in-flight
-   * encode (build/media/image.rs:1612-1618), routine in preview mode. So the
-   * completed branch must not be the only thing that arms the dissolve: EACH
-   * in-flight tick re-arms a bounded watchdog (`dissolveAfter` clears+resets
-   * its own pending timer) instead of hanging the bar until the next build.
-   * The normal completed path can still dissolve sooner (1.5s < watchdog).
-   *
-   * Only work that finishes what a page shows touches the bar: the media
-   * tasks and `derive`, a document's text read after the build that wrote its
-   * page. comment-sync, plugin-init, rss and notebooks are unrelated.
-   *
-   * A DEPLOY PASS OWNS THE HAIRLINE, here as in handleProgressUpdate and
-   * onRefreshApplied. `Preparing` drains in-flight conversion, so an
-   * encode ticks INSIDE the deploy pass at a fraction of the ENCODE, and the
-   * watchdog's `dissolveAfter` would `complete()` the bar mid-upload. Both
-   * guards sit after the in-flight bookkeeping (siteWorkBusy() reads it).
-   * Repro + numbers: preview-manager.test.ts, "neither a draining rebuild NOR".
-   */
-  /** Watchdog window (see the backstop above). Longer than a normal encode plus
-   *  the completed-path 1.5s dissolve, so it only fires as a last resort. */
-  private static readonly BG_WATCHDOG_MS = 15000;
-  private static readonly PAGE_FINISHING_TASKS = new Set(["images", "videos", "derive"]);
-
-  private handleBackgroundProgress(bg: BackgroundProgress): void {
-    if (!PreviewManager.PAGE_FINISHING_TASKS.has(bg.task)) return;
-
-    if (!bg.completed) {
-      this.bgPageTasksInFlight.add(bg.task);
-      if (this.uploadingStarted) return; // see the guard note above
-      // RE-ARM the watchdog (never a bare cancel) — see the backstop above.
-      this.hairline.dissolveAfter(PreviewManager.BG_WATCHDOG_MS);
-      const fraction = bg.total > 0 ? bg.current / bg.total : 0;
-      this.hairline.setBuildProgress(fraction);
-    } else {
-      this.bgPageTasksInFlight.delete(bg.task);
-      if (this.uploadingStarted) return; // see the guard note above
-      // Dissolve only once ALL in-flight tasks have reported done.
-      if (this.bgPageTasksInFlight.size === 0) {
-        this.hairline.dissolveAfter(1500);
-      }
     }
   }
 
@@ -1682,13 +1619,8 @@ export class PreviewManager {
         this.state.setStage('ready');
         this.progressPanel?.setStage('ready');
 
-        // Set server URL for asset placeholder swapping
-        if (status.url) {
-          try {
-            const serverUrl = new URL(status.url).origin;
-            this.progressPanel?.setServerBaseUrl(serverUrl);
-          } catch {}
-        }
+        // From here a cloud download is part of the preview updating.
+        if (status.url) this.progressPanel?.noteSiteServed();
 
         this.loadPreview(status.url);
         if (this.pendingTargetFile) {
@@ -1891,7 +1823,7 @@ export class PreviewManager {
     // completes at each exit below — exactly when the morph/reload finishes, so
     // the bar reaching full length + the pill flash coincide with the on-screen
     // update.
-    this.hairline.cancelPendingDissolve();
+    this.hairline.handOverToPaint();
 
     // Use in-place idiomorph updates by default; moss.preview.morph=0 opts out. The bridge
     // re-fetches its own URL same-origin and reconciles the DOM in place,
@@ -1944,6 +1876,9 @@ export class PreviewManager {
    */
   private onRefreshApplied(): void {
     this.instruments?.refresh();
+    // The paint is when the preview has updated, not BuildComplete, which
+    // waits for every media worker (a video encode can take minutes).
+    this.progressPanel?.showUpdated();
     // Mid-publish, the deploy pass owns the hairline — a draining rebuild's
     // morph must not fill the bar and flash "site updated" while the upload
     // is at 27%. The deploy's own complete() carries the flash.

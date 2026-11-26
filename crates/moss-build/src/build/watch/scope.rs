@@ -71,8 +71,7 @@ pub const REWATCH_IS_CHEAP: bool = RECURSIVE_MODE_NARROWS;
 pub fn watch_targets_with_error(root: &Path) -> Result<Vec<WatchTarget>, crate::build::cloud_readiness::storage::Unavailable> {
     use crate::build::cloud_readiness::storage::{await_operation, OperationPolicy, StorageValue, OperationOwner};
     let path = root.to_path_buf();
-    let owner = OperationOwner::for_folder(root);
-    let result = await_operation(root, OperationPolicy::WatchTargets, std::time::Duration::from_millis(250), &|| !owner.active(), &|| {},
+    let result = await_operation(root, OperationPolicy::WatchTargets, std::time::Duration::from_millis(250), OperationOwner::for_folder(root), &|| {},
         std::sync::Arc::new(move || collect_watch_targets(&path).map(StorageValue::WatchTargets)))?;
     let StorageValue::WatchTargets(targets) = result.as_ref() else { unreachable!("watch operation returns its complete target set") };
     Ok(targets.clone())
@@ -198,6 +197,15 @@ pub fn watch_set_content_change(
             .iter()
             .any(|p| !desired.contains(p) && !p.starts_with(social));
     appeared || disappeared
+}
+
+/// The sweep's verdict on a set change between two ticks: rebuild unless the
+/// last shown build already listed this set before its scan, which means the
+/// scan took every entry. No listing yet, or a different one, rebuilds.
+pub fn sweep_rebuilds_for(folder: &str, prev: &[PathBuf], desired: &[PathBuf], root_readable: bool, social: &Path) -> bool {
+    watch_set_content_change(prev, desired, root_readable, social)
+        && crate::system::build_records::records().scanned_listing(folder)
+            .is_none_or(|built| watch_set_content_change(&built, desired, root_readable, social))
 }
 
 /// Returns `true` if any element of `paths` is watchable under moss's

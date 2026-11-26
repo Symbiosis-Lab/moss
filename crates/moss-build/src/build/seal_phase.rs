@@ -108,7 +108,9 @@ pub(crate) struct PendingSeal {
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub session: Option<Arc<FolderSession>>,
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
-    pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
+    /// The parse cache this build left, kept in a file once its generation
+    /// is promoted.
+    pub parse: Option<crate::build::parse_cache::KeptParse>,
     /// `Some` from the one-shot arm only: the cross-process build lock its
     /// render took, held through its seal and released once this phase has
     /// promoted. `None` makes this phase take it itself.
@@ -209,9 +211,9 @@ async fn run_materialize_phase(req: PendingSeal) {
         is_pinned,
         session,
         cache_lease,
-        build_root_identity,
         folder_lock,
         media_rerender_owed: _,
+        parse,
     } = req;
     let mut sealed = sealed;
     let mut verdict = verdict;
@@ -305,6 +307,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     #[cfg(test)]
     let _ = crate::build::ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("shipping"));
     let render_for_materialize = render.clone();
+    let held_lock = folder_build_lock.is_some();
     let blocking_result = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if let Some(delay) = materialize_test_delay {
@@ -320,14 +323,12 @@ async fn run_materialize_phase(req: PendingSeal) {
                 promotion_epoch,
                 render_for_materialize.as_ref(),
                 verdict,
+                held_lock.then_some(locked_at_nanos),
             ),
         };
-        // Record a real promotion before the lock drops, so read+promote+write
-        // land in one held window.
-        if matches!(promotion, Ok(Promotion::Promoted)) {
-            if let Err(e) = crate::infra::folder_lock::record_promoted_epoch(Path::new(&folder_path_for_materialize), locked_at_nanos) {
-                log::error!("run_materialize_phase: could not record the cross-process promotion epoch: {e}");
-            }
+        // Keep the parse cache only for a generation that was promoted, while the lock is held.
+        if let (Ok(Promotion::Promoted), Some(parse)) = (&promotion, &parse) {
+            parse.write(&mp.memo_dir(), sealed.generation_id());
         }
         drop(folder_build_lock);
         (sealed, promotion)
@@ -381,13 +382,6 @@ async fn run_materialize_phase(req: PendingSeal) {
         Ok(Promotion::Withheld(_)) => {}
         Err(e) => log::error!("run_materialize_phase: materialize failed — current_ptr stays put: {e}"),
     }
-    // Observed at the plain path on purpose: `build_dir()` follows the
-    // handle, so it can never disagree with the start identity.
-    crate::build::lifecycle::root_identity::log_build_root(
-        &mp.root().join("build.nosync"),
-        "ship",
-        build_root_identity,
-    );
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
     let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
 

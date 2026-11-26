@@ -21,6 +21,6 @@ ttl = 3600
 value = "45.76.13.224"
 
 [deployment.targets."moss:landing"]
-last_deployed_generation_id = "f7d98912a7a995fe"
-last_deployment_at = "2026-11-15T05:16:01+00:00"
+last_deployed_generation_id = "89f548758c988e92"
+last_deployment_at = "2026-11-19T14:12:09+00:00"
 last_deployment_url = "https://landing.mosspub.com"

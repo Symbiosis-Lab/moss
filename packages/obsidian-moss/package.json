@@ -17,6 +17,7 @@
     "@symbiosis-lab/moss-ui": "workspace:*"
   },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.36.1",
     "@types/mocha": "^10.0.10",
@@ -27,6 +28,7 @@
     "@wdio/mocha-framework": "^9.29.1",
     "esbuild": "^0.25.12",
     "expect-webdriverio": "^5.7.0",
+    "jsdom": "^26.1.0",
     "mocha": "^10.8.2",
     "obsidian": "^1.13.1",
     "tsx": "^4.19.2",

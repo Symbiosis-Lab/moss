@@ -3962,6 +3962,69 @@ lang = "en"
   },
 };
 
+/** A short name and one link, so a short trail fits the 412px row and a long one does not. */
+export const NAV_FIRST_PAINT_GATE: ScratchSiteSpec = {
+  name: "nav-first-paint-gate",
+  files: {
+    "index.md": `---
+title: Atlas
+uid: "nfp00101"
+breadcrumb: true
+---
+
+# Atlas
+`,
+    "About.md": `---
+title: About
+uid: "nfp00102"
+nav: true
+---
+
+# About
+`,
+    "survey/index.md": `---
+title: Harbours And Tides
+uid: "nfp00201"
+---
+
+# Harbours And Tides
+`,
+    "survey/river/index.md": `---
+title: The River Survey Field Notes
+uid: "nfp00202"
+---
+
+# The River Survey Field Notes
+`,
+    "survey/river/fourth-volume.md": `---
+title: The Fourth Volume Of The Survey
+uid: "nfp00203"
+---
+
+# The Fourth Volume Of The Survey
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "nfp00301"
+---
+
+# Notes
+`,
+    "notes/rain.md": `---
+title: Rain
+uid: "nfp00302"
+---
+
+# Rain
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {
@@ -4852,6 +4915,40 @@ content_width: wide
     "notes/2026-01-02 0910.md": "A first short post, a sentence or two long.\n",
     "notes/2026-01-03 1200.md": "A second short post.\n\nWith a second paragraph.\n",
     "notes/2026-01-04 0800.md": "The newest short post.\n",
+    // Five parts, so the listing folds the middle two; each page draws the rest above and below it.
+    "threads/index.md": `---
+title: Threads
+uid: "strm0020"
+children_style: stream
+---
+`,
+    "threads/2026-02-01 0800.md": "The tide came in early, and the ferry waited at the north quay for a crew that was still asleep.\n",
+    "threads/2026-02-02 0800.md": `---
+in_reply_to: "[[2026-02-01 0800]]"
+---
+
+By nine the quay was full of bicycles.
+`,
+    "threads/2026-02-03 0800.md": `---
+title: The third crossing
+in_reply_to: "[[2026-02-02 0800]]"
+---
+
+The third crossing ran half empty, and the gulls followed it all the way over.
+`,
+    "threads/2026-02-04 0800.md": `---
+in_reply_to: "[[2026-02-03 0800]]"
+---
+
+The kettle on board boiled dry somewhere past the buoy.
+`,
+    "threads/2026-02-05 0800.md": `---
+in_reply_to: "[[2026-02-04 0800]]"
+---
+
+Last boat back. Nobody waited for it.
+`,
+    "threads/2026-02-10 0800.md": "A note in no thread.\n",
   },
 };
 
@@ -5340,6 +5437,108 @@ A sentence with ![[mark.png]] inside it.
 ![[talk.mp4]]
 
 After.
+`,
+  },
+};
+
+// A masthead held to one 64px row by its theme, the way a client theme does it: one row, no wrap, with
+// the theme's own menu button below 48rem. From 48rem until about 900px the links do not fit.
+export const NAV_NOWRAP_GATE: ScratchSiteSpec = {
+  name: "nav-nowrap-gate",
+  files: {
+    "index.md": `---
+title: Harbour Watch
+uid: "nnw00101"
+---
+
+# Harbour Watch
+`,
+    ...Object.fromEntries(
+      ["Training", "Veterans", "Application", "Contact", "Request A Consultation"].map((title, i) => [
+        `${title.replace(/ /g, "")}.md`,
+        `---\ntitle: ${title}\nuid: "nnw0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    "Services/index.md": `---\ntitle: Services\nuid: "nnw00301"\nnav: true\nweight: 9\n---\n\n# Services\n`,
+    "Services/Patrol.md": `---\ntitle: Evening patrol\nuid: "nnw00302"\nnav: true\n---\n\n# Evening patrol\n`,
+    "Services/Gate.md": `---\ntitle: Gate watch\nuid: "nnw00303"\nnav: true\n---\n\n# Gate watch\n`,
+    ".moss/theme/style.css": `header { padding: 0; }
+.main-nav { max-inline-size: none; padding: 0; margin: 0; }
+.nav-content { inline-size: min(100% - 48px, 1264px); max-inline-size: none; margin-inline: auto; block-size: 64px; min-block-size: 64px; flex-wrap: nowrap; align-items: center; padding: 0; border: 0; }
+.nav-left { flex: none; }
+.nav-right { flex: 1; justify-content: flex-end; align-items: center; gap: 16px; flex-wrap: nowrap; }
+.site-name { font: 800 23px/1 sans-serif; text-transform: uppercase; white-space: nowrap; }
+.nav-links { gap: 8px; flex-wrap: nowrap; margin-inline-start: auto; }
+.nav-icons { display: none; }
+.nav-links a { font: 500 12px monospace; text-transform: uppercase; letter-spacing: .09em; padding: 12px; white-space: nowrap; }
+@media (max-width: 48rem) {
+  .mobile-menu-button { display: inline-flex; min-inline-size: 44px; min-block-size: 44px; order: 3; }
+  .nav-right { gap: 4px; min-inline-size: 0; }
+  .nav-links > :not(:last-child) { display: none; }
+}
+`,
+  },
+};
+
+// A theme that lays the masthead out itself: `.nav-right` flattened, the name alone on row 1 at a full-row basis,
+// the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum overflows at every
+// width, so the split would otherwise take over everywhere.
+export const NAV_FLATTENED_GATE: ScratchSiteSpec = {
+  name: "nav-flattened-gate",
+  files: {
+    "index.md": `---
+title: Fifty-three Stations of the Coast Road at Dawn
+uid: "nfl00101"
+---
+
+# Fifty-three Stations of the Coast Road at Dawn
+`,
+    ...Object.fromEntries(
+      ["Prints", "Browse", "Map", "Weather", "Essays", "About"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nfl0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `.nav-content { gap: 0 20px; padding-block-end: 0; }
+.nav-content .nav-left { flex: 1 1 100%; padding-block: 22px 8px; }
+.nav-content .nav-right { display: contents; }
+.nav-content .nav-links { order: 1; flex: 1 1 0; justify-content: flex-start; gap: 0 28px; }
+.nav-content .nav-icons { order: 2; margin-inline-start: auto; }
+.site-name { font: 500 clamp(24px, 3.4vw, 34px) / 1.15 serif; white-space: normal; }
+.main-nav .nav-links a { font: 500 15px/1 sans-serif; padding-block: 15px 12px; }
+@media (max-width: 40rem) { .nav-content .nav-links { gap: 0 14px; } .main-nav .nav-links a { font-size: 14px; } .nav-content .nav-icons { gap: 4px; } }
+`,
+  },
+};
+
+/** A theme that flattens `.nav-right` on a phone and seats the name beside the toggles, the links below; the long name has to wrap there. */
+export const NAV_FLATTENED_BESIDE_GATE: ScratchSiteSpec = {
+  name: "nav-flattened-beside-gate",
+  files: {
+    "index.md": `---
+title: The Harbour Almanac of the Northern Coast, 1921–1938
+uid: "nfb00101"
+---
+
+# The Harbour Almanac of the Northern Coast, 1921–1938
+`,
+    ...Object.fromEntries(
+      ["Projects", "Partners", "About the sources"].map((title, i) => [
+        `${title.replace(/ /g, "-")}.md`,
+        `---\ntitle: ${title}\nuid: "nfb0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `@media (max-width: 48rem) {
+  .nav-content .nav-right { display: contents; }
+  .nav-content .nav-left { flex: 1 1 0; min-inline-size: 0; }
+  .nav-content .site-name { white-space: normal; }
+  .nav-content .nav-icons { order: 2; margin-inline-start: 0; }
+  .nav-content .nav-links { order: 3; flex: 1 1 100%; justify-content: flex-start; }
+}
+@media (max-width: 20rem) {
+  .nav-content .nav-left { flex: revert-layer; }
+  .nav-content .nav-icons { margin-inline-start: revert-layer; }
+}
 `,
   },
 };

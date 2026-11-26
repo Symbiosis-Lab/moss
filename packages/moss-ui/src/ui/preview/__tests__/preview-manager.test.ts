@@ -35,7 +35,9 @@ const mockProgressPanel = vi.hoisted(() => ({
   upsertTask: vi.fn(),
   removeTask: vi.fn(),
   hasActiveTasks: vi.fn().mockReturnValue(false),
-  setServerBaseUrl: vi.fn(),
+  noteSiteServed: vi.fn(),
+  buildSettled: vi.fn(),
+  showUpdated: vi.fn(),
   setStage: vi.fn(),
   // Folder-health scope: re-scoped on every startBuild.
   setFolder: vi.fn(),
@@ -273,7 +275,9 @@ describe('PreviewManager', () => {
     mockProgressPanel.upsertTask = vi.fn();
     mockProgressPanel.removeTask = vi.fn();
     mockProgressPanel.hasActiveTasks = vi.fn().mockReturnValue(false);
-    mockProgressPanel.setServerBaseUrl = vi.fn();
+    mockProgressPanel.noteSiteServed = vi.fn();
+    mockProgressPanel.buildSettled = vi.fn();
+    mockProgressPanel.showUpdated = vi.fn();
     mockProgressPanel.show = vi.fn();
     mockProgressPanel.hide = vi.fn();
     mockProgressPanel.destroy = vi.fn();
@@ -756,6 +760,25 @@ describe('PreviewManager', () => {
       document.body.innerHTML = '';
     });
 
+    test('coarse channel-only publish lifecycle never opens or completes a site hairline', async () => {
+      getBuildConfig.mockReturnValue(null);
+      const h = (previewManager as any).hairline;
+      const start = vi.spyOn(h, 'startDeterminate');
+      const complete = vi.spyOn(h, 'complete');
+      const flash = vi.spyOn(previewManager as any, 'flashPill');
+      await previewManager.initialize();
+      start.mockClear();
+      complete.mockClear();
+      flash.mockClear();
+      for (const status of ['pending', 'in_progress', 'success', 'error'] as const) {
+        busDeliver(Events.DEPLOY_PROGRESS, { isDeploying: status === 'pending' || status === 'in_progress', status });
+        expect((previewManager as any).uploadingStarted).toBe(false);
+        expect(start).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+        expect(flash).not.toHaveBeenCalled();
+      }
+    });
+
     test('a publish that resolves with NO terminal stage (needs_setup) still closes the pass', async () => {
       // Rust emits `Preparing` BEFORE the site-id check, so push_site →
       // NeedsSetup returns Ok having opened the pass and never emitting
@@ -887,18 +910,11 @@ describe('PreviewManager', () => {
       document.body.innerHTML = '';
     });
 
-    test('neither a draining rebuild NOR its background media can drive, complete, or flash the hairline mid-publish', async () => {
+    test('a draining rebuild can neither drive, complete, nor flash the hairline mid-publish', async () => {
       // `Preparing` fires before the deploy drains in-flight work, so a
       // pre-publish rebuild's ticks arrive mid-publish. Letting them through
       // drove the bar to ~90, flashed "site updated", dissolved, and handed
       // the deploy a restarted bar (0 → 90 → 100+flash → 27 in one publish).
-      //
-      // The BACKGROUND half of that stream was the hole the first fix left, and
-      // it is the one users actually hit: a media-heavy first publish drains
-      // image/video encodes that keep emitting BackgroundProgress inside the
-      // deploy pass. Those fractions are of an ENCODE, so a half-finished one
-      // pinned the bar at 0.5 × BUILD_CAP = 45% while 4 MB of 540 MB had gone
-      // up — and applyDeterminate is monotonic, so nothing could pull it back.
       (getBuildConfig as any).mockReturnValue(null);
       document.body.innerHTML =
         '<div class="moss-titlebar"><div class="moss-pill-cluster"></div></div>';
@@ -928,22 +944,6 @@ describe('PreviewManager', () => {
       expect(dissolveSpy).not.toHaveBeenCalled();
       (previewManager as any).onRefreshApplied(); // the morph landing
       expect(completeSpy).not.toHaveBeenCalled();
-
-      // A draining video encode, half done. Neither the fill nor the dissolve
-      // watchdog may move — `dissolveAfter` calls `complete()`, which would
-      // fill the bar and dissolve it in the middle of the upload.
-      (previewManager as any).handleBackgroundProgress({
-        task: 'videos', current: 1, total: 2, message: '', completed: false, advisories: [],
-      });
-      expect(buildSpy).not.toHaveBeenCalled();
-      expect(dissolveSpy).not.toHaveBeenCalled();
-      // Its completion is likewise silent — but the in-flight bookkeeping still
-      // ran, or siteWorkBusy() would stay pinned on a task that finished.
-      (previewManager as any).handleBackgroundProgress({
-        task: 'videos', current: 2, total: 2, message: '', completed: true, advisories: [],
-      });
-      expect(dissolveSpy).not.toHaveBeenCalled();
-      expect((previewManager as any).bgPageTasksInFlight.size).toBe(0);
 
       // The deploy's own terminal still carries the fill + flash.
       deployCb!({ stage: 'complete', current: 1, total: 1, message: '' });
@@ -1032,94 +1032,129 @@ describe('PreviewManager', () => {
       expect(setBuildProgress).toHaveBeenCalledWith(0.4);
     });
 
-    test('hairline advances on background images and re-arms the dissolve watchdog each tick (Bug 1 / risk #7)', () => {
-      // The blocking build reaching 100% no longer means media is ready: image
-      // webp / video transcode run in the BACKGROUND after. The hairline keeps
-      // advancing on BackgroundProgress{task:'images'|'videos'}; each in-flight
-      // tick RE-ARMS a bounded dissolve watchdog (never a bare cancel) so a
-      // dropped completed:true can't hang the bar. The completed-all path
-      // dissolves sooner (1.5s).
-      const h = (previewManager as any).hairline;
-      const setBuildProgress = vi.spyOn(h, 'setBuildProgress').mockImplementation(() => {});
-      const dissolveAfter = vi.spyOn(h, 'dissolveAfter').mockImplementation(() => {});
-
-      // Blocking build completes → arms the backstop dissolve timer.
-      (previewManager as any).handleProgressUpdate({
-        step: 'complete', message: 'done', percentage: 100,
-        completed: true, port: 3000, is_empty: false,
-      });
-      expect(dissolveAfter).toHaveBeenCalled();
-      dissolveAfter.mockClear();
-
-      // Background images running (1/4): bar advances AND the watchdog is
-      // re-armed (15s) — NOT canceled — so a missed completed:true still
-      // eventually dissolves.
-      (previewManager as any).handleBackgroundProgress({
-        task: 'images', current: 1, total: 4, message: '', completed: false, advisories: [],
-      });
-      expect(setBuildProgress).toHaveBeenCalledWith(0.25);
-      expect(dissolveAfter).toHaveBeenCalledWith(15000);
-
-      // Videos also start running (re-arms the watchdog again).
-      (previewManager as any).handleBackgroundProgress({
-        task: 'videos', current: 0, total: 2, message: '', completed: false, advisories: [],
-      });
-      dissolveAfter.mockClear();
-
-      // Images done, but videos still in flight → the completed branch does
-      // NOT schedule the short dissolve yet (the video tick's watchdog holds).
-      (previewManager as any).handleBackgroundProgress({
-        task: 'images', current: 4, total: 4, message: '', completed: true, advisories: [],
-      });
-      expect(dissolveAfter).not.toHaveBeenCalled();
-
-      // Videos done → both media tasks complete → short dissolve scheduled.
-      (previewManager as any).handleBackgroundProgress({
-        task: 'videos', current: 2, total: 2, message: '', completed: true, advisories: [],
-      });
-      expect(dissolveAfter).toHaveBeenCalledWith(1500);
-    });
-
-    test('a superseded in-flight encode that never emits completed:true still dissolves via the watchdog (Bug 1 / risk #7)', () => {
-      // build/media/image.rs returns early WITHOUT a completed:true emit when a
-      // rebuild supersedes an in-flight encode (routine in preview mode). If the
-      // in-flight branch only canceled the pending dissolve, the nav-pill
-      // hairline would hang forever with bgPageTasksInFlight={'images'} until
-      // the next build. Each in-flight tick must re-arm dissolveAfter(watchdog).
+    test("a build no paint follows settles the line on the bar's own fallback; a failed one settles at once", () => {
       const h = (previewManager as any).hairline;
       vi.spyOn(h, 'setBuildProgress').mockImplementation(() => {});
       const dissolveAfter = vi.spyOn(h, 'dissolveAfter').mockImplementation(() => {});
-
-      (previewManager as any).handleBackgroundProgress({
-        task: 'images', current: 2, total: 8, message: '', completed: false, advisories: [],
+      (previewManager as any).handleProgressUpdate({
+        step: 'building', message: '', percentage: 100, completed: true, port: 3000, is_empty: false,
       });
-      // No completed:true ever arrives (superseded) — the watchdog was armed.
-      expect(dissolveAfter).toHaveBeenCalledWith(15000);
+      expect(mockProgressPanel.buildSettled).not.toHaveBeenCalled();
+      (dissolveAfter.mock.calls.at(-1)![1] as () => void)(); // the fallback fires: no paint came
+      expect(mockProgressPanel.buildSettled).toHaveBeenCalledTimes(1);
+
+      (previewManager as any).handleProgressUpdate({
+        step: 'error', message: 'failed', percentage: 40, completed: true, port: 3000, is_empty: false,
+      });
+      expect(mockProgressPanel.buildSettled).toHaveBeenCalledTimes(2);
     });
 
-    test('a document text read after the build keeps the hairline moving', () => {
+    test('a build that says no paint follows ends the line on Updated at once, with no fallback', () => {
       const h = (previewManager as any).hairline;
-      const setBuildProgress = vi.spyOn(h, 'setBuildProgress').mockImplementation(() => {});
+      const complete = vi.spyOn(h, 'complete').mockImplementation(() => {});
       const dissolveAfter = vi.spyOn(h, 'dissolveAfter').mockImplementation(() => {});
+      (previewManager as any).handleProgressUpdate({
+        step: 'build', message: '', percentage: 100, completed: true, port: 3000, is_empty: false, reloads: false,
+      } satisfies ProgressUpdate);
+      expect(mockProgressPanel.showUpdated).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(dissolveAfter).not.toHaveBeenCalled();
 
-      (previewManager as any).handleBackgroundProgress({
-        task: 'derive', current: 1, total: 2, message: 'Reading PDFs · 1 of 2', completed: false, advisories: [],
-      });
-      expect(setBuildProgress).toHaveBeenCalledWith(0.5);
-      expect(dissolveAfter).toHaveBeenCalledWith(15000);
+      // One that reloads waits for its paint.
+      (previewManager as any).handleProgressUpdate({
+        step: 'build', message: '', percentage: 100, completed: true, port: 3000, is_empty: false, reloads: true,
+      } satisfies ProgressUpdate);
+      expect(mockProgressPanel.showUpdated).toHaveBeenCalledTimes(1);
+      expect(dissolveAfter).toHaveBeenCalledTimes(1);
     });
 
-    test('background progress for non-media tasks does not touch the hairline (Bug 1)', () => {
+    test('a build no paint follows settles the line when a publish or a download takes the bar first', async () => {
+      (getBuildConfig as any).mockReturnValue(null);
+      let deployCb: ((payload: any) => void) | null = null;
+      engineOn.mockImplementation((eventName: string, callback: any) => {
+        if (eventName === 'deploy-progress') deployCb = callback;
+        return Promise.resolve(() => {});
+      });
+      await previewManager.initialize();
+      const done = { step: 'building', message: '', percentage: 100, completed: true, port: 3000, is_empty: false };
+
+      (previewManager as any).handleProgressUpdate(done);
+      expect(mockProgressPanel.buildSettled).not.toHaveBeenCalled();
+      deployCb!({ stage: 'syncing', current: 0, total: 10, message: '' }); // publish inside the 1.5 s
+      expect(mockProgressPanel.buildSettled).toHaveBeenCalledTimes(1);
+      deployCb!({ stage: 'complete', current: 10, total: 10, message: '' });
+
+      (previewManager as any).handleProgressUpdate(done);
+      expect(previewManager.beginAmbientDownload('model')).toBe(true);
+      expect(mockProgressPanel.buildSettled).toHaveBeenCalledTimes(2);
+    });
+
+    test("the next build's first tick drops a pending fallback, so it never settles that build's line", () => {
+      // Mounted, so the bar stays active through the fallback window.
+      document.body.innerHTML =
+        '<div class="moss-titlebar"><div class="moss-pill-cluster"></div></div>';
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const tick = (percentage: number, completed: boolean): ProgressUpdate => ({
+          step: 'building', message: '', percentage, completed, port: 3000, is_empty: false,
+        });
+        (previewManager as any).handleProgressUpdate(tick(40, false));
+        (previewManager as any).handleProgressUpdate(tick(100, true)); // no paint follows
+        vi.advanceTimersByTime(500);
+        (previewManager as any).handleProgressUpdate(tick(30, false)); // the next save's build
+        vi.advanceTimersByTime(1200);
+        expect(mockProgressPanel.buildSettled).not.toHaveBeenCalled();
+      } finally { vi.useRealTimers(); }
+    });
+
+    test("an edit's hairline fills for the build, completes at the paint, and background work after it never restarts it", async () => {
+      // Background work (search index, text reads, image variants) runs after
+      // the preview has already updated. While previewing it is not news, so
+      // it must not grow the bar again once the paint completed it.
+      const mossEventCallbacks: Array<(event: any) => void> = [];
+      engineOn.mockImplementation((eventName: string, callback: any) => {
+        if (eventName === 'moss-event') mossEventCallbacks.push(callback);
+        return Promise.resolve(() => {});
+      });
+      await previewManager.initialize();
+
       const h = (previewManager as any).hairline;
       const setBuildProgress = vi.spyOn(h, 'setBuildProgress').mockImplementation(() => {});
+      const startDeterminate = vi.spyOn(h, 'startDeterminate').mockImplementation(() => {});
       const dissolveAfter = vi.spyOn(h, 'dissolveAfter').mockImplementation(() => {});
+      const complete = vi.spyOn(h, 'complete').mockImplementation(() => {});
 
-      (previewManager as any).handleBackgroundProgress({
-        task: 'comment-sync', current: 1, total: 1, message: '', completed: true, advisories: [],
+      const tick = (percentage: number, completed: boolean): ProgressUpdate => ({
+        step: 'building', message: '', percentage, completed, port: 3000, is_empty: false,
       });
+      (previewManager as any).handleProgressUpdate(tick(40, false));
+      (previewManager as any).handleProgressUpdate(tick(100, true));
+      // A paint follows, so the line holds "Updating…" until it lands.
+      expect(mockProgressPanel.buildSettled).not.toHaveBeenCalled();
+      expect(mockProgressPanel.showUpdated).not.toHaveBeenCalled();
+      (previewManager as any).onRefreshApplied(); // the morph landing
+      expect(mockProgressPanel.showUpdated).toHaveBeenCalledTimes(1); // "Updated" follows the paint
+      expect(setBuildProgress).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(1);
+      setBuildProgress.mockClear();
+      dissolveAfter.mockClear();
+
+      const bg = (task: string, current: number, total: number, completed: boolean) => {
+        for (const cb of mossEventCallbacks) {
+          cb({ kind: 'BackgroundProgress', payload: { task, message: '', current, total, completed, advisories: [] } });
+        }
+      };
+      bg('search', 1, 3, false);
+      bg('derive', 1, 2, false);
+      bg('images', 2, 8, false);
+      bg('images', 8, 8, true);
+      bg('derive', 2, 2, true);
+      bg('search', 3, 3, true);
 
       expect(setBuildProgress).not.toHaveBeenCalled();
+      expect(startDeterminate).not.toHaveBeenCalled();
       expect(dissolveAfter).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
     });
 
     test('handleProgressUpdate loads preview when complete with port', () => {

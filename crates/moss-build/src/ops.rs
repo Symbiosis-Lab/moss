@@ -99,6 +99,9 @@ pub struct BuildFlags {
     /// reading; the flag never changes what moss *writes*, only how it
     /// reports on what it wrote.
     pub strict: bool,
+    /// `--json`: stdout carries one JSON object when the build ends, with
+    /// `output`, the generation it wrote. One-shot builds only.
+    pub json: bool,
     /// `--wait-plugins`: force `PluginMode::Blocking` when plugins run. Also forced by `serve && !watch`: detaching the process hook is
     /// only safe if something later renders what it writes — under `--serve`
     /// alone no watcher will, so the site would serve pre-import content
@@ -165,6 +168,7 @@ impl BuildArgs {
                 "--serve" => flags.serve = true,
                 "--watch" => flags.watch = true,
                 "--strict" => flags.strict = true,
+                "--json" => flags.json = true,
                 "--wait-plugins" => flags.wait_plugins = true,
                 "--no-plugins" => flags.no_plugins = true,
                 "--allow-plugins" => flags.allow_plugins = true,
@@ -194,6 +198,9 @@ impl BuildArgs {
                 usage()
             ));
         }
+        if flags.json && flags.serve {
+            return Err(format!("error: --json reports a build that ends; drop --serve\n{}", usage()));
+        }
         let folder = match folder {
             Some(folder) => folder.to_string(),
             None => {
@@ -203,6 +210,36 @@ impl BuildArgs {
         };
         Ok(BuildArgs { folder, flags })
     }
+}
+
+/// The last line of a build that ends: the generation it wrote, for a person
+/// on stderr and, under `--json`, as `{"output": ...}` on stdout.
+fn report_output(folder: &str, json: bool, unwritten: bool, code: i32) -> i32 {
+    let paths = crate::moss_paths::MossPaths::new(std::path::Path::new(folder));
+    let output = paths.current_generation_id().ok().filter(|_| !unwritten).map(|id| paths.generation_dir(&id));
+    match (output, json) {
+        (Some(output), true) => {
+            println!("{}", serde_json::json!({ "output": output }));
+            code
+        }
+        (Some(output), false) => {
+            cli_eprintln!("Output: {}", output.display());
+            code
+        }
+        (None, true) => {
+            println!("{}", crate::cli::list::json_error("the build wrote no site"));
+            1
+        }
+        (None, false) => code,
+    }
+}
+
+fn report_failure(error: &impl std::fmt::Display, json: bool) -> i32 {
+    cli_eprintln!("Build failed: {}", error);
+    if json {
+        println!("{}", crate::cli::list::json_error(&format!("Build failed: {error}")));
+    }
+    if error.to_string().starts_with("this folder is already served") { serve::ownership::ALREADY_SERVED_EXIT_CODE } else { 1 }
 }
 
 /// The usage line both binaries print, from the shared command table, so it
@@ -286,7 +323,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     // The admission verdict, before anything can load a plugin. Set-once for
     // the process, so it is installed here rather than by each host.
     if !run.flags.no_plugins {
-        crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), run.flags.allow_plugins);
+        crate::plugins::install::registry_client::enforce::install_headless_for_running_app(run.flags.allow_plugins);
     }
 
     let wait_plugins = run.flags.wait_plugins || (run.flags.serve && !run.flags.watch);
@@ -308,12 +345,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         let server_shutdown: Arc<
             std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         > = Arc::default();
-        // Captures `start_server_headless`'s own error text at the moment it
-        // fails, so the `Ok(msg)` arm below can report the exact reason the
-        // server never came up instead of re-probing for a live owner after
-        // the whole build has run — a re-probe can miss an owner that has
-        // since exited in that window and wrongly report success.
-        let launch_error: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         // Fires when `POST /__moss/yield` is admitted on whichever server is
         // live right now. One `Notify` for the whole process: every
         // relaunch after honoring a yield passes this SAME `Arc` back into
@@ -326,10 +357,9 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         // yielded `--watch` process can call it again to resume serving —
         // `HostPorts::launch_server` is an `Arc<dyn Fn>`, not `FnOnce`, for
         // exactly this reuse.
-        let launch_server_fn: Option<Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync>> =
+        let launch_server_fn: Option<Arc<dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> crate::build::ServerFuture + Send + Sync>> =
             if run.flags.serve {
             let slot = server_shutdown.clone();
-            let launch_error_slot = launch_error.clone();
             // The same registry this build fills, so the server can answer for
             // a variant that is still encoding.
             let assets = host.services.assets.clone();
@@ -339,10 +369,9 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             let on_conflict = if run.flags.watch { serve::ownership::OnConflict::StandBy } else { serve::ownership::OnConflict::Refuse };
             let yield_notify = yield_requested.clone();
             let host_serve = std::mem::take(&mut run.serve);
-            let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
+            let launch: Arc<dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> crate::build::ServerFuture + Send + Sync> =
                 Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
-                let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
                 let yield_notify = yield_notify.clone();
                 let host_serve = host_serve.clone();
@@ -359,12 +388,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                 Some(shutdown_tx);
                             Ok(port)
                         }
-                        Err(e) => {
-                            *launch_error_slot
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.clone());
-                            Err(e)
-                        }
+                        Err(e) => Err(e),
                     }
                 })
             });
@@ -393,7 +417,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // last seal what changed, and render everything when they cannot.
             // `--strict` renders everything, since it fails on problems only a
             // render reports.
-            trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved },
+            trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved }, reason: None,
             // A serving process stays alive (it parks on ctrl-C below), so
             // only the plain build seals inline and fetches its link cards first.
             exits_after_build,
@@ -407,28 +431,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
 
         match result {
             Ok(msg) => {
-                // `launch_server` failing is not itself a build failure (the
-                // pipeline logs a warning and carries on with no server —
-                // `build.rs`'s `PreviewServerFailed` handling), so a folder
-                // already owned by a live process would otherwise reach here
-                // as an otherwise-successful build whose server never came
-                // up. `launch_error` carries the exact reason captured at
-                // the moment `launch_server` failed — read here, not
-                // re-derived, so nothing can change between then and now.
-                if run.flags.serve
-                    && server_shutdown
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .is_none()
-                {
-                    if let Some(message) =
-                        launch_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
-                    {
-                        cli_eprintln!("{}", message);
-                        return serve::ownership::ALREADY_SERVED_EXIT_CODE;
-                    }
-                }
-
                 // The build that exits writes its site before the pipeline
                 // returns, so the record is final here.
                 let unwritten = exits_after_build && crate::system::build_records::records().last_build_failed(&run.folder_path);
@@ -504,7 +506,8 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                     break;
                                 }
                                 let Some(launch) = &launch_server_fn else { break };
-                                match launch(run.folder_path.clone(), None).await {
+                                let moss_dir = crate::moss_paths::MossPaths::new(folder).root().to_string_lossy().into_owned();
+                                match launch(moss_dir, None).await {
                                     // The port can differ from the first one, and a host reads this line to find the page.
                                     Ok(port) => cli_eprintln!("{}", serve::ownership::preview_ready_line(&format!("http://localhost:{port}"))),
                                     Err(e) => {
@@ -519,12 +522,10 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                     }
                 }
 
-                i32::from(unwritten || (run.flags.strict && problems > 0))
+                let code = i32::from(unwritten || (run.flags.strict && problems > 0));
+                if exits_after_build { report_output(&run.folder_path, run.flags.json, unwritten, code) } else { code }
             }
-            Err(e) => {
-                cli_eprintln!("Build failed: {}", e);
-                1
-            }
+            Err(e) => report_failure(&e, run.flags.json),
         }
     });
     use crate::build::cloud_readiness::storage::{cache_publication_counts, drain_cache_publications};
@@ -553,6 +554,13 @@ mod build_args_tests {
             err.contains("--watch needs --serve: moss build site --watch --serve"),
             "error must name the exact corrected command, got: {err}"
         );
+    }
+
+    #[test]
+    fn json_is_for_a_build_that_ends() {
+        assert!(BuildArgs::parse(&args(&["site", "--json"])).unwrap().flags.json);
+        let err = BuildArgs::parse(&args(&["site", "--json", "--serve"])).unwrap_err();
+        assert!(err.contains("drop --serve"), "{err}");
     }
 
     #[test]

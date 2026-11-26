@@ -37,9 +37,9 @@ use moss_core::PageKind;
 /// The doc routes through the standard homepage render path
 /// (`generate_html_collect_og` with `is_homepage: true`) in `blocking.rs`.
 /// Fields:
-/// - `title` / `label`: folder name. Layout config also resolves to folder
-///   name via `Path::file_name` so the chrome and the page title agree
-///   without us touching layout resolution.
+/// - `title` / `label`: the site name, `moss_core::home::site_name` with no
+///   home page (the folder name with hyphens and underscores read as
+///   spaces), so the chrome and the page title agree with a site that has pages.
 /// - `url_path`: `index.html`. The render path keys the homepage lookup on
 ///   this exact string.
 /// - `kind`: `PageKind::Folder`. Marks this as an index page (matching what
@@ -55,9 +55,10 @@ pub fn synthesize_empty_homepage(
     folder_name: &str,
     site_lang: crate::i18n::Language,
 ) -> ParsedDocument {
+    let name = moss_core::home::site_name(None, None, folder_name);
     ParsedDocument {
-        title: folder_name.to_string(),
-        label: folder_name.to_string(),
+        title: name.clone(),
+        label: name,
         url_path: "index.html".to_string(),
         kind: PageKind::Folder,
         html_content: String::new(),
@@ -105,8 +106,8 @@ mod tests {
     #[test]
     fn synthesizes_empty_doc_for_empty_folder() {
         let doc = synthesize_empty_homepage("my-blog", crate::i18n::Language::En);
-        assert_eq!(doc.title, "my-blog");
-        assert_eq!(doc.label, "my-blog");
+        assert_eq!(doc.title, "my blog");
+        assert_eq!(doc.label, "my blog");
         assert_eq!(doc.url_path, "index.html");
         assert_eq!(doc.kind, PageKind::Folder);
         // No injected H1 or placeholder text — the article body is blank.

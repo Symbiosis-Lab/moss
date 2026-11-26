@@ -146,19 +146,47 @@ export function publishNotice(folder: string, address: SiteAddress): string {
 /** A string once the site is live, null before its first publish, undefined when the CLI cannot say. */
 export type SiteAddress = string | null | undefined;
 
+/** What `moss root` says about a page the last build made (see moss's `cli::root`). */
+export interface PageStatus {
+  path: string;
+  draft: boolean;
+  /** Whether the last publish carried it; absent when moss cannot say now. */
+  published?: boolean;
+  /** Whether it changed since that publish; absent when moss cannot say now. */
+  changed?: boolean;
+  channels: string[];
+  /** A posted copy's address, by channel. */
+  copies: Record<string, string>;
+}
+
+const known = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+
+function pageStatus(value: unknown): PageStatus | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const p = value as Record<string, unknown>;
+  if (typeof p.path !== "string") return undefined;
+  const channels = Array.isArray(p.channels) ? p.channels.filter((c): c is string => typeof c === "string") : [];
+  const copies: Record<string, string> = {};
+  for (const [channel, url] of Object.entries(p.copies && typeof p.copies === "object" ? p.copies : {})) {
+    if (typeof url === "string") copies[channel] = url;
+  }
+  return { path: p.path, draft: p.draft === true, published: known(p.published), changed: known(p.changed), channels, copies };
+}
+
 /**
  * `moss root --json`: the site folder that owns a path (null when none does or
- * the run failed) and its address. A CLI too old to print the address leaves
- * it undefined.
+ * the run failed), its address, and for a page the last build made, its facts.
+ * A CLI too old to print the address leaves it undefined.
  */
-export function parseRootJson(stdout: string): { root: string | null; address: SiteAddress } {
+export function parseRootJson(stdout: string): { root: string | null; address: SiteAddress; page?: PageStatus } {
   try {
     const o: unknown = JSON.parse(stdout);
     if (o && typeof o === "object") {
-      const { root, address } = o as Record<string, unknown>;
+      const { root, address, page } = o as Record<string, unknown>;
       return {
         root: typeof root === "string" ? root : null,
         address: address === null || typeof address === "string" ? address : undefined,
+        page: pageStatus(page),
       };
     }
   } catch {

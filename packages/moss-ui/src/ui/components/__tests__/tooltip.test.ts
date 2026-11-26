@@ -794,20 +794,27 @@ describe("Tooltip a11y", () => {
   });
 
   test("focusin shows the tooltip (mirrors mouseover)", () => {
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    trigger.focus();
     const tooltip = document.querySelector(".moss-tooltip");
     expect(tooltip?.classList.contains("visible")).toBe(true);
   });
 
   test("focusout hides the tooltip (mirrors mouseout)", () => {
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-    trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    trigger.focus();
+    trigger.blur();
     const tooltip = document.querySelector(".moss-tooltip");
     expect(tooltip?.classList.contains("visible")).toBe(false);
   });
 
-  test("focusin sets aria-describedby on trigger pointing to singleton tooltip id", () => {
+  test("focus that is not :focus-visible shows no tooltip", () => {
+    // A modal moving focus into itself after a click is not keyboard focus.
     trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    const tooltip = document.querySelector(".moss-tooltip");
+    expect(tooltip?.classList.contains("visible") ?? false).toBe(false);
+  });
+
+  test("focusin sets aria-describedby on trigger pointing to singleton tooltip id", () => {
+    trigger.focus();
     const tooltip = document.querySelector(".moss-tooltip");
     expect(tooltip).not.toBeNull();
     // The tooltip must have a stable id
@@ -817,13 +824,13 @@ describe("Tooltip a11y", () => {
   });
 
   test("focusout removes aria-describedby from the trigger", () => {
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-    trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    trigger.focus();
+    trigger.blur();
     expect(trigger.hasAttribute("aria-describedby")).toBe(false);
   });
 
   test("Escape key hides the tooltip and removes aria-describedby", () => {
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    trigger.focus();
     expect(document.querySelector(".moss-tooltip")?.classList.contains("visible")).toBe(true);
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -837,7 +844,7 @@ describe("Tooltip a11y", () => {
     expect(document.querySelector(".moss-tooltip")?.classList.contains("visible")).toBe(true);
 
     // Then focus on same trigger — should stay visible, not crash
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    trigger.focus();
     expect(document.querySelector(".moss-tooltip")?.classList.contains("visible")).toBe(true);
 
     // Mouseout while focused — tooltip stays (focus keeps it open)
@@ -858,11 +865,11 @@ describe("Tooltip a11y", () => {
     trigger2.setAttribute("data-tooltip", "Second");
     document.body.appendChild(trigger2);
 
-    trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    trigger.focus();
     expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
 
     // Focus moves to second trigger
-    trigger2.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    trigger2.focus();
     // First trigger's aria-describedby must be removed on retarget
     expect(trigger.hasAttribute("aria-describedby")).toBe(false);
     // Second trigger should now have aria-describedby

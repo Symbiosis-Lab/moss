@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { faintOver, falloff, FOCUS_ROW, layoutRows, OPEN_ROW, PITCH, restFocus, REST_ROW, travel } from "../nav/contents-lens";
@@ -18,9 +20,9 @@ describe("falloff", () => {
 
 describe("restFocus", () => {
   test("is the row under the pointer, a row's centre being its index", () => {
-    expect(restFocus(300 + 10, 300, 6)).toBeCloseTo(0, 10);
-    expect(restFocus(300 + 2 * REST_ROW + 10, 300, 6)).toBeCloseTo(2, 10);
-    expect(restFocus(300 + 2 * REST_ROW + 15, 300, 6)).toBeCloseTo(2.25, 10);
+    expect(restFocus(300 + REST_ROW / 2, 300, 6)).toBeCloseTo(0, 10);
+    expect(restFocus(300 + 2.5 * REST_ROW, 300, 6)).toBeCloseTo(2, 10);
+    expect(restFocus(300 + 2.75 * REST_ROW, 300, 6)).toBeCloseTo(2.25, 10);
   });
   test("is clamped to the first and last row", () => {
     expect(restFocus(100, 300, 6)).toBe(0);
@@ -127,4 +129,9 @@ describe("faintOver", () => {
     expect(faintOver([40, 36, 32], [40, 60, 90])).toBeNull();
     expect(faintOver([90, 86, 80], [28, 25, 20])).toBeNull();
   });
+});
+
+test("REST_ROW is the row height site.css declares", () => {
+  const css = readFileSync(resolve(__dirname, "../../../assets/css/site.css"), "utf8");
+  expect(css.match(/--moss-contents-row:\s*(\d+)px;/)?.[1]).toBe(String(REST_ROW));
 });

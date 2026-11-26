@@ -115,7 +115,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "login",
-            description: "Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline.",
+            description: "Sign the person in to a channel's account (contributes.channel.login: true) when they press Sign in, never during a build. Answers a `LoginResult`: `completed` with the account's stable `id` (and `name`, shown), which moss records as the folder's account in `.moss/state.toml`, `cancelled`, or `failed` with a `message`. A `login` that answers nothing is read from its own config, as before.",
             arity: "multiple",
             context: "BaseContext",
         },
@@ -292,11 +292,31 @@ fn full_payload<'a>(tokens: &'a moss_core::contract::tokens::Tokens, binary_vers
         .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands())
         .with_site_settings(site_settings())
         .with_config_tables(config_tables())
+        .with_paths(paths())
 }
 
 /// The config tables describe documents beyond `[site]`. Not every table yet:
 /// the guide covers the rest. Each table's rules are owned by the code that
 /// applies them.
+/// Who may write each path, from the one table of paths moss knows.
+fn paths() -> moss_core::contract::describe::PathsJson {
+    use crate::moss_paths::{Writer, MOSS_PATH_RULES};
+    moss_core::contract::describe::PathsJson {
+        default_outside_moss: "author",
+        default_inside_moss: "moss",
+        rules: MOSS_PATH_RULES
+            .iter()
+            .map(|rule| {
+                let (writer, changed_by) = match rule.writer {
+                    Writer::Author => ("author", None),
+                    Writer::Moss { changed_by } => ("moss", changed_by),
+                };
+                moss_core::contract::describe::PathRuleJson { path: rule.rel, writer, changed_by }
+            })
+            .collect(),
+    }
+}
+
 fn config_tables() -> Vec<ConfigTableInfo> {
     vec![ConfigTableInfo {
         name: "redirects",
@@ -361,9 +381,6 @@ fn print_human(payload: &DescribePayload) {
     println!("Components ({}):", payload.components.len());
     for c in &payload.components {
         let mut suffix = String::new();
-        if c.status == "retired" {
-            suffix.push_str(" [retired]");
-        }
         if c.authorable {
             suffix.push_str(" [shortcode]");
         }
@@ -499,6 +516,21 @@ mod tests {
     /// An agent reads `describe --json` before the guide, so the `[redirects]`
     /// table and its folder rule have to be in it.
     #[test]
+    fn describe_json_says_who_may_write_each_path() {
+        let tokens = load_tokens().unwrap();
+        let json = serde_json::to_value(full_payload(&tokens, "test")).unwrap();
+        let paths = &json["paths"];
+        assert_eq!((paths["default_outside_moss"].as_str(), paths["default_inside_moss"].as_str()), (Some("author"), Some("moss")));
+        let rule = |path: &str| {
+            paths["rules"].as_array().unwrap().iter().find(|r| r["path"] == path).unwrap_or_else(|| panic!("no {path}: {paths}")).clone()
+        };
+        assert_eq!(rule(".moss/theme/"), serde_json::json!({ "path": ".moss/theme/", "writer": "author", "changed_by": null }));
+        assert_eq!(rule(".moss/history/")["changed_by"], "moss history");
+        assert_eq!(rule(".moss/build.nosync/"), serde_json::json!({ "path": ".moss/build.nosync/", "writer": "moss", "changed_by": null }));
+        assert_eq!(rule(".claude/skills/moss/")["writer"], "moss");
+    }
+
+    #[test]
     fn describe_json_lists_the_redirects_table_and_its_folder_rule() {
         let tokens = load_tokens().unwrap();
         let json = serde_json::to_value(full_payload(&tokens, "test")).unwrap();
@@ -519,7 +551,7 @@ mod tests {
             .and_then(|tables| tables.iter().find(|t| t["name"] == "terms.<key>"))
             .unwrap_or_else(|| panic!("no [terms.<key>] entry: {}", json["config_tables"]));
         let rules = terms["rules"].to_string();
-        for key in ["fields", "title", "count", "type", "explorer", "line", "cards", "nav", "weight"] {
+        for key in ["fields", "title", "count", "type", "explorer", "line", "cards", "nav", "weight", "landscape"] {
             assert!(rules.contains(&format!("`{key}`")), "{key} is missing: {rules}");
         }
     }

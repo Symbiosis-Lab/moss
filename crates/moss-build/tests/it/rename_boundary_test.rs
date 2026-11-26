@@ -17,6 +17,8 @@
 //! that `rename_entry_inner` actually consults the boundary before touching the
 //! filesystem.
 
+use moss_build::moss_paths::MossPaths;
+
 /// A relative old-path is the original bug input: it does not start with the
 /// absolute project root, so the boundary check must reject it rather than
 /// letting `fs::rename` operate relative to the process cwd (escape).
@@ -241,19 +243,20 @@ fn clean_references_removes_shortcode_and_frontmatter_asset_paths() {
 
 /// The same headless build `moss build` runs; returns the staged output dir.
 fn build_staged(root: &std::path::Path) -> std::path::PathBuf {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(root),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,
         watch: false,
         start_server: false,
         host: cli_host_ports(&root.to_string_lossy()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -262,7 +265,7 @@ fn build_staged(root: &std::path::Path) -> std::path::PathBuf {
         rename_pairs: Vec::new(),
     }))
     .expect("build");
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// `[a](/docs/)` is a published address, which the build keeps verbatim. When

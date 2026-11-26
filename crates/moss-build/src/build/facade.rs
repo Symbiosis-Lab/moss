@@ -229,6 +229,13 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // only. Its hash belongs in this page's facade, but it has no downstream
     // reader and must not widen a shared surface invalidation.
     stripped.explorer_places_hash = None;
+    // The other pages of a thread read it as card reads (the verdict's
+    // `card_reads`), which re-render exactly them. `in_reply_to` is read only
+    // to join threads: each page whose thread it changes carries that thread
+    // in its own facade, and the stylesheet it ships is in the site features.
+    stripped.thread = Vec::new();
+    stripped.declared.remove(moss_core::fields::IN_REPLY_TO);
+    stripped.raw_frontmatter.remove(moss_core::fields::IN_REPLY_TO);
     // `slug` moves in lockstep with `title` (`markdown/pipeline.rs`'s
     // `generate_slug(&title)`) but, unlike `title`, has NO reader at all:
     // grepping every `.slug` access across `moss-build` and `moss-core`
@@ -437,11 +444,20 @@ pub struct PageFingerprints {
     pub plain: bool,
 }
 
+/// What a page's own render takes from a site setting that may change without
+/// a full render (`inputs::FINGERPRINTED_KEYS`), decided for that page. Folded
+/// into its facade, so a toggle re-renders exactly the pages whose answer moved.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShellFacts {
+    /// `render::page_chrome::shows_nav_island`.
+    pub nav_island: bool,
+}
+
 impl PageFingerprints {
-    pub fn of(doc: &ParsedDocument) -> Self {
+    pub fn of(doc: &ParsedDocument, shell: ShellFacts) -> Self {
         let surface = surface_debug(doc);
         Self {
-            facade: compute_page_facade(doc),
+            facade: hash_str(&format!("{}{shell:?}", compute_page_facade(doc))),
             fields: surface_field_digests(&surface),
             surface: hash_str(&surface),
             plain: doc.source_path.is_some() && doc.kind != moss_core::PageKind::Folder && !crate::build::render::lang_roots::is_home(doc),
@@ -918,8 +934,8 @@ mod tests {
 
         let names = surface_field_names();
         let moved = moved_surface_fields(
-            &PageFingerprints::of(&a).fields,
-            &PageFingerprints::of(&b).fields,
+            &PageFingerprints::of(&a, ShellFacts::default()).fields,
+            &PageFingerprints::of(&b, ShellFacts::default()).fields,
             &names,
         );
         assert_eq!(moved, ["title"]);
@@ -933,8 +949,8 @@ mod tests {
         let b = ParsedDocument { content: "second body".to_string(), html_content: "<p>second</p>".to_string(), ..Default::default() };
         let names = surface_field_names();
         assert!(moved_surface_fields(
-            &PageFingerprints::of(&a).fields,
-            &PageFingerprints::of(&b).fields,
+            &PageFingerprints::of(&a, ShellFacts::default()).fields,
+            &PageFingerprints::of(&b, ShellFacts::default()).fields,
             &names,
         )
         .is_empty());
@@ -950,11 +966,11 @@ mod tests {
         b.title = "Hello, {world}: [a, c]".to_string();
 
         let names = surface_field_names();
-        assert_eq!(names.len() * FIELD_DIGEST_HEX, PageFingerprints::of(&a).fields.len());
+        assert_eq!(names.len() * FIELD_DIGEST_HEX, PageFingerprints::of(&a, ShellFacts::default()).fields.len());
         assert_eq!(
             moved_surface_fields(
-                &PageFingerprints::of(&a).fields,
-                &PageFingerprints::of(&b).fields,
+                &PageFingerprints::of(&a, ShellFacts::default()).fields,
+                &PageFingerprints::of(&b, ShellFacts::default()).fields,
                 &names,
             ),
             ["title"]
@@ -966,7 +982,7 @@ mod tests {
     #[test]
     fn a_width_mismatch_attributes_nothing() {
         let names = surface_field_names();
-        let current = PageFingerprints::of(&ParsedDocument::default()).fields;
+        let current = PageFingerprints::of(&ParsedDocument::default(), ShellFacts::default()).fields;
         assert!(moved_surface_fields("", &current, &names).is_empty());
         assert!(moved_surface_fields(&current[..current.len() - FIELD_DIGEST_HEX], &current, &names).is_empty());
         assert!(moved_surface_fields(&current, &current, &[]).is_empty());
@@ -1191,7 +1207,7 @@ mod tests {
         let a = title("Original");
         let b = title("Renamed");
         let names = surface_field_names();
-        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        let moved = moved_surface_fields(&PageFingerprints::of(&a, ShellFacts::default()).fields, &PageFingerprints::of(&b, ShellFacts::default()).fields, &names);
         let mut moved_sorted = moved.clone();
         moved_sorted.sort();
         assert_eq!(moved_sorted, ["label", "title"], "got {moved:?}");
@@ -1277,7 +1293,7 @@ mod tests {
         let b = ParsedDocument { weight: Some(25), raw_frontmatter: raw(25), ..Default::default() };
 
         let names = surface_field_names();
-        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        let moved = moved_surface_fields(&PageFingerprints::of(&a, ShellFacts::default()).fields, &PageFingerprints::of(&b, ShellFacts::default()).fields, &names);
         assert_eq!(moved, ["weight"], "raw_frontmatter must not also show up as moved: {moved:?}");
     }
 
@@ -1296,7 +1312,7 @@ mod tests {
         let b = ParsedDocument { raw_frontmatter: raw("yes"), ..Default::default() };
 
         let names = surface_field_names();
-        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        let moved = moved_surface_fields(&PageFingerprints::of(&a, ShellFacts::default()).fields, &PageFingerprints::of(&b, ShellFacts::default()).fields, &names);
         assert_eq!(moved, ["raw_frontmatter"]);
     }
 

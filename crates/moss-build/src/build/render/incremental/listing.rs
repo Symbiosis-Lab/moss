@@ -379,25 +379,9 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     let mut keys: Vec<GroupKey> = Vec::new();
 
     // (a) The listing the renderer ends the page in, as `own_listing_target`
-    //     chooses it: a home's tree, or the folder a page's `children_source`
-    //     names, on a home or any other page.
+    //     chooses it: a home's tree, a claimed term's members, a folder index's
+    //     own folder, or the folder a page's `children_source` names.
     keys.extend(own_listing_key(doc, documents));
-
-    // (b) A folder index page lists its OWN folder — `render/html.rs` passes
-    //     the page's own url-derived folder path, ignoring `children_source`
-    //     on this branch — and defaults depth to "direct".
-    if doc.kind == PageKind::Folder
-        && !crate::build::render::lang_roots::is_language_root(&doc.url_path)
-        && doc.url_path.ends_with("/index.html")
-    {
-        keys.push(GroupKey {
-            folder_slug: own_folder_slug(doc),
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), false),
-            scope_default_tree: false,
-            exclude_nav: false,
-            edition: doc.edition.clone(),
-        });
-    }
 
     // (c) The right rail. Its own membership rule is narrower than the
     //     selector's (physical children only, dated only), so the group is an
@@ -423,28 +407,10 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
         });
     }
 
-    // (d) A term-claim page hosts the claimed term's member listing
-    //     (`render/html.rs` passes `term_listing` as the folder path, so the
-    //     key IS the slug — no stem resolution). For a folder index that also
-    //     claims a term, (b) stays as an over-approximation: the term listing
-    //     replaces the own-folder one, but reading one group too many only
-    //     costs a render, never staleness.
-    if let Some(key) = doc.term_listing.as_deref() {
-        keys.push(GroupKey {
-            folder_slug: key.to_string(),
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), false),
-            scope_default_tree: false,
-            exclude_nav: false,
-            edition: doc.edition.clone(),
-        });
-    }
-
     // (e) A series-chain step reads its parent folder's listing for prev/next
-    //     ordering (`sequence_siblings`, `render/html.rs`) — the exact key
-    //     case (b) above already computes for the parent's own folder index,
-    //     since `select_children_by_slug` is the same membership call either
-    //     way. No extra digest work: this just registers one more reader of
-    //     a key that (per case (b)) is already built for any folder.
+    //     ordering (`sequence_siblings`, `render/html.rs`): the key (a) builds
+    //     for the parent's own folder index, since `select_children_by_slug`
+    //     is the same membership call either way.
     if is_series_member(doc, documents) {
         let parent_folder = series_parent_folder(doc);
         if let Some(parent_doc) =

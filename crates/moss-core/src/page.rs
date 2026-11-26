@@ -289,6 +289,9 @@ pub fn embedded_notes(source_path: &str, text: &str, site: &SiteInputs) -> Vec<S
 }
 
 /// Render one page using the default math and diagram hooks.
+///
+/// It knows no picture sizes, so a wide opening picture the build makes the
+/// page's banner stays in the body here, with the title above it.
 pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> RenderedPage {
     let fields = frontmatter::frontmatter_map(text);
     let body = frontmatter::body(text);

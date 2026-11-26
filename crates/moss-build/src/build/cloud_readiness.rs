@@ -543,6 +543,18 @@ pub fn probe_input(path: &Path) -> std::io::Result<Found> {
     }
 }
 
+/// A JSON file read without waiting on a download. Absent is `Ok(None)`; still
+/// in the cloud, unreadable or unparsable is an error, which a reader reports
+/// as unknown rather than as absent.
+pub fn read_json_no_wait<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    match probe_input(path) {
+        Ok(Found::Bytes(bytes)) => serde_json::from_slice(&bytes).map(Some).map_err(|e| format!("{}: {e}", path.display())),
+        Ok(Found::InCloud) => Err(format!("{} is still in the cloud", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
 /// Rewrite a source file the author may be saving. `edit` maps its bytes to
 /// the new text, or `None` to leave it; the file is read once more just before
 /// the write, which narrows, without closing, the race with a save landing now.

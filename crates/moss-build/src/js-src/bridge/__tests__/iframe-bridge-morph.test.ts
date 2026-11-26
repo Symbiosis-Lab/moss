@@ -575,25 +575,66 @@ describe("iframe-bridge morph handler (shipped bundle regression)", () => {
   });
 });
 
+/**
+ * A page in a frame with the shipped bridge ready to `start()`. The shell's
+ * preview frame is named `moss-preview`; `underFrame` puts the shell itself in
+ * a frame, as the browser editor does, so the page's parent is not the top window.
+ */
+async function framedPage(html: string, { name = "moss-preview", underFrame = false, dark = false } = {}) {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(html, { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
+  const w = dom.window;
+  const replies: any[] = [];
+  const parent = { postMessage: (message: unknown) => replies.push(message) };
+  dom.reconfigure({ windowTop: underFrame ? {} : parent });
+  Object.defineProperty(w, "parent", { value: parent });
+  w.name = name;
+  w.matchMedia = () => ({ matches: dark, addEventListener() {}, removeEventListener() {} }) as any;
+  (w as any).ResizeObserver = class { observe() {} disconnect() {} };
+  (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
+  w.HTMLCanvasElement.prototype.getContext = () => null;
+  w.document.elementFromPoint = () => null;
+  return { w, replies, start: () => w.eval(readFileSync(BUNDLE_PATH, "utf8")) };
+}
+
+describe.runIf(bundleExists)("shipped bridge finds the shell by its preview frame's name", () => {
+  const types = (replies: any[]) => replies.map((r) => r?.type);
+
+  it.each([
+    ["the desktop shell, the top window", false],
+    ["the browser editor, whose shell is a frame", true],
+  ])("in %s it asks for the theme, reports the page colour and marks the page", async (_, underFrame) => {
+    const { w, replies, start } = await framedPage("<html><head></head><body><p>x</p></body></html>", { underFrame });
+    try {
+      start();
+      expect(types(replies)).toEqual(expect.arrayContaining(["moss-theme-request", "moss-page-color"]));
+      expect(w.document.documentElement.classList.contains("moss-shell-frame")).toBe(true);
+    } finally { w.close(); }
+  });
+
+  it.each([
+    ["a site's own iframe inside the preview", "embed", true],
+    ["an unnamed frame directly under the top window", "", false],
+  ])("%s talks to no shell and drops a leaked frame class", async (_, name, underFrame) => {
+    const { w, replies, start } = await framedPage('<html class="moss-shell-frame"><head></head><body><p>x</p></body></html>', { name, underFrame });
+    try {
+      start();
+      expect(types(replies)).not.toContain("moss-theme-request");
+      expect(types(replies)).not.toContain("moss-page-color");
+      expect(w.document.documentElement.classList.contains("moss-shell-frame")).toBe(false);
+    } finally { w.close(); }
+  });
+});
+
 // Drive the shipped handler rather than mirroring its acknowledgement logic.
 describe("shipped morph failure correlation", () => {
   it.each(["script-change", "fetch-error"])("echoes the request generation on %s", async (failure) => {
-    const { JSDOM } = await import("jsdom");
-    const dom = new JSDOM('<!doctype html><html><head><script src="old.js"></script></head><body></body></html>', { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
-    const w = dom.window;
-    const replies: unknown[] = [];
-    // Framed, as in moss: a page in a plain tab takes no morph.
-    const parent = { postMessage: (message: unknown) => replies.push(message) };
-    dom.reconfigure({ windowTop: parent });
-    Object.defineProperty(w, "parent", { value: parent });
-    w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
-    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
-    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
+    const { w, replies, start } = await framedPage('<!doctype html><html><head><script src="old.js"></script></head><body></body></html>');
     (w as any).fetch = async () => failure === "fetch-error"
       ? { ok: false, status: 404 }
       : { ok: true, text: async () => '<html><head><script src="new.js"></script></head><body></body></html>' };
     try {
-      w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+      start();
       w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 42 } }));
       for (let i = 0; i < 12; i++) await Promise.resolve();
       expect(replies).toContainEqual(expect.objectContaining({ type: "moss-morph-failed", gen: 42 }));
@@ -604,26 +645,15 @@ describe("shipped morph failure correlation", () => {
 
 describe("shipped morph color scheme policy", () => {
   it.each(["light", "dark"])("keeps fixed %s → auto → fixed across rebuilds", async (fixed) => {
-    const { JSDOM } = await import("jsdom");
     const opposite = fixed === "light" ? "dark" : "light";
     const page = (scheme: string | null) => `<html${scheme ? ` data-moss-color-scheme="${scheme}" data-theme="${scheme}" style="color-scheme: ${scheme}"` : ""}><head></head><body><p>content</p></body></html>`;
-    const dom = new JSDOM(page(fixed), { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
-    const w = dom.window;
-    const replies: unknown[] = [];
-    const parent = { postMessage: (message: unknown) => replies.push(message) };
-    dom.reconfigure({ windowTop: parent });
-    Object.defineProperty(w, "parent", { value: parent });
-    w.matchMedia = () => ({ matches: opposite === "dark", addEventListener() {}, removeEventListener() {} }) as any;
-    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
-    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
-    w.HTMLCanvasElement.prototype.getContext = () => null;
-    w.document.elementFromPoint = () => null;
+    const { w, replies, start } = await framedPage(page(fixed), { dark: opposite === "dark" });
     let next = page(fixed);
     (w as any).fetch = async () => ({ ok: true, text: async () => next });
     const send = (data: unknown) => w.dispatchEvent(new w.MessageEvent("message", { data }));
     try {
       w.localStorage.setItem("moss-theme", opposite);
-      w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+      start();
       send({ type: "moss-set-theme", theme: opposite });
       const root = w.document.documentElement;
       expect(root.getAttribute("data-theme")).toBe(fixed);
@@ -649,23 +679,12 @@ describe("shipped morph with focus inside the page", () => {
   const after = page(`<h2 id="intro" tabindex="-1">Intro, edited</h2><p>one</p><p>two, edited</p><p>three</p><input id="q">`);
 
   async function morphWithFocus(focus: (d: Document) => void) {
-    const { JSDOM } = await import("jsdom");
-    const dom = new JSDOM(before, { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
-    const w = dom.window;
-    const replies: unknown[] = [];
-    const parent = { postMessage: (message: unknown) => replies.push(message) };
-    dom.reconfigure({ windowTop: parent });
-    Object.defineProperty(w, "parent", { value: parent });
-    w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
-    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
-    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
-    w.HTMLCanvasElement.prototype.getContext = () => null;
-    w.document.elementFromPoint = () => null;
+    const { w, replies, start } = await framedPage(before);
     (w as any).fetch = async () => ({ ok: true, text: async () => after });
     const scrolled = vi.fn();
     w.scrollTo = scrolled;
     w.Element.prototype.scrollIntoView = scrolled;
-    w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+    start();
     focus(w.document);
     w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 1 } }));
     await vi.waitFor(() => expect(replies).toContainEqual(expect.objectContaining({ type: "moss-morph-applied", gen: 1 })));

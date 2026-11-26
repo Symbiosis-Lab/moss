@@ -4,6 +4,7 @@
 //! keeps its own process and is named in OWN_PROCESS. `layout` fails on a file
 //! either list misses or a name without a file.
 const OWN_PROCESS: &[&str] = &[
+    "app_identity_test",
     "article_end_block_test",
     "booking_step_aside_test",
     "child_listing_repeat_note_test",
@@ -27,13 +28,13 @@ const OWN_PROCESS: &[&str] = &[
     "nav_external_url_test",
     "no_plugins_problem_count_test",
     "no_system_ca_test",
+    "parse_cache_kept_test",
     "passthrough_markdown_test",
+    "place_map_pack_test",
     "plugin_admission_test",
     "plugin_install_cli_test",
     "proved_trigger_test",
     "registry_status_test",
-    "root_identity_log_test",
-    "root_swap_mid_build_test",
     "section_color_test",
     "seta_poll_log_test",
     "shortcode_attr_warning_test",
@@ -98,6 +99,7 @@ mod image_title_test;
 mod img_contract_test;
 mod inline_subscribe_scope_test;
 mod interchangeable_forms_test;
+mod json_feed_test;
 mod lead_listing_test;
 mod legacy_moss_ignore_note_test;
 mod list_translations_test;
@@ -116,6 +118,7 @@ mod no_string_emits;
 mod no_tokio_spawn_in_tauri_context_test;
 mod no_vendor_ui_launch_test;
 mod one_resolver_test;
+mod opening_picture_banner_test;
 mod output_write_invariant_test;
 mod own_listing_test;
 mod page_chrome_none_test;

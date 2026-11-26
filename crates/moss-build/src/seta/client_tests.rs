@@ -1357,6 +1357,18 @@ fn auth_request_body_names_this_app_for_the_confirm_page() {
 }
 
 #[test]
+fn auth_request_body_names_this_computer_with_proof() {
+    use ed25519_dalek::Verifier;
+    let body = auth_request_body("a@example.com", "pk", "sid", None, &SignInFolder::default());
+    let bytes = |field: &str| hex::decode(body["machine"][field].as_str().expect("the request names the computer")).unwrap();
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes("key").try_into().unwrap()).unwrap();
+    key.verify(b"moss-machine-v1\nsid\npk\na@example.com", &ed25519_dalek::Signature::from_slice(&bytes("sig")).unwrap())
+        .expect("signed over this request's session, folder key and address");
+    let other = auth_request_body("a@example.com", "pk2", "sid", None, &SignInFolder::default());
+    assert_ne!(body["machine"]["key"], other["machine"]["key"], "another folder key, another computer key");
+}
+
+#[test]
 fn auth_request_body_names_the_folder_only_with_what_it_knows() {
     let folder = |site_id: Option<&str>, name: Option<&str>| SignInFolder { site_id: site_id.map(Into::into), name: name.map(Into::into) };
     let both = auth_request_body("a@example.com", "pk", "sid", None, &folder(Some("her-blog"), Some("Blog")));

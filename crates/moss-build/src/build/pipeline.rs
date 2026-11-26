@@ -884,6 +884,9 @@ pub struct PipelineRunOutput {
     /// tail separately checks complete-generation evidence before changing
     /// the durable manifest or `current` generation.
     pub publishable: bool,
+    /// Whether the preview reloads for this build (`watch::RefreshPlan::announce`);
+    /// `None` when it was not shown.
+    pub reloads: Option<bool>,
     /// The render `lifecycle::show_render` minted for this build, which the
     /// seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
@@ -1251,14 +1254,6 @@ fn build_inner(
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
     // We keep staging/ between rebuilds so that mtime+size checks can skip
     // unchanged binary assets (videos, images) — avoids re-reading/writing 1GB+.
-    //
-    // `create_output_dir_all`, not `fs::create_dir_all`: on a cloud-synced vault
-    // this is the FIRST thing the build does to the output tree, and a raw
-    // `create_dir_all` here failed `EDEADLK` on a Google Drive vault's first
-    // preview — putting "Resource deadlock avoided (os error 11)" on the
-    // onboarding overlay, before the build could reach the cloud gate that
-    // explains itself. The staging tree is regenerable, so unreadable is
-    // treated as absent, and it is replaced rather than waited for.
     crate::build::io_utils::create_output_dir_all(&stage_dir)
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
@@ -1344,7 +1339,8 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         &site_lang,
     );
-    let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    let (mut field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    field_decls.extend(moss_core::fields::moss_decls());
     for problem in cfg.as_ref().map(|c| c.warnings()).unwrap_or_default().iter().chain(&field_problems) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
@@ -1402,7 +1398,7 @@ fn build_inner(
         .find(|kind| kind.is_place)
         .map(|kind| (kind.key.clone(), kind.parents.clone(), kind.explorer_enabled()))
         .and_then(|(namespace, parents, explorer)| {
-            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::embedded() }) {
+            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::load(&paths, cfg.as_ref().and_then(crate::build::place_map::wanted_landscape).as_deref(), &input_evidence) }) {
                 Ok(maps) => {
                     // Pure function of the pack and the gazetteer (see its
                     // own doc), so known before any document is parsed —
@@ -1703,10 +1699,7 @@ fn build_inner(
     // Bailing here rather than mid-write is deliberate: everything above this
     // point wrote only into this build's own staging directory, which the next
     // build overwrites anyway.
-    if services
-        .and_then(|s| s.session.as_ref())
-        .is_some_and(|s| s.cancel.is_cancelled())
-    {
+    if services.and_then(|s| s.session.as_ref()).is_some_and(|s| s.cancel.is_cancelled()) {
         log::info!("[build] folder closed during the build — not switching the preview");
         return Ok(PipelineRunOutput {
             is_empty,
@@ -1720,6 +1713,7 @@ fn build_inner(
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
+            reloads: None,
             render: None,
             unready_derivations: Default::default(),
             folder_lock: folder_build_lock,
@@ -1791,12 +1785,12 @@ fn build_inner(
     let seq = render.seq();
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.
-    if publishable {
+    let reloads = publishable.then(|| {
         pending.note_shown();
         // A key the show names must already be bytes in staging: one registered
         // before it is written would be named early here and never by the tail.
-        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq);
-    }
+        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq)
+    });
     log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
 
     // Asked HERE, not carried in: a build that started no server of its own
@@ -2148,6 +2142,7 @@ fn build_inner(
         cancelled: false,
         home_ready,
         publishable,
+        reloads,
         render: Some(render),
         unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
         folder_lock: folder_build_lock,
@@ -2176,6 +2171,7 @@ pub(crate) fn send_progress(
             completed: done,
             port,
             is_empty: empty,
+            reloads: None,
         });
     }
 }

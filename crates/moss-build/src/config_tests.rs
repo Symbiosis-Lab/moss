@@ -463,3 +463,11 @@ fn a_site_that_turned_heading_anchors_off_stays_off_without_a_warning() {
     assert!(config.unknown_site_keys().is_empty(), "{:?}", config.unknown_site_keys());
     assert_eq!(crate::config::site_settings::site_settings().iter().filter(|s| s.name == "heading_anchors").count(), 1, "describe lists it");
 }
+
+#[test]
+fn field_decls_in_reply_to_is_moss_s_own_and_cannot_be_redeclared() {
+    let config = ConfigFile::parse("[fields.in_reply_to]\nplace = \"end\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert!(problems.iter().any(|p| p.contains("[fields.in_reply_to] is a moss field")), "got: {problems:?}");
+}

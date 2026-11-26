@@ -28,7 +28,7 @@ fn work_site(home_body: &str) -> (Site, Vec<String>) {
     for (i, p) in ["p1", "p2", "p3", "p4", "p5"].iter().enumerate() {
         picture(&site, &format!("work/pics/{p}.jpg"), 20 + i as u8 * 40);
     }
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     (site, logged)
 }
 

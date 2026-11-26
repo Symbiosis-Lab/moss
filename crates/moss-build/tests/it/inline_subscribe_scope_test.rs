@@ -1,32 +1,9 @@
 //! An inline `:::subscribe` form must carry the same scope the footer form
 //! would on that page: the page's language section, or "" at the root.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -69,9 +46,9 @@ fn inline_subscribe_scope_matches_the_page_language_section() {
     write(&tmp, "essais/index.md", "---\ntitle: Accueil\nlang: fr\ntranslationKey: home\n---\n\nBonjour.\n");
     write(&tmp, "essais/rejoindre.md", "---\ntitle: Rejoindre\nlang: fr\n---\n\nAbonnez-vous.\n\n:::subscribe\n:::\n");
 
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
 
     assert_eq!(inline_scope(&read_page(&out, "index.html")), "");
     assert_eq!(inline_scope(&read_page(&out, "zh-hans/join/index.html")), "zh-hans");
@@ -112,13 +89,13 @@ fn inline_subscribe_posts_nowhere_on_a_site_a_deploy_plugin_publishes() {
     write(&tmp, ".moss/state.toml", "[deployment]\nsite_id = \"harbor-notes\"\n");
 
     write(&tmp, ".moss/config.toml", "[site]\ndomain = \"example.com\"\n");
-    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "index.html");
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&MossPaths::new(&tmp).staging_dir(), "index.html");
     assert!(page.contains("/sites/harbor-notes/subscribe"), "on the moss host the form posts to the site: {page}");
 
     write(&tmp, ".moss/config.toml", "[site]\ndomain = \"example.com\"\n\n[hooks]\ndeploy = \"github-pages\"\n");
-    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "index.html");
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&MossPaths::new(&tmp).staging_dir(), "index.html");
     assert!(!page.contains("/sites/harbor-notes/subscribe"), "{page}");
     assert!(page.contains(r#"data-moss-pending="true""#), "{page}");
 }

@@ -1,5 +1,6 @@
 //! Plugin blocks: what the build makes of a `:::<short>` fence when the plugin
 //! is there, when it is not, and when two plugins want the same name.
+use moss_build::moss_paths::MossPaths;
 use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
 use serde_json::json;
 use std::path::Path;
@@ -31,7 +32,7 @@ fn build_for(root: &Path, mode: PluginMode, trigger: BuildTrigger) {
         watch: false,
         start_server: false,
         host: moss_build::cli::host::cli_host_ports(root.to_str().unwrap()),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".into()),
         server_port: None,
@@ -56,7 +57,7 @@ fn plugin(root: &Path, name: &str, contributes: serde_json::Value) {
 }
 
 fn output(root: &Path, path: &str) -> String {
-    std::fs::read_to_string(root.join(".moss/build.nosync/current").join(path)).unwrap()
+    std::fs::read_to_string(MossPaths::new(root).current_ptr().join(path)).unwrap()
 }
 
 fn site() -> tempfile::TempDir {
@@ -178,7 +179,7 @@ fn a_block_asset_cannot_be_a_symlink_out_of_the_plugin() {
     let html = output(root, "index.html");
     assert!(!html.contains("view.js"), "{html}");
     assert!(html.contains("view.css"), "the other asset still loads: {html}");
-    assert!(!root.join(".moss/build.nosync/current/_moss/plugins/catalog/view.js").exists());
+    assert!(!MossPaths::new(root).current_ptr().join("_moss/plugins/catalog/view.js").exists());
 }
 
 #[test]
@@ -227,7 +228,7 @@ fn public_data_is_published_under_the_plugin_until_it_is_disabled() {
     assert_eq!(data, json!({"schema":1,"data":{"endpoint":"https://example.com/catalog"}}));
     assert!(output(root, "_moss/commerce.json").contains("forms"), "core forms data is untouched");
     assert!(!output(root, "_moss/commerce.json").contains("catalog"), "a plugin's data stays out of the core file");
-    let published = root.join(".moss/build.nosync/current/_moss/extensions/catalog.json");
+    let published = MossPaths::new(root).current_ptr().join("_moss/extensions/catalog.json");
     build(root, PluginMode::Skip);
     assert!(published.exists(), "skipping plugin code still publishes its declared data");
     write(root, ".moss/plugins/catalog/config.toml", "enabled = false\n");
@@ -273,5 +274,5 @@ fn an_incremental_build_publishes_edited_settings_and_a_changed_allowlist() {
     assert!(output(root, "_moss/extensions/catalog.json").contains("north"));
     write(root, ".moss/plugins/catalog/config.toml", "enabled = false\n");
     edit("After disabling the plugin.");
-    assert!(!root.join(".moss/build.nosync/current/_moss/extensions/catalog.json").exists(), "a disabled plugin's file does not linger");
+    assert!(!MossPaths::new(root).current_ptr().join("_moss/extensions/catalog.json").exists(), "a disabled plugin's file does not linger");
 }

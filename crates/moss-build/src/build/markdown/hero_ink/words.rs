@@ -355,7 +355,7 @@ pub enum Column {
 /// (`--moss-contents-inset` + 2 * `--moss-contents-pad` + `--moss-contents-row`
 /// + `--moss-contents-gutter`), which narrows the column of any page that has
 /// it. The footer does not know its page's frontmatter, so both are measured.
-pub(super) const LANE_PX: f32 = 92.0;
+pub(super) const LANE_PX: f32 = 96.0;
 
 /// What a closing picture's words are set in at a window `width` wide in a
 /// `column`, from the stylesheet's hero rules: where the words start

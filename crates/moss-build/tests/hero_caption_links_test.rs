@@ -6,6 +6,7 @@
 //! graph never resolved their links. Its own test binary: the build problem
 //! counter is per thread, and the build runs on this test's thread.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -49,7 +50,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf, usize) {
         watch: false,
         start_server: false,
         host: cli_host_ports(&source),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -59,7 +60,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf, usize) {
     }))
     .expect("build succeeds");
     let problems = take_cli_problems();
-    (site, dir.join(".moss/build.nosync/staging"), problems)
+    (site, MossPaths::new(&dir).staging_dir(), problems)
 }
 
 /// Every opening `<a …>` tag in `html`, in order.

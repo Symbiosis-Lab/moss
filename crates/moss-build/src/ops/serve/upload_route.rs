@@ -79,7 +79,7 @@ pub(crate) const TOTAL_MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 /// Handler for `POST /__moss/upload`. See the module doc for the contract.
 pub(crate) async fn handle_upload(
     ctx: Option<super::invoke::InvokeCtx>,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     request: Request<Body>,
 ) -> Response {
     let Some(ctx) = ctx else {
@@ -272,6 +272,7 @@ fn server_error(message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::super::carrier_token::TOKEN_HEADER;
     use super::super::invoke::InvokeCtx;
     use super::super::ownership::HostKind;
@@ -280,7 +281,7 @@ mod tests {
 
     fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
         let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let site_dir = vault.path().join(".moss/build.nosync/current");
+        let site_dir = MossPaths::new(vault.path()).current_ptr();
         std::fs::create_dir_all(&site_dir).unwrap();
         (vault, site_dir)
     }
@@ -328,7 +329,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64200)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64200)
         })
         .await
         .expect("server should start");
@@ -363,7 +364,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64260)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64260)
         })
         .await
         .expect("server should start");
@@ -390,7 +391,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64201)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64201)
         })
         .await
         .expect("server should start");
@@ -428,7 +429,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64202)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64202)
         })
         .await
         .expect("server should start");
@@ -460,7 +461,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64203)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64203)
         })
         .await
         .expect("server should start");
@@ -495,7 +496,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64210)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64210)
         })
         .await
         .expect("server should start");
@@ -530,7 +531,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64211)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64211)
         })
         .await
         .expect("server should start");
@@ -562,7 +563,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64204)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64204)
         })
         .await
         .expect("server should start");
@@ -591,7 +592,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64205)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64205)
         })
         .await
         .expect("server should start");
@@ -624,7 +625,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64206)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64206)
         })
         .await
         .expect("server should start");
@@ -656,7 +657,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64207)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64207)
         })
         .await
         .expect("server should start");
@@ -694,7 +695,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64208)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64208)
         })
         .await
         .expect("server should start");
@@ -725,7 +726,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64209)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64209)
         })
         .await
         .expect("server should start");

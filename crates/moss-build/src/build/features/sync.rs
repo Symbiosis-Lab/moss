@@ -91,25 +91,21 @@ pub struct CommentSyncState {
     pub last_error: Option<CommentSyncError>,
 }
 
-/// State file location. Under `.moss/data/` but NOT `.moss/data/social/`:
-/// social/ is on the watcher allowlist (comment.json rewrites deliberately
-/// trigger a refresh build), and this file changes on EVERY sync attempt —
-/// inside social/ it would rebuild-loop. Same placement rationale as the
-/// `.moss/deploy/` snapshots. Pinned by `sync_state_lives_outside_watched_paths`.
-fn comment_sync_state_path(folder: &Path) -> PathBuf {
-    folder.join(".moss").join("data").join("comment-sync-state.json")
+/// Where this computer keeps the folder's last refresh outcome: its own record
+/// for the folder, never the folder itself, which a sync client would upload
+/// on every attempt for no page to read. A file an older moss left at
+/// `.moss/data/comment-sync-state.json` is neither read nor removed (removing
+/// it would be a synced write too).
+fn comment_sync_state_path(folder: &Path) -> Option<PathBuf> {
+    let store = crate::infra::folder_store::FolderStores::running_for(folder)?.resolve(folder).ok()?;
+    Some(store.record_dir.join("comment-sync-state.json"))
 }
 
-/// Load the persisted sync state. Missing or unparseable file = default
-/// (never synced) — the file is moss-written advisory state, not user data,
-/// so silent fresh-start is the right recovery.
+/// Load the persisted sync state. No record, or one that does not parse, is
+/// the default (never synced): it only words a status line.
 pub fn load_comment_sync_state(folder_path: &str) -> CommentSyncState {
-    let path = comment_sync_state_path(Path::new(folder_path));
-    // Reading a cloud-only placeholder waits for the provider's download, and
-    // no page needs these bytes.
-    if crate::build::icloud::is_evicted(&path) {
-        return CommentSyncState::default();
-    }
+    let Some(path) = comment_sync_state_path(Path::new(folder_path)) else { return CommentSyncState::default() };
+    // allow:raw_read this computer's per-folder record, outside any synced folder
     match std::fs::read_to_string(&path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => CommentSyncState::default(),
@@ -117,15 +113,14 @@ pub fn load_comment_sync_state(folder_path: &str) -> CommentSyncState {
 }
 
 fn store_comment_sync_state(folder_path: &str, state: &CommentSyncState) {
-    let path = comment_sync_state_path(Path::new(folder_path));
+    let Some(path) = comment_sync_state_path(Path::new(folder_path)) else { return };
     // Atomic: a build may read this while a refresh it stopped waiting for writes it.
     let write = || -> Result<(), String> {
         let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
         crate::infra::atomic_write::write_atomic(&path, &json)
     };
     if let Err(e) = write() {
-        // Advisory state only — losing a write degrades the settings row's
-        // status line, never the sync itself. Log and move on.
+        // Losing a write degrades the settings row's status line, never the sync.
         log::info!(target: "sync", "could not persist comment-sync state: {e}");
     }
 }
@@ -639,15 +634,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_state_in_the_cloud_reads_as_never_synced() {
-        let dir = tmp_dir();
-        let folder = dir.path().to_str().unwrap();
-        record_comment_sync_success(folder, 1_000.0);
-        let _in_cloud = crate::build::icloud::pretend::evicted(&comment_sync_state_path(dir.path()));
-        assert_eq!(load_comment_sync_state(folder).last_success_at, None);
-    }
-
-    #[test]
     fn sync_state_success_then_failure_preserves_last_success() {
         let dir = tmp_dir();
         let folder = dir.path().to_str().unwrap();
@@ -690,8 +676,8 @@ mod tests {
         let dir = tmp_dir();
         let folder = dir.path().to_str().unwrap();
         record_comment_sync_success(folder, 1_000.0);
-        let before = std::fs::read_to_string(comment_sync_state_path(dir.path())).unwrap();
-        let mut reader = std::fs::File::open(comment_sync_state_path(dir.path())).unwrap();
+        let before = std::fs::read_to_string(comment_sync_state_path(dir.path()).unwrap()).unwrap();
+        let mut reader = std::fs::File::open(comment_sync_state_path(dir.path()).unwrap()).unwrap();
         record_comment_sync_success(folder, 2_000.0);
         let mut seen = String::new();
         reader.read_to_string(&mut seen).unwrap();
@@ -703,7 +689,7 @@ mod tests {
     fn sync_state_corrupt_file_defaults_empty() {
         let dir = tmp_dir();
         let folder = dir.path().to_str().unwrap();
-        let p = comment_sync_state_path(dir.path());
+        let p = comment_sync_state_path(dir.path()).unwrap();
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, "{not json").unwrap();
         let state = load_comment_sync_state(folder);
@@ -711,20 +697,15 @@ mod tests {
         assert!(state.last_error.is_none());
     }
 
+    /// Every attempt rewrites the record, so it must not be in the folder a
+    /// sync client uploads.
     #[test]
-    fn sync_state_lives_outside_watched_paths() {
-        // .moss/data/social/** is watched (comment.json rewrites deliberately
-        // trigger a refresh build). The state file is rewritten on EVERY sync
-        // completion, so it must live outside the watcher allowlist or each
-        // sync would trigger a rebuild → sync → rebuild loop.
-        let p = comment_sync_state_path(std::path::Path::new("/site"));
-        let s = p.to_string_lossy().replace('\\', "/");
-        assert!(s.contains("/.moss/data/"), "state belongs under .moss/data/: {s}");
-        assert!(
-            !s.contains("/.moss/data/social/"),
-            "must not be watcher-visible: {s}"
-        );
-        let after_moss = "data/comment-sync-state.json";
-        assert!(!crate::build::watch::should_watch_moss_file(after_moss));
+    fn sync_state_lives_outside_the_folder() {
+        let dir = tmp_dir();
+        let folder = dir.path().to_str().unwrap();
+        record_comment_sync_success(folder, 1_000.0);
+        let p = comment_sync_state_path(dir.path()).unwrap();
+        assert!(p.exists() && !p.starts_with(std::fs::canonicalize(dir.path()).unwrap()), "{}", p.display());
+        assert!(!dir.path().join(".moss").exists(), "nothing written into the folder");
     }
 }

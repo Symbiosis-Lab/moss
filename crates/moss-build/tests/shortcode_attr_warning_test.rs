@@ -22,7 +22,7 @@ fn build_sync(folder_path: &str) -> Result<String, String> {
         watch: false,
         start_server: false,
         host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -48,6 +48,14 @@ const PNG: &[u8] = &[
 
 /// Build a one-page site whose hero carries `attrs`; return the build's problem count.
 fn problems_for(attrs: &str) -> usize {
+    problems_in(&format!("---\ntitle: Home\n---\n\n:::hero {attrs}\n# Harbor\n:::\n"))
+}
+
+/// Build a one-page site whose home page is `page` and count its problems.
+fn problems_in(page: &str) -> usize {
+    // The problem count is process-wide, so the builds in this binary take turns.
+    static ONE_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = ONE_BUILD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let tmp = std::env::temp_dir().join(format!("moss_attr_warn_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     struct Cleanup(PathBuf);
@@ -60,11 +68,7 @@ fn problems_for(attrs: &str) -> usize {
 
     write(&tmp, ".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
     write(&tmp, "photos/harbor.png", PNG);
-    write(
-        &tmp,
-        "index.md",
-        format!("---\ntitle: Home\n---\n\n:::hero {attrs}\n# Harbor\n:::\n").as_bytes(),
-    );
+    write(&tmp, "index.md", page.as_bytes());
     let _ = take_cli_problems();
     let result = build_sync(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
@@ -79,4 +83,19 @@ fn unparseable_hero_attributes_are_a_build_problem_and_quoted_ones_are_not() {
     assert_eq!(quoted, 0, "the quoted form must build without a problem");
     assert!(unquoted >= 1, "unquoted `|cover bottom` must warn, got {unquoted}");
     assert!(unquoted_short >= 1, "unquoted `|cover` must warn, got {unquoted_short}");
+}
+
+/// An older spelling that still renders is a note, not a problem, so a
+/// folder written for an earlier release keeps passing `--strict`.
+#[test]
+fn deprecated_spellings_that_still_render_are_not_problems() {
+    let cases = [
+        "---\ntitle: Home\n---\n\n:::grid {cols=2}\nA\n+++\nB\n:::\n",
+        "---\ntitle: Home\n---\n\n:::gallery {cols=2}\nphotos/harbor.png\n:::\n",
+        "---\ntitle: Home\n---\n\n:::grid 2\nA\n---\nB\n:::\n",
+        "---\ntitle: Home\nsidebar: \"[[Home]]\"\n---\n\nText.\n",
+    ];
+    for page in cases {
+        assert_eq!(problems_in(page), 0, "{page}");
+    }
 }

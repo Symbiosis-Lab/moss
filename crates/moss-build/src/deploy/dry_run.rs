@@ -603,7 +603,7 @@ mod tests {
             form: Some(Form::Long),
             parts: Vec::new(),
             link_card: None,
-            article: Some(Article { title: "Autumn".into(), html: "<p>The <em>leaves</em> turn.</p>".into(), description: None, cover: None }),
+            article: Some(Article { title: "Autumn".into(), html: "<p>The <em>leaves</em> turn.</p>".into(), text: "The leaves turn.".into(), description: None, cover: None, blocks: Vec::new() }),
             pictures: Vec::new(),
             omitted_pictures: 0,
             included_pictures: 0,

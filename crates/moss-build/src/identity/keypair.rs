@@ -52,43 +52,12 @@ pub(crate) fn key_file_path(project_path: &Path) -> PathBuf {
     project_path.join(".moss").join("identity").join("secret-key")
 }
 
-/// Write hex-encoded private key to file with restrictive permissions.
-///
-/// On Unix, the file is created with mode 0o600 (owner read/write only) atomically
-/// to avoid a window where the key is world-readable.
+/// Write the hex-encoded private key, owner-only on Unix, through a synced
+/// sibling file renamed into place, so a crash never leaves an empty key.
 /// TODO: On Windows, restrict ACLs to current user only.
 pub(crate) fn save_key_to_file(path: &Path, key_bytes: &[u8]) -> Result<(), IdentityError> {
-    let hex_key = hex::encode(key_bytes);
-
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|_| IdentityError::DirectoryCreation)?;
-        }
-    }
-
-    // On Unix, create file with restrictive permissions atomically (no TOCTOU race)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // allow:raw_write .moss/identity/ is user-owned key material, not regenerable output
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(IdentityError::FileWrite)?;
-        file.write_all(hex_key.as_bytes()).map_err(IdentityError::FileWrite)?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        // allow:raw_write .moss/identity/ is user-owned key material, not regenerable output
-        fs::write(path, hex_key.as_bytes()).map_err(IdentityError::FileWrite)?;
-    }
-
-    Ok(())
+    crate::infra::atomic_write::write_private_atomic(path, hex::encode(key_bytes))
+        .map_err(|e| IdentityError::FileWrite(std::io::Error::other(e)))
 }
 
 /// Load hex-encoded private key bytes from file.
@@ -127,6 +96,15 @@ pub(crate) fn load_key_from_file(path: &Path) -> Result<Vec<u8>, IdentityError> 
     };
     let hex_str = hex_str.trim();
     hex::decode(hex_str).map_err(|_| IdentityError::InvalidPrivateKey)
+}
+
+/// The public key the folder's `secret-key` proves, derived from the secret
+/// itself. Never read from `public.json`, which a copy can carry without the
+/// secret. `None` when there is no readable key.
+pub(crate) fn proven_pubkey(project_path: &Path) -> Option<String> {
+    let bytes: [u8; 32] = load_key_from_file(&key_file_path(project_path)).ok()?.try_into().ok()?;
+    let key = SigningKey::from_bytes(&bytes.into()).ok()?;
+    Some(hex::encode(key.verifying_key().to_bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -691,6 +669,20 @@ impl Identity {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_saved_over_a_wider_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("secret-key");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_key_to_file(&path, &[7u8; 32]).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "key file is readable beyond its owner: {mode:o}");
+        assert_eq!(load_key_from_file(&path).unwrap(), vec![7u8; 32]);
+    }
 
     // -----------------------------------------------------------------------
     // New v3 tests (TDD — written first)

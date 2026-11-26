@@ -2,6 +2,7 @@
 //! plugin is a few lines of JavaScript in `.moss/plugins/boardview/` and the
 //! style is `board`. All names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -61,11 +62,11 @@ impl Site {
     }
 
     fn out(&self, rel: &str) -> Option<String> {
-        std::fs::read_to_string(self.root.join(".moss/build.nosync/current").join(rel)).ok()
+        std::fs::read_to_string(MossPaths::new(&self.root).current_ptr().join(rel)).ok()
     }
 
     fn manifest_lists(&self, rel: &str) -> bool {
-        let hashes = std::fs::read_to_string(self.root.join(".moss/build.nosync/hashes.json")).unwrap();
+        let hashes = std::fs::read_to_string(MossPaths::new(&self.root).hashes()).unwrap();
         hashes.contains(&format!("\"{rel}\""))
     }
 }

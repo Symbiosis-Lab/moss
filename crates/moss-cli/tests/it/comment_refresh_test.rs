@@ -3,6 +3,7 @@
 //! when it could not. The comment server is a local stand-in; all names and
 //! text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
@@ -26,8 +27,14 @@ fn build(home: &Path, site: &Path, env: &[(&str, &str)]) -> Output {
     o
 }
 
+/// Where a build of `site` keeps this computer's record for it.
+fn record_dir(site: &Path) -> std::path::PathBuf {
+    let stores = moss_build::infra::folder_store::FolderStores::running_for(site).unwrap();
+    stores.resolve(site).unwrap().record_dir
+}
+
 fn page(site: &Path) -> String {
-    std::fs::read_to_string(site.join(".moss/build.nosync/current/posts/hello/index.html")).expect("built page")
+    std::fs::read_to_string(MossPaths::new(site).current_ptr().join("posts/hello/index.html")).expect("built page")
 }
 
 /// A site whose comment server is `server`, built once so the article map
@@ -47,7 +54,7 @@ fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::Pa
     std::fs::write(site.join("posts/hello.md"), "---\ntitle: Hello Garden\nuid: \"4e110a11\"\n---\n\nA post about gardens.\n").unwrap();
     build(home, &site, &[]);
     let map: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(site.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(MossPaths::new(&site).article_map()).unwrap()).unwrap();
     let uid = map["articles"]["posts/hello/"]["uid"].as_str().unwrap().to_string();
     std::fs::write(tmp.join("uid.txt"), &uid).unwrap();
     let cached = serde_json::json!({"schemaVersion": "1.1.0", "articles": {uid: {"comments": [
@@ -56,7 +63,7 @@ fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::Pa
     std::fs::write(site.join(".moss/data/social/comment.json"), cached.to_string()).unwrap();
     // 2026-10-14 12:00 UTC: the cache's last refresh.
     std::fs::write(
-        site.join(".moss/data/comment-sync-state.json"),
+        record_dir(&site).join("comment-sync-state.json"),
         r#"{"last_success_at": 1791979200.0, "last_attempt_at": 1791979200.0, "last_error": null}"#,
     )
     .unwrap();
@@ -117,7 +124,7 @@ fn the_first_build_of_a_fresh_folder_ships_the_comment_the_server_has_now() {
     std::fs::create_dir_all(&home).unwrap();
     let server = serve_new_comment(Duration::from_millis(200), tmp.path().join("uid.txt"));
     let site = site_with_stale_cache(tmp.path(), &home, &server);
-    std::fs::remove_dir_all(site.join(".moss/build.nosync")).unwrap();
+    std::fs::remove_dir_all(MossPaths::new(&site).build_dir()).unwrap();
 
     let o = build(&home, &site, &[]);
     assert!(

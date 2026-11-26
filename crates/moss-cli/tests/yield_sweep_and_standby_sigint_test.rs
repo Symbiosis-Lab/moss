@@ -6,6 +6,7 @@
 #[path = "it/served_child.rs"]
 mod served_child;
 
+use moss_build::moss_paths::MossPaths;
 use served_child::*;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -22,7 +23,7 @@ fn get(port: u16, path: &str) -> String {
 }
 
 fn generation(site: &Path) -> String {
-    std::fs::read_to_string(site.join(".moss/build.nosync/current.generation")).unwrap_or_default()
+    std::fs::read_to_string(MossPaths::new(site).current_generation_marker()).unwrap_or_default()
 }
 
 /// The way an atomic-rename save replaces a page.

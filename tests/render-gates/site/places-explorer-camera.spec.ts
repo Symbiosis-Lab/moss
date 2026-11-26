@@ -133,6 +133,12 @@ for (const [label, size] of [
   ["9:16", { width: 540, height: 960 }],
 ] as const) {
   test(`cover leaves no empty band at ${label}`, async ({ page }) => {
+    // Event capture only: a blank world with a non-zero count is a lost canvas context, with zero a draw that ran before a real decode.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __contextLost: number };
+      w.__contextLost = 0;
+      window.addEventListener("contextlost", () => void w.__contextLost++, true);
+    });
     await page.setViewportSize(size);
     await gotoReady(page);
     // "ready" means mounted; the world raster is baked after it, and until it lands the edges show the bare water fill this test reads as a gap.
@@ -228,7 +234,7 @@ for (const [label, size] of [
         samples.every((s) => Math.abs(s[0] - iceColor[0]) <= 2 && Math.abs(s[1] - iceColor[1]) <= 2 && Math.abs(s[2] - iceColor[2]) <= 2);
       expect(
         variance > 0 || isFlatIce,
-        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content: ${JSON.stringify(samples)}`,
+        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content (canvas contextlost events: ${await page.evaluate(() => (window as unknown as { __contextLost: number }).__contextLost)}): ${JSON.stringify(samples)}`,
       ).toBe(true);
     }
   });
@@ -514,26 +520,18 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
   test.skip(browserName === "webkit", "page.screenshot hangs at this deep-zoom state in WebKit — see comment above");
   const { pairs, viewportSize, figureRect } = await loadAndFindAdjacentTilePairs(page);
 
-  // The widest shared edge actually ON SCREEN, clamped to the FIGURE'S own
-  // visible rect before comparing — a robust pick over "the first pair
-  // found", which can be a sliver too thin to clip a screenshot from, and
-  // over the raw (unclamped) edge length, which can prefer a pair most of
-  // whose own length sits above or below the fold over one that is smaller
-  // on paper but fully visible (measured: the explorer root's own page
-  // layout moves the whole tile grid up or down the page — e.g. design
-  // decision 7 removing its heading — and an unclamped comparison silently
-  // started picking a mostly off-screen pair instead). Clamping to the page
-  // viewport's own `[0, height]` isn't enough on this gate's fixture: its
-  // unusually tall, wrapping header pushes the figure's own top well past
-  // page y=0, so a page-relative clamp alone still admits a pair whose span
-  // reaches up into the HEADER — sampling nav text and background there,
-  // not map content (`boundingBox()` ignores the viewport's own
-  // `overflow: hidden` clip, same reasoning as the row-boundary test
-  // below).
+  // The shared edge with the longest span inside the FIGURE's visible rect:
+  // an unclamped length can prefer a pair mostly below the fold, and a
+  // page-relative clamp admits a span reaching up into this fixture's tall
+  // header (`boundingBox()` ignores the viewport's `overflow: hidden` clip).
+  // Pairs in one tile row clamp to the same span, so the tie breaks on the
+  // leftmost edge, never on DOM order, which follows tile load order: the
+  // other seam in that row has a coastline crossing between two samples,
+  // where a continuous map still differs by more than the tolerance.
   const visibleTop = Math.max(0, figureRect.y);
   const visibleBottom = Math.min(viewportSize.height, figureRect.y + figureRect.height);
   const onScreenHeight = (pair: AdjacentPair) => Math.min(visibleBottom, pair.bottom) - Math.max(visibleTop, pair.top);
-  const widest = pairs.reduce((best, pair) => (onScreenHeight(pair) > onScreenHeight(best) ? pair : best));
+  const [widest] = [...pairs].sort((p, q) => onScreenHeight(q) - onScreenHeight(p) || p.edgeX - q.edgeX);
   const top = Math.max(visibleTop, widest.top);
   const bottom = Math.min(visibleBottom, widest.bottom);
   const edgeX = Math.min(Math.max(widest.edgeX, 20), viewportSize.width - 20);

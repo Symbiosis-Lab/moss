@@ -37,6 +37,8 @@ esbuild src/main.ts --bundle --format=iife --global-name=<Name>Plugin \
 `global_name` in the manifest must match `--global-name`. Import host helpers
 from the `moss-api` package (published as `@symbiosis-lab/moss-api` on npm).
 
+The bundle runs in QuickJS, not a browser or Node. Its web globals are `console`, `atob`/`btoa`, `TextEncoder`/`TextDecoder`, timers, `URL`, a buffered `fetch`, `crypto.randomUUID` and part of `crypto.subtle`: `digest`, HMAC (`importKey("raw")`, `sign`) and ECDSA P-256 with SHA-256 (`generateKey`, `exportKey` as a public `jwk` or a `pkcs8` private key, `importKey("pkcs8")`, `sign`), enough for a DPoP sign-in. There is no `crypto.getRandomValues`, no `subtle.verify`, no DOM and no Web Streams; a call outside this list throws, so a plugin whose tests pass under Node can still fail in moss.
+
 ## Capabilities (the hooks)
 
 `capabilities` is a list; each maps to a JS hook function of the same name. For
@@ -157,10 +159,18 @@ A network that lets a person's domain stand for their account (a Bluesky handle,
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:
 
 - **`needs`** — preconditions the host checks with no plugin code running (e.g. `"stack"`). A failed need short-circuits: moss owns the remedy. A plugin naming `"stack"` in `needs` also declares `contributes.stack` — the id, version and download/path sources for the companion process that need refers to.
-- **`settings`** — a list of fields (`key`, `type` of `string`/`number`/`boolean`/`secret`, plus `label`, `options`, `when`, `pattern`, `required`, `hidden`…). moss renders them on the settings page and, when a required one is empty, at the publish gate. A `secret` goes to moss's secret store on this computer, outside every folder, read back with `moss.getSecret(key)` — never config.
+- **`settings`** — a list of fields (`key`, `type` of `string`/`number`/`boolean`/`secret`, plus `label`, `options`, `when`, `pattern`, `required`, `hidden`…). moss renders them on the settings page and, when a required one is empty, at the publish gate. A `secret` goes to moss's secret store on this computer, outside every folder, read back with `moss.getSecret(key)` — never config. A key passed to `setSecret`/`getSecret` may be any text up to 128 bytes except one containing `/`, `\`, NUL or `..`, or a Windows device name (`con`, `com1`); moss makes the file name safe on every system, and each byte other than an ASCII letter, digit, `.`, `_` or `-` counts three toward a limit of 200.
 - **`check: true`** — the plugin implements the `check_setup(ctx)` hook for what only it can know (daemon running, token valid). It answers `{status: "ready"}` or `{status: "blocked", blockers}`; each blocker may carry a form of the same field vocabulary, and a submitted blocker's id comes back as `ctx.action`. Return `field_errors` to re-ask.
 
 The old spellings — `config_schema` and the other `config_*` maps, `setup.credentials`, `requires_stack` — still parse, as aliases folded into this shape. Write the new one.
+
+## Signing in to a channel
+
+A channel that posts to an account signs in with one button: its manifest sets `contributes.channel.login` to `true` and the plugin exports `login(ctx)`, or sets it to the provider's sign-in address for moss to open. Never ask for a handle, a server or a token in `settings`; the sign-in finds them out.
+
+`login` answers a `LoginResult`: `{ status: "completed", account: { id, name } }`, `{ status: "cancelled" }` or `{ status: "failed", message }`. `id` is the provider's stable identifier for the account (a DID, a numeric user id written as a string, `id@server`), never the handle: moss records the folder as signed in to it, under `[accounts.<plugin>]` in `.moss/state.toml`, and runs a channel's first sync when that binds a folder that had no account. `name` is only shown. A plugin never writes its own binding into its config (`boundUserName`, `boundUserId` are read only for plugins from before this contract), and a plugin that returns a `LoginResult` sets `min_moss_version` to `0.15.29`.
+
+An OAuth sign-in runs in the person's own browser with `startBrowserSignIn()`: register its `redirectUri`, then `open(authorizeUrl)` resolves with the redirect's query. It rejects with `SignInCancelled` when the person closes the sign-in or another one starts; answer `{ status: "cancelled" }` for that, and let other errors fail. Keep what the sign-in earned with `moss.setSecret(key, value)` under a key the manifest declares as a hidden `secret` setting, and answer `copy_account` from it.
 
 ## The data contract (verified paths)
 
@@ -168,14 +178,15 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
   Enhance hooks and other plugins read it — and so does core, for the built-in
   comment and review features, which load every `.moss/data/social/*.json`
   during the build. Do not assume a file there is inert.
-- The source→output map is at **`.moss/build.nosync/article-map.json`** (paths + uids),
-  for correlating plugin data with generated pages.
+- The source→output map (paths + uids), for correlating plugin data with
+  generated pages, is `article-map.json` in the build output's root, the
+  folder above the `output` path `moss build --json` prints.
 - Core emits standard HTML5 landmarks (`<article>`, `<main>`, `<h1>`) and
   `data-*` attributes; enhance hooks target these.
 
-> Note: older moss documentation says `.moss/social/` and
-> `.moss/article-map.json`. Those paths are stale — use `.moss/data/social/`
-> and `.moss/build.nosync/article-map.json` above.
+> Note: older moss documentation says `.moss/social/`,
+> `.moss/article-map.json` or `.moss/build.nosync/article-map.json`. Those
+> paths are stale; use the ones above.
 
 ## Distribution
 

@@ -4,6 +4,7 @@
 //! Its own test binary, like the hero caption test: the build problem counter
 //! is per thread, and each build runs on the test's thread.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -47,7 +48,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf) {
         watch: false,
         start_server: false,
         host: cli_host_ports(&source),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -56,7 +57,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf) {
         rename_pairs: Vec::new(),
     }))
     .expect("build succeeds");
-    (site, dir.join(".moss/build.nosync/staging"))
+    (site, MossPaths::new(&dir).staging_dir())
 }
 
 /// Whether the build wrote a hashed `_moss/js/preview.<hash>.js`.

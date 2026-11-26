@@ -1,5 +1,6 @@
-import { a as BakedSide, c as Rect, d as StepOptions, f as WatercolorSim, h as WatercolorPreset, i as advance, l as SceneSide, m as DEFAULT_PRESET, n as AdvanceResult, o as CreateSimOptions, p as createSim, r as ClockState, s as PrintSource, t as DIAG_VIEWS, u as SideLook } from "./index-ZYXkCQs7.mjs";
-import { n as PaperOptions, r as createPaper, t as Paper } from "./default-Cs3xymcD.mjs";
+import { a as PrintSource, c as SideLook, d as createSim, f as DEFAULT_PRESET, i as PigmentSample, l as StepOptions, n as CreateSimOptions, o as Rect, p as WatercolorPreset, r as PigmentFrame, s as SceneSide, t as BakedSide, u as WatercolorSim } from "./solver-BT7K3Dxe.mjs";
+import { n as PaperOptions, r as createPaper, t as Paper } from "./default-DjfhyYf-.mjs";
+import { i as advance, n as AdvanceResult, r as ClockState, t as DIAG_VIEWS } from "./index-Bz4XkZxt.mjs";
 import "./paper/index.mjs";
-import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, legAt, phaseOf, turnAt } from "./model/index.mjs";
-export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DIAG_VIEWS, Paper, PaperOptions, Phase, PhaseBounds, PrintSource, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, legAt, phaseOf, turnAt };
+import { a as phaseOf, c as SphereBounds, i as legAt, l as sphereLegAt, n as Phase, o as turnAt, r as PhaseBounds, s as DEFAULT_SPHERE_BOUNDS, t as DEFAULT_PHASE_BOUNDS } from "./index-CNUTIW52.mjs";
+export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DEFAULT_SPHERE_BOUNDS, DIAG_VIEWS, Paper, PaperOptions, Phase, PhaseBounds, PigmentFrame, PigmentSample, PrintSource, Rect, SceneSide, SideLook, SphereBounds, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, legAt, phaseOf, sphereLegAt, turnAt };

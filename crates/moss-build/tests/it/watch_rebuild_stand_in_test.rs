@@ -11,19 +11,19 @@
 
 use std::path::Path;
 
-async fn build(folder: &Path) {
-    use moss_build::build::{null_sink, run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+async fn build(turn: &crate::site::Turn, folder: &Path) {
+    use moss_build::build::{null_sink, BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
-    run_pipeline(PipelineConfig {
+    crate::site::run(turn, PipelineConfig {
         root: VaultRoot::resolve(folder),
         progress: null_sink(),
         plugins: PluginMode::Skip,
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".to_string()),
         server_port: None,
@@ -37,6 +37,7 @@ async fn build(folder: &Path) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_picture_added_under_watch_is_served_as_its_original() {
+    let turn = crate::site::turn();
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("test-tmp");
     std::fs::create_dir_all(&base).unwrap();
     let tmp = tempfile::Builder::new().prefix("moss-watch-stand-in").tempdir_in(&base).unwrap();
@@ -51,14 +52,14 @@ async fn a_picture_added_under_watch_is_served_as_its_original() {
         .services
         .assets
         .expect("a headless build has a registry");
-    build(&folder).await;
+    build(&turn, &folder).await;
 
     let picture = folder.join("photo.jpg");
     image::RgbImage::from_fn(1600, 1000, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 90]))
         .save(&picture)
         .unwrap();
     std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\n![A photo](photo.jpg)\n").unwrap();
-    build(&folder).await;
+    build(&turn, &folder).await;
 
     for url in ["photo.webp", "photo.w800.webp", "photo.w1200.webp"] {
         assert_eq!(

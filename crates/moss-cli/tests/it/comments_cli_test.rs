@@ -2,6 +2,7 @@
 //! leaves the built page at the next build, and an unhidden one comes back.
 //! All names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -22,7 +23,7 @@ fn out(o: &Output) -> String {
 }
 
 fn built_page(site: &Path) -> String {
-    std::fs::read_to_string(site.join(".moss/build.nosync/current/posts/hello/index.html")).expect("built page")
+    std::fs::read_to_string(MossPaths::new(site).current_ptr().join("posts/hello/index.html")).expect("built page")
 }
 
 fn build(home: &Path, site: &Path) -> String {
@@ -48,7 +49,7 @@ fn hide_and_unhide_change_the_built_page_and_the_json_shapes_hold() {
     // The first build tells us the page's uid; comments are keyed by it.
     build(&home, &site);
     let map: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(site.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(MossPaths::new(&site).article_map()).unwrap()).unwrap();
     let uid = map["articles"]["posts/hello/"]["uid"].as_str().unwrap().to_string();
     let comments = serde_json::json!({"articles": {uid.clone(): {"comments": [
         {"id": "1", "content": "<p>Cheap watches at example.com</p>", "createdAt": "2026-03-01T10:00:00Z", "author": {"displayName": "Spammy Sam"}},

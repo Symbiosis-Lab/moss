@@ -4,7 +4,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 // Two sections of 80 words: enough text for the floating nav island.
 macro_rules! words80 {
@@ -75,7 +75,7 @@ fn the_site_colophon_switch_holds_on_a_bare_page() {
 
 #[test]
 fn an_unknown_value_warns_and_keeps_the_frame() {
-    let site = Site::new(&[("index.md", "---\ntitle: Harbour\nchrome: bare\n---\n\nHome text.\n")]);
+    let site = LoggedSite::new(&[("index.md", "---\ntitle: Harbour\nchrome: bare\n---\n\nHome text.\n")]);
     let html = site.html("index.html");
     assert!(html.contains("<header") && html.contains("moss-skip-link") && !html.contains("data-chrome"), "{html}");
     assert!(site.logged.iter().any(|p| p.contains("chrome") && p.contains("bare")), "{:?}", site.logged);

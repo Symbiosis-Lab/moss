@@ -11,7 +11,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-pub(super) const MARKER: &str = "Icon\r";
+use super::MARKER;
 /// Which icon moss wrote, so a later recipe or OS replaces moss's own icon
 /// while a person's own icon (no tag) stays.
 const TAG_NAME: &str = "host.moss.folder-icon";

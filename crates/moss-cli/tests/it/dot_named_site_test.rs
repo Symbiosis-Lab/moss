@@ -3,6 +3,7 @@
 //! excluded from the build by design; that rule applies to path components
 //! below the site root, not to the root's own name.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -54,7 +55,7 @@ fn build_and_read_index(parent: &Path, folder: &str) -> (String, Vec<String>) {
         .output()
         .expect("run moss-cli build");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let current = site.join(".moss/build.nosync/current");
+    let current = MossPaths::new(&site).current_ptr();
     assert!(
         !current.join(".private").exists() && !current.join("private").exists(),
         "a dot-named folder inside the site stays excluded"

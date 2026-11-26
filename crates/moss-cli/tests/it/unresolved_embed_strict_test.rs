@@ -99,7 +99,7 @@ fn find_home_html(site: &std::path::Path) -> Option<String> {
         }
     }
     let mut all = Vec::new();
-    walk(site, &mut all);
+    walk(&moss_build::moss_paths::MossPaths::new(site).current_ptr(), &mut all);
     all.sort_by_key(|p| p.components().count());
     all.first().and_then(|p| std::fs::read_to_string(p).ok())
 }

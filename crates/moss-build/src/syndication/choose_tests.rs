@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::manifest::change_set::LiveEntry;
 use crate::syndication::plan::{decide, Action, PlanInputs};
@@ -170,7 +171,7 @@ fn site(post: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir_all(root.join("notes")).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(root).build_dir()).unwrap();
     std::fs::write(root.join("notes/index.md"), "---\ntitle: Notes\n# why\ncascade:\n  syndicate: [bluesky]\n  listing: cards\n---\n").unwrap();
     std::fs::write(root.join(SOURCE), post).unwrap();
     let mut map = ArticleMap::default();

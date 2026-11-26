@@ -26,7 +26,7 @@ impl Site {
         let site = Self { _temp: temp, mp };
         let sealed = site.manifest(!legacy);
         let result = crate::build::ship::materialize_and_promote(&sealed, &site.mp, &site.mp.staging_dir(), 1, None,
-            crate::build::ship::ShipVerdict::Ship).unwrap();
+            crate::build::ship::ShipVerdict::Ship, None).unwrap();
         assert!(matches!(result, crate::build::ship::Promotion::Promoted));
         sealed.write_to_disk(&site.mp.hashes()).unwrap();
         if legacy {
@@ -61,7 +61,7 @@ impl Site {
         registry.set_source_passthrough(ALIAS.into(), self.mp.project_root().join("unrelated.jpg"));
         start_server(ServeConfig {
             asset_registry: Some(registry), is_evicted: probe,
-            ..ServeConfig::new(Arc::new(RwLock::new(self.mp.current_ptr())), 61850)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(self.mp.current_ptr()), 61850)
         }).await.unwrap()
     }
 
@@ -120,7 +120,7 @@ async fn generation_original_legacy_missing_copies_pin_canonical_identity_once()
     let frozen = std::fs::read(site.receipt()).unwrap();
     let warm = site.manifest(false);
     crate::build::ship::materialize_and_promote(&warm, &site.mp, &site.mp.staging_dir(), 2, None,
-        crate::build::ship::ShipVerdict::Ship).unwrap();
+        crate::build::ship::ShipVerdict::Ship, None).unwrap();
     assert_eq!(std::fs::read(site.receipt()).unwrap(), frozen, "a warm producer map cannot replace legacy proof");
     std::fs::write(site.mp.project_root().join(SOURCE), b"newer portrait version").unwrap();
     let newer = site.manifest(false);
@@ -195,7 +195,7 @@ fn generation_original_identity_collision_keeps_first_receipt_while_valid_output
     assert_eq!(newer.generation_id(), site.mp.current_generation_id().unwrap());
     for epoch in [0, 2] {
         let outcome = crate::build::ship::materialize_and_promote(&newer, &site.mp, &site.mp.staging_dir(), epoch, None,
-            crate::build::ship::ShipVerdict::Ship).unwrap();
+            crate::build::ship::ShipVerdict::Ship, None).unwrap();
         assert!(matches!(outcome, crate::build::ship::Promotion::Promoted | crate::build::ship::Promotion::Superseded));
         assert_eq!(std::fs::read(site.receipt()).unwrap(), prior);
     }
@@ -231,9 +231,35 @@ async fn a_picture_current_never_held_is_served_from_the_newer_render() {
     registry.set_pending(url.into(), Some((1600, 1000)), None);
     let (port, _, shutdown) = start_server(ServeConfig {
         asset_registry: Some(registry), is_evicted: |_| false,
-        ..ServeConfig::new(Arc::new(RwLock::new(site.mp.current_ptr())), 61850)
+        ..ServeConfig::new(crate::moss_paths::Served::test_cell(site.mp.current_ptr()), 61850)
     }).await.unwrap();
     let response = ureq::get(&format!("http://localhost:{port}/{url}")).call().unwrap();
     assert_eq!(bytes(response), std::fs::read(&added).unwrap());
+    let _ = shutdown.send(());
+}
+
+/// The build's output lives outside the folder: the server still knows its
+/// folder, and the receipt and hashes there still count as the folder's own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_site_served_from_outside_its_folder_answers_as_inside() {
+    let site = Site::new(false);
+    let dir = site.mp.current_ptr().canonicalize().unwrap();
+    assert!(!dir.starts_with(site.mp.project_root()));
+    let served = crate::moss_paths::Served { folder: crate::moss_paths::Served::folder_of(&site.mp), dir };
+
+    let cell = served.clone().into_cell();
+    let carrier = crate::ops::serve::InvokeCtx::standalone();
+    assert_eq!(carrier.bind(&cell).map(|s| s.vault().clone()), Some(served.folder.clone()), "the carrier token belongs to the folder");
+
+    let registry = Arc::new(crate::types::assets::AssetRegistry::new());
+    let (port, _, shutdown) = start_server(ServeConfig {
+        asset_registry: Some(registry), is_evicted: |_| false,
+        ..ServeConfig::new(cell, 61850)
+    }).await.unwrap();
+    let health: serde_json::Value = ureq::get(&format!("http://localhost:{port}{}", super::super::port::MOSS_HEALTH_PATH))
+        .call().unwrap().into_json().unwrap();
+    assert_eq!(health["folder_id"], crate::infra::folder_store::name_for(site.mp.project_root()));
+    assert_eq!(bytes(ureq::get(&format!("http://localhost:{port}/{ALIAS}")).call().unwrap()), BYTES,
+        "the picture's original answers from the generation outside the folder");
     let _ = shutdown.send(());
 }

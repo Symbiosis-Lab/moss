@@ -225,3 +225,87 @@ fn an_atomic_save_is_one_batch_released_within_200ms() {
     assert_eq!(holds.len(), 1, "one save, one batch: {holds:?}");
     assert!(holds[0] < Duration::from_millis(200), "the save waited {:?} for its rebuild", holds[0]);
 }
+
+#[tokio::test]
+async fn a_batch_that_touches_the_config_asks_for_a_config_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".moss")).unwrap();
+    std::fs::write(root.join(".moss/config.toml"), "[site]\nmath = true\n").unwrap();
+    std::fs::write(root.join("P.md"), "# Page\n").unwrap();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dispatch: RebuildDispatch = {
+        let asked = asked.clone();
+        Arc::new(move |req: worker::RebuildRequest| {
+            asked.lock().unwrap().push(req.reason);
+            Box::pin(async {})
+        })
+    };
+    let (emit, _events) = recording_relay();
+    let edit = EventKind::Modify(ModifyKind::Any);
+    let folder = root.to_str().unwrap();
+    handle_debounced_batch(vec![event(edit, vec![root.join(".moss/config.toml")])], folder, &emit, &dispatch).await;
+    handle_debounced_batch(vec![event(edit, vec![root.join("P.md")])], folder, &emit, &dispatch).await;
+    assert_eq!(*asked.lock().unwrap(), [Some(crate::build::BuildReason::Config), Some(crate::build::BuildReason::Watch)]);
+}
+
+#[test]
+fn a_write_moss_makes_to_the_config_asks_for_a_config_build() {
+    use crate::build::BuildReason::{Config, Watch};
+    use crate::build::watch::drift::{Drift, DriftKind, DriftReport};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".moss")).unwrap();
+    let config = root.join(".moss/config.toml");
+    std::fs::write(&config, "[site]\nmath = true\n").unwrap();
+    std::fs::write(root.join("P.md"), "# Page\n").unwrap();
+    let written = |path: &std::path::Path| request_for_writes(&root, vec![path.to_path_buf()]).map(|r| r.reason);
+    assert_eq!(written(&config), Some(Some(Config)));
+    assert_eq!(written(&root.join("P.md")), Some(Some(Watch)));
+    let created = request_for(&root, crate::commands::Change::Created(&[config.to_string_lossy().into_owned()])).map(|r| r.reason);
+    assert_eq!(created, Some(Some(Config)));
+    let mut report = DriftReport::default();
+    report.drifted.insert(".moss/config.toml".into(), Drift { kind: DriftKind::Structural, stamp: crate::build::stat::FileStat::of(&std::fs::metadata(&config).unwrap()) });
+    let drift = sweep::request_for_drift(&root, &report, &[".moss/config.toml".into()], None);
+    assert_eq!(drift.reason, Some(Config));
+}
+
+/// A place-map pack replaced while the preview runs reaches the rebuild as a
+/// non-markdown path, so a markdown edit in the same batch cannot skip the
+/// pages that name the old pack's map folder.
+#[tokio::test]
+async fn a_replaced_map_pack_refuses_the_render_skip_of_a_markdown_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let maps = root.join(".moss/maps");
+    std::fs::create_dir_all(&maps).unwrap();
+    let (old, new) = (maps.join(format!("landscape-{}.bin.br", "a".repeat(64))), maps.join(format!("landscape-{}.bin.br", "b".repeat(64))));
+    std::fs::write(&new, b"pack").unwrap();
+    std::fs::write(root.join("other.md"), "# Other\n").unwrap();
+    let (emit, _events) = recording_relay();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dispatch: RebuildDispatch = {
+        let requests = requests.clone();
+        Arc::new(move |request| {
+            requests.lock().unwrap().push(request);
+            Box::pin(async {})
+        })
+    };
+    handle_debounced_batch(
+        vec![
+            event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![root.join(".moss/landscape.part"), new]),
+            event(EventKind::Remove(notify::event::RemoveKind::File), vec![old]),
+            event(EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)), vec![root.join("other.md")]),
+        ],
+        root.to_str().unwrap(),
+        &emit,
+        &dispatch,
+    )
+    .await;
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "one batch, one rebuild");
+    let proof = crate::build::incremental_gates::ChangeProof::for_build(
+        &requests[0].trigger, &root, "test", &crate::build::incremental_gates::LastSeal::default(),
+    );
+    assert!(!proof.allows_incremental_skip(), "the pack swap must render every page: {:?}", requests[0].trigger);
+}

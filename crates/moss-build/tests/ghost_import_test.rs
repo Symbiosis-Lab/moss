@@ -1,4 +1,5 @@
 //! Synthetic export coverage through the public native/CLI import seam.
+use moss_build::moss_paths::MossPaths;
 use std::{fs, path::Path, io::Write};
 use moss_build::vault::import::{import_source, recognise_source, ImportOptions, SourceKind};
 #[path = "it/site.rs"]
@@ -77,7 +78,7 @@ fn directory_and_zip_import_keep_content_and_retain_readers_privately() {
         let config = format!("{config}\n[site]\nlang = 'en'\nurl = 'https://journal.example/'\narchival = true\n[ai]\nllms_txt = true\n");
         fs::write(out.join(".moss/config.toml"), config).unwrap();
         site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
-        let stage = out.join(".moss/build.nosync/staging");
+        let stage = MossPaths::new(&out).staging_dir();
         for entry in walkdir::WalkDir::new(&stage) {
             let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
             let bytes = fs::read(entry.path()).unwrap();
@@ -255,7 +256,7 @@ fn an_address_import_then_the_export_keeps_the_members_text_private() {
     drop(rt);
     fs::write(out.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\n")).unwrap();
     site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
-    for entry in walkdir::WalkDir::new(out.join(".moss/build.nosync/staging")) {
+    for entry in walkdir::WalkDir::new(MossPaths::new(&out).staging_dir()) {
         let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
         let bytes = fs::read(entry.path()).unwrap();
         assert!(!bytes.windows(PRIVATE.len()).any(|v| v == PRIVATE.as_bytes()), "{}", entry.path().display());
@@ -287,7 +288,7 @@ fn an_empty_page_takes_the_exports_visibility_with_its_text() {
     drop(rt);
     fs::write(out.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\nurl = 'https://journal.example/'\n")).unwrap();
     site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
-    let stage = out.join(".moss/build.nosync/staging");
+    let stage = MossPaths::new(&out).staging_dir();
     for entry in walkdir::WalkDir::new(&stage) {
         let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
         let text = String::from_utf8_lossy(&fs::read(entry.path()).unwrap()).into_owned();

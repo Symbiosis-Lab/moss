@@ -225,10 +225,10 @@ pub struct VerdictInputs<'a> {
     pub asset_versions: &'a str,
     pub dir_overrides: &'a HashMap<String, String>,
     pub site_lang: crate::i18n::Language,
-    pub typesetting: Option<&'a str>,
     pub math: bool,
-    /// Term kinds shown in the nav bar — see `LayoutConfig::term_nav`.
-    pub term_nav: &'a [crate::build::terms::TermNavEntry],
+    /// The site's layout: its typesetting and nav-bar term kinds feed the
+    /// listing and nav globals, and each page's island is in its fingerprint.
+    pub layout: &'a crate::build::page::layout::LayoutConfig,
     /// The day this build is as of; see `listing::listing_globals`.
     pub build_day: chrono::NaiveDate,
     /// This build's render ([`SiteHashes::render_id`]), saved with the cache.
@@ -315,7 +315,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .par_iter()
         .map(|doc| (
             crate::build::facade::PageKey::for_document(doc).cache_key().into_owned(),
-            PageFingerprints::of(doc),
+            PageFingerprints::of(doc, facade::ShellFacts { nav_island: crate::build::render::page_chrome::shows_nav_island(inputs.layout, Some(doc)) }),
         ))
         .collect();
 
@@ -427,7 +427,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         inputs.project,
         inputs.dir_overrides,
         inputs.site_lang,
-        inputs.typesetting,
+        inputs.layout.typesetting.as_deref(),
         inputs.math,
         inputs.build_day,
     );
@@ -456,7 +456,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // bypass: it feeds the per-language widen inside the incremental branch
     // below instead.
     let mut nav_globals = dependents::nav_globals(documents, inputs.project.has_content_folders);
-    dependents::fold_term_nav(&mut nav_globals, inputs.site_lang, inputs.term_nav, documents);
+    dependents::fold_term_nav(&mut nav_globals, inputs.site_lang, &inputs.layout.term_nav, documents);
     let nav_globals_changed = previous.digests_moved(DigestMap::NavGlobals, &nav_globals);
     let home_title_globals = dependents::home_title_globals(documents, inputs.site_lang);
     let home_title_globals_changed = previous.digests_moved(DigestMap::HomeTitleGlobals, &home_title_globals);
@@ -694,17 +694,21 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
 
 /// Each page that draws cards through a page field placed at `end` or a grid
 /// link cell, with the page each of those links names (`None` for a link that
-/// names none). Both find their target only while rendering, so no outgoing
-/// link records them.
+/// names none), and each page of a thread with every other page of it. All
+/// find their target only while rendering, so no outgoing link records them.
 fn card_reads<'a>(
     documents: &'a [ParsedDocument],
     graph: Option<&'a moss_core::content_graph::ContentGraph>,
 ) -> Vec<(&'a ParsedDocument, Vec<Option<&'a ParsedDocument>>)> {
+    let by_source: std::collections::HashMap<&str, &ParsedDocument> =
+        documents.iter().filter_map(|d| Some((d.source_path.as_deref()?, d))).collect();
     documents
         .iter()
         .map(|reader| {
+            let thread = reader.thread.iter().filter(|m| Some(m.source_path.as_str()) != reader.source_path.as_deref());
             let targets = crate::build::components::field_places::end_card_targets(reader, documents, graph)
                 .chain(crate::build::render::grid_cells::card_targets(reader, documents, graph))
+                .chain(thread.map(|m| by_source.get(m.source_path.as_str()).copied()))
                 .collect();
             (reader, targets)
         })

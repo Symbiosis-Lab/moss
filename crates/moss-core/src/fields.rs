@@ -209,10 +209,39 @@ pub enum TypedValue {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageLink {
-    pub target: String,
+    /// Serialized as `target` (a page of the site) or `url` (an outside address).
+    #[serde(flatten)]
+    pub target: LinkTarget,
     /// The text after `|` in `[[target|alias]]`, when the author wrote one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+}
+
+/// What a page field names: a page of this site by its wiki-link name, or a
+/// page elsewhere by its http(s) address, which never reaches the content graph.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum LinkTarget {
+    #[serde(rename = "target")]
+    Page(String),
+    #[serde(rename = "url")]
+    Outside(String),
+}
+
+impl LinkTarget {
+    /// The name or the address, as written.
+    pub fn as_str(&self) -> &str {
+        match self {
+            LinkTarget::Page(s) | LinkTarget::Outside(s) => s,
+        }
+    }
+
+    /// The site page's name, `None` for an outside address.
+    pub fn page(&self) -> Option<&str> {
+        match self {
+            LinkTarget::Page(name) => Some(name),
+            LinkTarget::Outside(_) => None,
+        }
+    }
 }
 
 /// A scalar as the text an author wrote: YAML reads `2` and `true` as a
@@ -258,7 +287,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
             }
         }
         FieldKind::Url => match value {
-            Value::String(s) if s.starts_with("http://") || s.starts_with("https://") || s.starts_with('/') => {
+            Value::String(s) if is_outside_address(s) || s.starts_with('/') => {
                 Ok(TypedValue::Url(s.clone()))
             }
             _ => Err("expected an address starting with http://, https:// or /".to_string()),
@@ -298,7 +327,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
         FieldKind::Page => match value {
             Value::String(s) => page_target(s)
                 .map(|link| TypedValue::Page(link))
-                .ok_or_else(|| "write it as \"[[name]]\" so moss rename keeps it pointing at the page".to_string()),
+                .ok_or_else(|| "write it as \"[[name]]\" so moss rename keeps it pointing at the page, or as an http(s) address for a page elsewhere".to_string()),
             Value::Array(_) => Err("write the link in quotes, as \"[[name]]\"".to_string()),
             _ => Err("expected a page link written as \"[[name]]\"".to_string()),
         },
@@ -322,6 +351,16 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
     }
 }
 
+/// The page this one answers: a page of the site (a continuation) or an
+/// outside address (a reply to someone). Drawn by the thread, never placed.
+pub const IN_REPLY_TO: &str = "in_reply_to";
+
+/// The page fields moss declares on every site, read through the same
+/// resolver as a site's own `type = "page"` declarations.
+pub fn moss_decls() -> Vec<FieldDecl> {
+    vec![FieldDecl { name: IN_REPLY_TO.to_string(), kind: FieldKind::Page, ..Default::default() }]
+}
+
 /// One declared field as a page states it, by its own frontmatter or by a folder's
 /// cascade. `None` when the field does not apply: the page is outside its `in`
 /// scope, the value is absent or blank, or it is a built-in whose bad value the
@@ -339,7 +378,8 @@ pub fn declare_one(
     let json = serde_json::to_value(raw).ok()?;
     match parse_value(decl, &json, page) {
         Ok(value) => Some(Ok(value)),
-        Err(_) if crate::schema_fields::builtin_field(&decl.name).is_some() => None,
+        // No schema check reads the value of a page field moss declares itself.
+        Err(_) if crate::schema_fields::builtin_field(&decl.name).is_some() && !moss_decls().contains(decl) => None,
         Err(reason) => Some(Err(reason)),
     }
 }
@@ -431,11 +471,23 @@ fn parse_count(s: &str, decimal: DecimalMark) -> Option<TypedValue> {
     Some(TypedValue::Count { number: Some(number), noun: Some(noun.to_string()), text: s.to_string() })
 }
 
-/// A `[[target]]` or `[[target|alias]]` link.
+/// A `[[target]]` or `[[target|alias]]` link, or an http(s) address. No other
+/// scheme: a page field's value becomes an `href`.
 fn page_target(s: &str) -> Option<PageLink> {
+    let s = s.trim();
+    if is_outside_address(s) {
+        return Some(PageLink { target: LinkTarget::Outside(s.to_string()), alias: None });
+    }
     let (target, alias) = split_pipe(wikilink_inner(s)?);
     let (target, alias) = (target.trim(), alias.trim());
-    (!target.is_empty()).then(|| PageLink { target: target.to_string(), alias: (!alias.is_empty()).then(|| alias.to_string()) })
+    (!target.is_empty())
+        .then(|| PageLink { target: LinkTarget::Page(target.to_string()), alias: (!alias.is_empty()).then(|| alias.to_string()) })
+}
+
+/// An http(s) address with something after the scheme and no whitespace.
+fn is_outside_address(s: &str) -> bool {
+    let rest = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://"));
+    rest.is_some_and(|rest| !rest.is_empty() && !s.contains(char::is_whitespace))
 }
 
 #[cfg(test)]

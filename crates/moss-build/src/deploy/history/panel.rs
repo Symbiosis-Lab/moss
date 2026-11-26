@@ -249,7 +249,8 @@ pub fn list_versions(vault_root: &Path, scope: &str, path: Option<String>) -> Re
             })?;
             Ok(list(store.page_timeline(&page_path).into_iter().map(to_version_row).collect()))
         }
-        "site" => match path {
+        // The editor names the site by its empty path, which is the timeline.
+        "site" => match path.filter(|p| !p.is_empty()) {
             // The site-version drill-down: one version's pages against the
             // tree on disk now (the Changed-since/Unchanged groups).
             Some(version_id) => {

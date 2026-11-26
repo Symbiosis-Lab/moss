@@ -17,10 +17,6 @@ fn make_project() -> (tempfile::TempDir, PathBuf) {
     (tmp, project)
 }
 
-fn cli() -> PathBuf {
-    PathBuf::from("/Applications/moss.app/Contents/MacOS/moss")
-}
-
 /// A home directory with no agent markers.
 ///
 /// Passed explicitly rather than exported as `$HOME`. `$HOME` is
@@ -48,7 +44,7 @@ fn writes_the_claude_skill_when_claude_is_present() {
     std::fs::create_dir_all(project.join(".claude")).unwrap();
 
     let home = empty_home();
-    let report = sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    let report = sync_with_home(&project, Some(home.path())).expect("sync");
 
     let skill = project.join(".claude/skills/moss/SKILL.md");
     assert!(skill.is_file());
@@ -74,7 +70,7 @@ fn writes_nothing_into_the_authors_content() {
     std::fs::create_dir_all(project.join(".claude")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(!project.join("AGENTS.md").exists(), "moss does not write into the author's folder");
     assert!(!project.join("CLAUDE.md").exists());
@@ -86,7 +82,7 @@ fn does_not_create_a_directory_for_an_undetected_agent() {
     std::fs::create_dir_all(project.join(".claude")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(!project.join(".cursor").exists(), "Cursor is not here; do not invent it");
 }
@@ -97,7 +93,7 @@ fn writes_the_cursor_rule_when_cursor_is_present() {
     std::fs::create_dir_all(project.join(".cursor")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     let mdc = std::fs::read_to_string(project.join(".cursor/rules/moss.mdc")).expect("rule written");
     assert!(mdc.starts_with("---\n"), "Cursor needs its frontmatter on line 1");
@@ -113,7 +109,7 @@ fn a_folder_that_is_not_a_moss_project_is_left_entirely_alone() {
     std::fs::create_dir_all(plain.join(".claude")).unwrap();
 
     let home = empty_home();
-    let report = sync_with_home(&plain, Some(home.path()), &cli()).expect("sync");
+    let report = sync_with_home(&plain, Some(home.path())).expect("sync");
 
     assert!(report.is_noop());
     assert!(!plain.join(".claude/skills").exists());
@@ -128,7 +124,7 @@ fn a_second_sync_writes_nothing() {
     std::fs::create_dir_all(project.join(".cursor")).unwrap();
 
     let home = empty_home();
-    let sync = || sync_with_home(&project, Some(home.path()), &cli());
+    let sync = || sync_with_home(&project, Some(home.path()));
     let first = sync().expect("first");
     assert!(!first.written.is_empty(), "first run writes");
     let second = sync().expect("second");
@@ -156,7 +152,7 @@ fn every_managed_file_is_refreshed_when_it_drifts() {
     std::fs::create_dir_all(project.join(".cursor")).unwrap();
 
     let home = empty_home();
-    let sync = || sync_with_home(&project, Some(home.path()), &cli());
+    let sync = || sync_with_home(&project, Some(home.path()));
     sync().expect("first");
 
     for rel in [
@@ -199,7 +195,7 @@ fn frontmatter_still_opens_the_files_that_need_it() {
     std::fs::create_dir_all(project.join(".cursor")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     for rel in [".claude/skills/moss/SKILL.md", ".cursor/rules/moss.mdc"] {
         let text = std::fs::read_to_string(project.join(rel)).expect(rel);
@@ -229,7 +225,7 @@ fn the_neutral_skill_is_always_written() {
     let (_tmp, project) = make_project();
     let home = empty_home();
 
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
     assert!(
         project.join(".moss/agents/SKILL.md").is_file(),
         "the neutral copy is written even with no agent detected"
@@ -244,12 +240,12 @@ fn a_user_edited_file_is_never_overwritten() {
     let (_tmp, project) = make_project();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     // The user rewrites it, dropping moss's stamp.
     std::fs::write(project.join(".moss/agents/SKILL.md"), "# My own instructions\n").unwrap();
 
-    let report = sync_with_home(&project, Some(home.path()), &cli()).expect("resync");
+    let report = sync_with_home(&project, Some(home.path())).expect("resync");
     assert_eq!(
         std::fs::read_to_string(project.join(".moss/agents/SKILL.md")).unwrap(),
         "# My own instructions\n",
@@ -272,7 +268,7 @@ fn an_edit_under_moss_s_block_is_still_the_users() {
     std::fs::create_dir_all(project.join(".claude")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("on");
+    sync_with_home(&project, Some(home.path())).expect("on");
 
     for rel in [".moss/agents/SKILL.md", ".claude/skills/moss/SKILL.md"] {
         let path = project.join(rel);
@@ -282,7 +278,7 @@ fn an_edit_under_moss_s_block_is_still_the_users() {
         );
         std::fs::write(&path, &mine).unwrap();
 
-        let report = sync_with_home(&project, Some(home.path()), &cli()).expect("resync");
+        let report = sync_with_home(&project, Some(home.path())).expect("resync");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), mine, "{rel} was clobbered");
         assert!(
             report.user_owned.contains(&rel.to_string()),
@@ -306,7 +302,7 @@ fn a_file_that_merely_quotes_the_stamp_is_not_moss_s() {
     std::fs::write(project.join(".moss/agents/SKILL.md"), authored).unwrap();
 
     let home = empty_home();
-    let report = sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    let report = sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(
         report.user_owned.contains(&".moss/agents/SKILL.md".to_string()),
@@ -335,7 +331,7 @@ fn every_managed_file_stamps_inside_the_window() {
     .chain(stubs);
 
     for body in bodies {
-        for extra in ["", &cli_binding(&cli())] {
+        for extra in ["", CLI_BINDING] {
             let text = stamped_with(&body, extra);
             let line = text
                 .lines()
@@ -358,7 +354,7 @@ fn an_agent_installed_in_home_counts_as_detected() {
     let (_tmp, project) = make_project();
     let home = home_with(&[".claude"]);
 
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(
         project.join(".claude/skills/moss/SKILL.md").is_file(),
@@ -373,38 +369,13 @@ fn nothing_is_ever_written_outside_the_project() {
     let (_tmp, project) = make_project();
     let home = home_with(&[".claude", ".cursor"]);
 
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(
         !home.path().join(".claude/skills").exists(),
         "sync must never write into the home directory"
     );
     assert!(!home.path().join(".cursor/rules").exists());
-}
-
-/// The guidance issues `moss …` commands as bare words some two dozen times,
-/// and nothing on this branch puts `moss` on `PATH` — the symlink step was
-/// retired because it could not reach a Finder-launched agent. Every file an
-/// agent enters the package through has to say what `moss` means here, or the
-/// whole package reads as instructions for a command that does not exist.
-#[test]
-fn every_entry_point_says_how_to_run_moss() {
-    let (_tmp, project) = make_project();
-    std::fs::create_dir_all(project.join(".claude")).unwrap();
-    std::fs::create_dir_all(project.join(".cursor")).unwrap();
-
-    let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
-
-    let abs = cli().display().to_string();
-    for rel in [
-        ".claude/skills/moss/SKILL.md",
-        ".cursor/rules/moss.mdc",
-        ".moss/agents/SKILL.md",
-    ] {
-        let text = std::fs::read_to_string(project.join(rel)).expect(rel);
-        assert!(text.contains(&abs), "{rel} never says where the moss binary is");
-    }
 }
 
 /// A reference file an older moss wrote is replaced by a stub, not left holding
@@ -428,7 +399,7 @@ fn a_reference_written_by_an_older_moss_becomes_a_stub() {
     std::fs::write(&old, stamped_with("# Authoring\n\nlast release's prose\n", "")).unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     let text = std::fs::read_to_string(&old).expect("authoring.md");
     assert!(old.is_file(), "the file must survive — this module deletes nothing");
@@ -448,7 +419,7 @@ fn a_user_owned_reference_is_left_alone() {
     std::fs::write(&mine, "# My own notes\n").unwrap();
 
     let home = empty_home();
-    let report = sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    let report = sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert_eq!(std::fs::read_to_string(&mine).unwrap(), "# My own notes\n");
     assert!(
@@ -510,7 +481,7 @@ fn nothing_written_into_an_agent_directory_can_reach_a_commit() {
     std::fs::write(project.join(".cursor/rules/mine.mdc"), "my rule\n").unwrap();
 
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     // moss owns the whole skill directory, so `*` — which covers the
     // `.gitignore` itself, leaving git nothing to report at all.
@@ -530,7 +501,7 @@ fn nothing_written_into_an_agent_directory_can_reach_a_commit() {
     // does not duplicate moss's.
     std::fs::write(project.join(".cursor/rules/.gitignore"), format!("{cursor}scratch.mdc\n"))
         .unwrap();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("resync");
+    sync_with_home(&project, Some(home.path())).expect("resync");
     let after = std::fs::read_to_string(project.join(".cursor/rules/.gitignore")).unwrap();
     assert!(after.contains("scratch.mdc"), "the user's line survives: {after:?}");
     assert_eq!(after.matches("moss.mdc").count(), 1, "no duplicate: {after:?}");
@@ -555,7 +526,7 @@ fn a_symlinked_agent_directory_does_not_carry_writes_out_of_the_project() {
     std::os::unix::fs::symlink(outside.path().join(".claude"), project.join(".claude")).unwrap();
 
     let home = empty_home();
-    let report = sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    let report = sync_with_home(&project, Some(home.path())).expect("sync");
 
     assert!(
         !outside.path().join(".claude/skills").exists(),
@@ -610,7 +581,7 @@ fn a_console_front_door_beside_the_binary_is_preferred() {
     assert_eq!(super::usable_cli_path(Some(plain.clone())), plain, "only an .exe has a front door");
 }
 
-// ── whose binary a cloud-synced folder names ────────────────────────────────
+// ── how a cloud-synced folder names moss ────────────────────────────────────
 
 const POINTER_FILES: [&str; 3] = [
     ".claude/skills/moss/SKILL.md",
@@ -618,129 +589,45 @@ const POINTER_FILES: [&str; 3] = [
     ".moss/agents/SKILL.md",
 ];
 
-/// A project with every agent present, synced once by `first`.
-fn project_synced_by(first: &Path) -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
+/// A project with every agent present, synced once.
+fn synced_project() -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
     let (tmp, project) = make_project();
     std::fs::create_dir_all(project.join(".claude")).unwrap();
     std::fs::create_dir_all(project.join(".cursor")).unwrap();
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), first).expect("first sync");
+    sync_with_home(&project, Some(home.path())).expect("first sync");
     (tmp, project, home)
 }
 
-/// A real file standing in for a binary, so `exists()` is true.
-fn fake_binary(dir: &Path, name: &str) -> PathBuf {
-    let p = dir.join(name);
-    std::fs::write(&p, b"#!/bin/sh\n").unwrap();
-    std::fs::canonicalize(&p).unwrap()
-}
-
-fn assert_all_name(project: &Path, binary: &Path) {
+/// Every file an agent enters through says what `moss` means, and since site
+/// folders are commonly cloud-synced, says it the same way on every computer.
+#[test]
+fn the_guidance_names_moss_the_same_way_on_every_computer() {
+    let (_tmp, project, _home) = synced_project();
     for rel in POINTER_FILES {
         let text = std::fs::read_to_string(project.join(rel)).expect(rel);
-        assert!(
-            text.contains(&format!("> Run moss as `{}`.", binary.display())),
-            "{rel} does not name {}:\n{text}",
-            binary.display()
-        );
+        assert!(text.contains(CLI_BINDING), "{rel}:\n{text}");
+        let exe = std::env::current_exe().unwrap();
+        assert!(!text.contains(&*exe.to_string_lossy()), "{rel} names this computer's binary");
     }
 }
 
-/// Site folders are commonly cloud-synced, so a build on one machine rewrites
-/// the file every other machine reads. A development binary must not replace the
-/// path of a binary that is still there.
+/// An older moss wrote its own binary's path where the portable text now goes.
+/// Replacing it, or another computer's path, would be a synced write that
+/// tells no agent anything new, so a file that differs only there stays.
 #[test]
-fn a_build_by_another_binary_keeps_a_path_that_still_exists() {
-    let bins = tempfile::tempdir().unwrap();
-    let installed = fake_binary(bins.path(), "moss-installed");
-    let dev = fake_binary(bins.path(), "moss-dev");
-    let (_tmp, project, home) = project_synced_by(&installed);
+fn a_file_that_differs_only_in_the_binary_it_names_is_left_alone() {
+    let (_tmp, project, home) = synced_project();
+    let old_binding = "> Run moss as `/Users/someone-else/Applications/moss.app/Contents/MacOS/moss`.\n\
+                       > Every `moss …` command below means that binary.\n";
+    let neutral = project.join(".moss/agents/SKILL.md");
+    let older = stamped_with(&skill_package::render_pointer(), old_binding);
+    std::fs::write(&neutral, &older).unwrap();
 
-    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
+    let report = sync_with_home(&project, Some(home.path())).expect("resync");
 
-    assert_all_name(&project, &installed);
-}
-
-#[test]
-fn a_path_that_no_longer_exists_is_replaced() {
-    let bins = tempfile::tempdir().unwrap();
-    let old = fake_binary(bins.path(), "moss-old");
-    let dev = fake_binary(bins.path(), "moss-dev");
-    let (_tmp, project, home) = project_synced_by(&old);
-    std::fs::remove_file(&old).unwrap();
-
-    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
-
-    assert_all_name(&project, &dev);
-}
-
-/// Projects synced before `moss.com` shipped name `moss.exe`, which is still
-/// on disk; keeping it would leave every existing project on the silent binary.
-#[test]
-fn a_kept_path_moves_to_the_console_front_door_beside_it() {
-    let bins = tempfile::tempdir().unwrap();
-    let exe = fake_binary(bins.path(), "moss.exe");
-    let (_tmp, project, home) = project_synced_by(&exe);
-    assert_all_name(&project, &exe);
-
-    let com = fake_binary(bins.path(), "moss.com");
-    sync_with_home(&project, Some(home.path()), &exe).expect("second sync");
-
-    assert_all_name(&project, &com);
-}
-
-/// The installed app is the binary every machine is meant to use, so it takes
-/// the path back from a development binary that got there first.
-#[test]
-fn the_installed_app_replaces_a_development_binary() {
-    let bins = tempfile::tempdir().unwrap();
-    let dev = fake_binary(bins.path(), "moss-dev");
-    let (_tmp, project, home) = project_synced_by(&dev);
-
-    sync_with_home(&project, Some(home.path()), &cli()).expect("app sync");
-
-    assert_all_name(&project, &cli());
-}
-
-#[test]
-fn only_a_binary_inside_an_app_bundle_counts_as_the_installed_app() {
-    assert!(is_installed_app(Path::new("/Applications/moss.app/Contents/MacOS/moss")));
-    assert!(is_installed_app(Path::new("/Users/a/Applications/moss.app/Contents/MacOS/moss")));
-    assert!(!is_installed_app(Path::new("/repo/target/debug/moss")));
-    assert!(!is_installed_app(Path::new("/opt/moss/Contents/MacOS/moss")));
-    assert!(!is_installed_app(Path::new("moss")));
-}
-
-/// The app lives at `/Applications` on one machine and `~/Applications` on
-/// another. Each build must leave the other's path alone, or the two trade the
-/// line back and forth for as long as the folder syncs.
-#[test]
-fn an_installed_app_does_not_replace_another_installed_app_that_exists() {
-    let bins = tempfile::tempdir().unwrap();
-    let other_app_dir = bins.path().join("Other.app/Contents/MacOS");
-    std::fs::create_dir_all(&other_app_dir).unwrap();
-    let other_app = fake_binary(&other_app_dir, "moss");
-    assert!(is_installed_app(&other_app));
-    let (_tmp, project, home) = project_synced_by(&other_app);
-
-    sync_with_home(&project, Some(home.path()), &cli()).expect("app sync");
-
-    assert_all_name(&project, &other_app);
-}
-
-/// `exists()` is true for a directory, which no agent can run.
-#[test]
-fn a_directory_at_the_named_path_is_replaced() {
-    let bins = tempfile::tempdir().unwrap();
-    let dev = fake_binary(bins.path(), "moss-dev");
-    let dir = bins.path().join("moss-was-a-dir");
-    std::fs::create_dir(&dir).unwrap();
-    let dir = std::fs::canonicalize(&dir).unwrap();
-    let (_tmp, project, home) = project_synced_by(&dir);
-
-    sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
-
-    assert_all_name(&project, &dev);
+    assert_eq!(std::fs::read_to_string(&neutral).unwrap(), older);
+    assert!(report.is_noop(), "{:?}", report.written);
 }
 
 /// The build's closing pointer sends an agent to `moss guide`, the one source
@@ -751,7 +638,7 @@ fn the_build_pointer_names_moss_guide() {
     let (_tmp, project) = make_project();
     std::fs::create_dir_all(project.join(".claude")).unwrap();
     let home = empty_home();
-    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
 
     let line = guidance_pointer_line(&project).expect("a pointer file exists");
     assert!(line.contains("`moss guide`"), "{line}");
@@ -780,17 +667,19 @@ fn a_build_creates_no_agent_folder_files() {
 fn a_build_refreshes_the_agent_files_sync_wrote() {
     let (_tmp, project) = make_project();
     let home = home_with(&[".claude", ".cursor"]);
-    sync_with_home(&project, Some(home.path()), Path::new("/old/moss")).expect("sync");
+    sync_with_home(&project, Some(home.path())).expect("sync");
     let skill = project.join(CLAUDE_SKILL);
     let rule = project.join(CURSOR_RULE);
     assert!(skill.is_file() && rule.is_file());
-    // An older binary's path that no longer exists is what a refresh replaces.
-    let before = std::fs::read_to_string(&skill).unwrap();
+    // What an older moss wrote is what a refresh replaces.
+    for file in [&skill, &rule] {
+        std::fs::write(file, stamped_with("Older guidance.\n", CLI_BINDING)).unwrap();
+    }
 
     sync_after_build(&project, true);
 
-    let after = std::fs::read_to_string(&skill).unwrap();
-    assert_ne!(after, before, "the managed skill was not refreshed");
-    assert!(!after.contains("/old/moss"), "{after}");
-    assert!(!std::fs::read_to_string(&rule).unwrap().contains("/old/moss"));
+    for file in [&skill, &rule] {
+        let after = std::fs::read_to_string(file).unwrap();
+        assert!(!after.contains("Older guidance."), "the managed file was not refreshed: {after}");
+    }
 }

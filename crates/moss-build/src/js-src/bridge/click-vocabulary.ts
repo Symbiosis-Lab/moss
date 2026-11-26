@@ -36,6 +36,16 @@ export function shouldLeaveClickToPage(target: Element): boolean {
   return target.closest(".moss-gallery-link") !== null;
 }
 
+// Whether following `anchor` to `target` loads a new document, the only kind of
+// navigation that ever reports back to the shell. A fragment on the current
+// page only scrolls (and a click on the fragment already in the URL fires no
+// hashchange), and a download commits no document.
+export function loadsDocument(anchor: Element, target: URL, current: URL): boolean {
+  if (anchor.hasAttribute("download")) return false;
+  const samePage = target.origin === current.origin && target.pathname === current.pathname && target.search === current.search;
+  return !(samePage && target.hash !== "");
+}
+
 // A picture the site's viewer script has taken as its own, which it marks
 // `data-viewer`. In the editor preview a click or Enter on one belongs to the
 // editor's select gesture, so the guard defaults it away in the capture phase,

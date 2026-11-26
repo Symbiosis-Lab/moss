@@ -2,32 +2,9 @@
 //! the real pipeline: the article locator, a place's own page, and the places
 //! root with the interactive explorer off.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -62,9 +39,9 @@ fn built<R>(check: impl FnOnce(&Path) -> R) -> R {
     fs::create_dir_all(&tmp).unwrap();
     let _cleanup = Cleanup(tmp.clone());
     write_site(&tmp);
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    check(&tmp.join(".moss/build.nosync/staging"))
+    check(&MossPaths::new(&tmp).staging_dir())
 }
 
 fn figure(html: &str) -> &str {
@@ -121,8 +98,8 @@ fn nearby_dots_cluster_at_the_narrowest_drawn_scale() {
     write(&tmp, ".moss/places.toml", &nearby);
     write(&tmp, "posts/nearby.md", "---\ntitle: Nearby\nlocation: [Harbor, Harbor Annex, Inland]\n---\n\nNearby places.\n");
     write(&tmp, "maps.md", "---\ntitle: Maps\n---\n\n![[places/|style:map]]\n");
-    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
-    let out = tmp.join(".moss/build.nosync/staging");
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let out = MossPaths::new(&tmp).staging_dir();
     for path in ["places/index.html", "posts/nearby/index.html", "maps/index.html"] {
         let page = read_page(&out, path);
         let map = figure(&page);
@@ -140,7 +117,7 @@ fn nearby_dots_cluster_at_the_narrowest_drawn_scale() {
         .replace("[\"Harbor Annex\"]", "[\"Harbor Annex\"]\nparent = \"District\"");
     for (places, href) in [(shared.as_str(), "/places/district/"), (nearby.as_str(), "/places/")] {
         write(&tmp, ".moss/places.toml", places);
-        assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+        assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
         let page = read_page(&out, "posts/nearby/index.html");
         assert!(figure(&page).contains(&format!("<a href=\"{href}\" aria-label=\"Harbor, Harbor Annex\">")), "cluster destination: {href}");
     }

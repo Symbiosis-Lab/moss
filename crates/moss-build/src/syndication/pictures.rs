@@ -6,6 +6,12 @@ use super::channel::ChannelSpec;
 use super::shape::{absolute, page_url, ShapeOptions};
 use crate::build::scan::article_map::ArticleInfo;
 use crate::build::emit::math_png::swap_math_svgs_for_email_imgs;
+use crate::build::served_path::MATH_PNG_PREFIX;
+
+/// A formula's PNG, wherever the site is served from.
+fn math_path(src: &str) -> Option<String> {
+    src.split_once(&format!("/{MATH_PNG_PREFIX}")).map(|(_, rest)| format!("{MATH_PNG_PREFIX}{rest}"))
+}
 
 /// A picture for the channel to upload before publishing the copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,8 +38,7 @@ pub(super) fn article_html(post: &ArticleInfo, site: &str, opts: &ShapeOptions, 
         }), lol_html::element!("img", |el| {
             if let Some(src) = el.get_attribute("src") {
                 let alt = el.get_attribute("alt").unwrap_or_default();
-                let math_path = src.split_once("/_moss/math/").map(|(_, rest)| format!("_moss/math/{rest}"));
-                if math_path.is_some_and(|p| !available(opts, &p)) {
+                if math_path(&src).is_some_and(|p| !available(opts, &p)) {
                     el.replace(&crate::build::features::html_escape(&alt), lol_html::html_content::ContentType::Html);
                 } else {
                     count += 1;
@@ -62,3 +67,120 @@ pub(super) fn collect(post: &ArticleInfo, spec: &ChannelSpec, site: &str, opts: 
     pictures.truncate(spec.max_images());
     (pictures, omitted)
 }
+
+/// One piece of an article in reading order: a run of HTML, or a picture
+/// between runs. For an editor that takes pictures only as files, pasted
+/// one by one at their places.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Block {
+    Html { html: String },
+    Picture { picture: Picture },
+}
+
+/// The article without what is not its own text: head elements, footnote
+/// back-links and a title heading that repeats the title go, and the notes get a
+/// heading. Embeds stay, for a network that shows them.
+pub(super) fn clean(html: &str, title: &str) -> String {
+    use lol_html::html_content::ContentType;
+    let cleaned = lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![
+            lol_html::element!("meta, base, link, script, style, a.moss-footnote-backref", |el| { el.remove(); Ok(()) }),
+            lol_html::element!("section.moss-footnotes", |el| { el.before("<h2>Notes</h2>", ContentType::Html); Ok(()) }),
+        ],
+        ..Default::default()
+    }).unwrap_or_else(|_| html.to_string());
+    let document = scraper::Html::parse_fragment(&cleaned);
+    let root = document.root_element();
+    let repeats = |el: &scraper::ElementRef| el.value().name() == "h1" && el.text().collect::<String>().trim() == title.trim();
+    // moss's own title heading (it may follow an eyebrow), or an author's that opens the article.
+    let first = root.children().find_map(scraper::ElementRef::wrap).map(|el| el.id());
+    let gone: Vec<_> = root.children().filter_map(scraper::ElementRef::wrap)
+        .filter(|el| repeats(el) && (el.value().has_class("moss-article-title", scraper::CaseSensitivity::CaseSensitive) || Some(el.id()) == first))
+        .map(|el| el.id()).collect();
+    if gone.is_empty() { return cleaned; }
+    root.children().filter(|node| !gone.contains(&node.id())).map(|node| match scraper::ElementRef::wrap(node) {
+        Some(el) => el.html(),
+        None => node.value().as_text().map(|t| crate::build::features::html_escape(t)).unwrap_or_default(),
+    }).collect()
+}
+
+/// A [`clean`] article as an editor is given it: embeds as links to their
+/// addresses, split at each picture. Formula pictures stay inline, inside their text.
+pub(super) fn blocks(html: &str) -> Vec<Block> {
+    use lol_html::html_content::ContentType;
+    use crate::build::features::html_escape;
+    // An embed's address, in document order: its own `src`, or its first source's.
+    let document = scraper::Html::parse_fragment(html);
+    let media = scraper::Selector::parse("iframe, video, audio").expect("fixed selector");
+    let source = scraper::Selector::parse("source[src]").expect("fixed selector");
+    let mut embeds = document.select(&media).map(|el| {
+        let src = el.value().attr("src").map(str::to_string).or_else(|| el.select(&source).next().and_then(|s| s.value().attr("src")).map(str::to_string));
+        let label = el.value().attr("title").map(str::to_string).filter(|t| !t.trim().is_empty());
+        (src, label)
+    }).collect::<Vec<_>>().into_iter();
+    let cleaned = lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![
+            lol_html::element!("iframe, video, audio", |el| {
+                match embeds.next() {
+                    Some((Some(src), label)) => {
+                        let label = label.unwrap_or_else(|| src.clone());
+                        el.replace(&format!("<a href=\"{}\">{}</a>", html_escape(&src), html_escape(&label)), ContentType::Html);
+                    }
+                    _ => el.remove(),
+                }
+                Ok(())
+            }),
+        ],
+        ..Default::default()
+    }).unwrap_or_else(|_| html.to_string());
+
+    let document = scraper::Html::parse_fragment(&cleaned);
+    let pictures = scraper::Selector::parse("img[src]").expect("fixed selector");
+    let is_formula = |src: &str| math_path(src).is_some();
+    let mut out: Vec<Block> = Vec::new();
+    let mut push_html = |out: &mut Vec<Block>, piece: &str| {
+        match out.last_mut() {
+            Some(Block::Html { html }) => html.push_str(piece),
+            _ if piece.trim().is_empty() => {}
+            _ => out.push(Block::Html { html: piece.to_string() }),
+        }
+    };
+    for node in document.root_element().children() {
+        let Some(el) = scraper::ElementRef::wrap(node) else {
+            if let Some(text) = node.value().as_text() { push_html(&mut out, &html_escape(text)); }
+            continue;
+        };
+        // An embed that was a block of its own is now a bare link: give it its paragraph.
+        let outer = el.html();
+        let outer = if el.value().name() == "a" { format!("<p>{outer}</p>") } else { outer };
+        let found: Vec<Picture> = (if el.value().name() == "img" { vec![el] } else { el.select(&pictures).collect() })
+            .into_iter()
+            .filter_map(|img| img.value().attr("src").filter(|s| !is_formula(s)).map(|src| Picture { url: src.into(), alt: img.value().attr("alt").unwrap_or_default().into() }))
+            .collect();
+        if found.is_empty() { push_html(&mut out, &outer); continue; }
+        let rest = lol_html::rewrite_str(&outer, lol_html::RewriteStrSettings {
+            element_content_handlers: vec![lol_html::element!("img[src]", |img| {
+                if !img.get_attribute("src").is_some_and(|s| is_formula(&s)) { img.remove(); }
+                Ok(())
+            })],
+            ..Default::default()
+        }).unwrap_or_else(|_| outer.clone());
+        let rest_has_text = scraper::Html::parse_fragment(&rest).root_element().text().any(|t| !t.trim().is_empty());
+        // A picture that opens its block (a figure, a paragraph of its own) comes before what is left, its caption.
+        let text_before = el.text().next().is_some_and(|t| !t.trim().is_empty()) && el.value().name() != "figure";
+        let pictures = found.into_iter().map(|picture| Block::Picture { picture });
+        if text_before {
+            if rest_has_text { push_html(&mut out, &rest); }
+            out.extend(pictures);
+        } else {
+            out.extend(pictures);
+            if rest_has_text { push_html(&mut out, &rest); }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "pictures_tests.rs"]
+mod tests;

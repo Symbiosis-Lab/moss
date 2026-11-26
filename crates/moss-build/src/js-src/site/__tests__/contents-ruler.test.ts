@@ -199,6 +199,28 @@ describe("the island's sections button while the ruler is up", () => {
     );
   });
 
+  test("the bar still comes on a scroll up, and an open sections panel closes", async () => {
+    giveItRoom();
+    setPage(["一", "二"]);
+    initNavIsland();
+    expect(island().dataset.ruler).toBe("on");
+    const scrollToY = async (y: number): Promise<void> => {
+      Object.defineProperty(window, "scrollY", { value: y, configurable: true });
+      window.dispatchEvent(new Event("scroll"));
+      await nextFrame();
+    };
+    await scrollToY(2000);
+    await scrollToY(1800);
+    expect([island().dataset.shown, island().inert]).toEqual(["true", false]);
+
+    const panel = document.querySelector<HTMLElement>('[data-island-menu="sections"]')!;
+    panel.hidden = false;
+    button().setAttribute("aria-expanded", "true");
+    await scrollToY(1700);
+    expect([panel.hidden, button().getAttribute("aria-expanded")]).toEqual([true, "false"]);
+    await scrollToY(0);
+  });
+
   test("keeps its button when a site switches the ruler off with CSS", () => {
     giveItRoom();
     const style = document.createElement("style");

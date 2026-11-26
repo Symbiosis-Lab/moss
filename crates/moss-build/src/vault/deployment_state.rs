@@ -20,12 +20,12 @@ use crate::config::deployment::{
 use crate::vault::config::{load_managed_toml, write_managed_toml, ManagedToml};
 use std::path::Path;
 
-/// The ONE write frame for `.moss/state.toml [deployment]`: load, parse the
-/// standing persisted shape out of the loaded document (one read, no re-fetch
-/// race), mutate, serialize back over the original bytes. Both state writers
-/// — [`save_domain_config`] (absorb) and [`update_domain_observation`] — go
-/// through here, so "state.toml has one write frame" is structural rather
-/// than conventional.
+/// The write frame for `.moss/state.toml`: load, refuse a version-ahead
+/// file, mutate the loaded document, serialize back over the original bytes.
+/// moss-build's state writers go through here ([`update_deployment_state`],
+/// the account binding in `plugins::manager::accounts`), and each keeps the
+/// tables it does not own. An app's own setup tables may be written through
+/// the app's own frame, which also keeps every other table.
 ///
 /// Stamps the top-level `schema_version` at
 /// [`crate::config::migrations::STATE_CURRENT_VERSION`] on every save, giving
@@ -36,14 +36,14 @@ use std::path::Path;
 /// one `schema_version` line.
 ///
 /// The version-ahead check runs here, against the document exactly as
-/// loaded, and refuses before either mutation below. It cannot live only in
+/// loaded, and refuses before the mutation. It cannot live only in
 /// `write_managed_toml` (as `config.toml`'s writers rely on): this function
 /// unconditionally overwrites `schema_version` with the current value before
 /// calling it, which would silently erase a newer-than-supported stamp and
-/// make the guard down there never fire, the same failure this feature closes.
-fn update_deployment_state<F>(project_path: &str, mutate: F) -> Result<(), String>
+/// make the guard down there never fire.
+pub(crate) fn update_state<F>(project_path: &str, mutate: F) -> Result<(), String>
 where
-    F: FnOnce(&mut DeploymentState),
+    F: FnOnce(&mut toml::Table) -> Result<(), String>,
 {
     let state_path = Path::new(project_path).join(".moss").join("state.toml");
     let ManagedToml { original, mut root } = load_managed_toml(&state_path)?;
@@ -53,16 +53,12 @@ where
     ) {
         return Err(format!(
             "{} is at schema_version {found}, newer than this build of moss supports (up to {}). \
-             Refusing to write — update moss before changing this site's deployment state.",
+             Refusing to write — update moss before changing this site's state.",
             state_path.display(),
             crate::config::migrations::STATE_CURRENT_VERSION,
         ));
     }
-    let mut state = DeploymentState::from_toml(root.get("deployment"))?;
-    mutate(&mut state);
-    let deployment_value = toml::Value::try_from(&state)
-        .map_err(|e| format!("Failed to serialize deployment config: {}", e))?;
-    root.insert("deployment".to_string(), deployment_value);
+    mutate(&mut root)?;
     root.insert(
         "schema_version".to_string(),
         toml::Value::Integer(crate::config::migrations::STATE_CURRENT_VERSION as i64),
@@ -73,6 +69,24 @@ where
         &root,
         crate::config::migrations::STATE_CURRENT_VERSION,
     )
+}
+
+/// `[deployment]`'s view of [`update_state`]: parse the standing persisted
+/// shape out of the loaded document (one read, no re-fetch race), mutate it,
+/// put it back. Both deployment writers — [`save_domain_config`] (absorb) and
+/// [`update_domain_observation`] — go through here.
+fn update_deployment_state<F>(project_path: &str, mutate: F) -> Result<(), String>
+where
+    F: FnOnce(&mut DeploymentState),
+{
+    update_state(project_path, |root| {
+        let mut state = DeploymentState::from_toml(root.get("deployment"))?;
+        mutate(&mut state);
+        let deployment_value = toml::Value::try_from(&state)
+            .map_err(|e| format!("Failed to serialize deployment config: {}", e))?;
+        root.insert("deployment".to_string(), deployment_value);
+        Ok(())
+    })
 }
 
 /// Update `[deployment].observed` in state.toml — the ONE writer for the
@@ -123,9 +137,10 @@ pub struct PublishOutcome {
     pub url: String,
     /// RFC 3339. Required.
     pub deployed_at: String,
-    /// The plugin's own canonical url (e.g. an OnionPress onion address), or
-    /// `None` for moss hosting, whose URL derives from site_id at resolution
-    /// time (persisting it would freeze the environment suffix).
+    /// Where the target said the site lives: a plugin's own canonical url
+    /// (e.g. an OnionPress onion address), or the address moss hosting
+    /// answered with. `None` clears what an earlier publish stored, and the
+    /// next build derives the address from site_id.
     pub site_url: Option<String>,
     pub dns_target: Option<DnsTarget>,
     pub metadata: Option<std::collections::HashMap<String, String>>,

@@ -239,6 +239,14 @@ pub struct EngineHost<'a> {
     pub declared: Option<&'a Declared>,
 }
 
+/// A page the plugin opened holds the watchdog off until the panel closes
+/// (the adapter's `browser-closed` listener) or the hook ends.
+fn window_opened(host: &EngineHost<'_>) {
+    if let Some(plugin) = host.plugin {
+        host.state.hooks.window_opened(plugin);
+    }
+}
+
 fn need_app<'a>(host: &EngineHost<'a>, cmd: &str) -> std::result::Result<&'a dyn AppHost, String> {
     host.app.ok_or_else(|| format!("{cmd} requires an app handle (not available in this test host)"))
 }
@@ -256,7 +264,7 @@ fn keystore_caller_scope(
     let plugin = host.plugin.ok_or_else(|| {
         format!("'{cmd}' could not identify the calling plugin — refusing")
     })?;
-    Ok(crate::identity::keystore::Scope::Plugin(plugin.to_string()))
+    crate::identity::keystore::Scope::plugin(plugin).map_err(|e| format!("'{cmd}': {e:?}"))
 }
 
 /// The plugin whose private storage or cookies an arm may touch.
@@ -499,8 +507,7 @@ async fn dispatch_command_core(
         // Keystore. Not gated: the caller signs only with
         // its own scoped key. The scope is the calling plugin, resolved from the
         // dispatch seam — never a parameter, so a caller cannot reach another's
-        // key. moss's own identity uses the same store at the System scope, off
-        // this seam.
+        // key.
         "key_get_or_create" => {
             use base64::Engine as _;
             let scope = keystore_caller_scope(&host, "key_get_or_create")?;
@@ -593,14 +600,14 @@ async fn dispatch_command_core(
                 .transpose()?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
             let below = args.get("belowTitlebar").and_then(|v| v.as_bool()).unwrap_or(true);
-            app.open_action_panel(url, title, below, host.plugin.map(String::from)).await?;
+            app.open_action_panel(url, title, below, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
         "set_action_panel_html" => {
             let app = need_app(&host, "set_action_panel_html")?;
             let html = req_str(&args, "html")?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
-            app.set_action_panel_html(html, title, host.plugin.map(String::from)).await?;
+            app.set_action_panel_html(html, title, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
         "close_action_panel" => {
@@ -636,6 +643,11 @@ async fn dispatch_command_core(
             let app = need_app(&host, "return_to_editor")?;
             app.return_to_editor().await?;
             Ok("null".into())
+        }
+        "fill_browser_panel" => {
+            let (app, plugin) = (need_app(&host, "fill_browser_panel")?, caller_plugin(&host, "fill_browser_panel")?);
+            let fill = args.get("fill").cloned().ok_or("missing 'fill'")?;
+            reply_json(&app.fill_browser_panel(&plugin, host.project_path, fill).await?)
         }
         "resolve_git_path" => {
             let r = crate::plugins::runtime::portable::resolve_git_path_impl().await?;
@@ -1541,6 +1553,7 @@ mod tests {
             "download_asset",
             "execute_binary",
             "fetch_url",
+            "fill_browser_panel",
             "get_plugin_cookie",
             "get_plugin_env_var",
             "html_to_markdown",
@@ -1659,6 +1672,7 @@ mod tests {
     struct PanelRecorder {
         panel: std::sync::Mutex<Option<Option<String>>>,
         browser: std::sync::Mutex<Vec<String>>,
+        fill: std::sync::Mutex<Option<(String, String, serde_json::Value)>>,
     }
 
     #[async_trait::async_trait]
@@ -1677,6 +1691,10 @@ mod tests {
             Ok(())
         }
         async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
+        async fn fill_browser_panel(&self, plugin: &str, project_path: &str, fill: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+            *self.fill.lock().unwrap() = Some((plugin.to_string(), project_path.to_string(), fill));
+            Ok(serde_json::json!({ "filled": true }))
+        }
         async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
         fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
         fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
@@ -1684,8 +1702,14 @@ mod tests {
     }
 
     async fn browser_call(desk: &PanelRecorder, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+        browser_call_as(desk, "mastodon", cmd, args).await
+    }
+
+    /// Sign-ins are keyed by plugin across the process, so a test that waits
+    /// on one uses a plugin no parallel test does.
+    async fn browser_call_as(desk: &PanelRecorder, plugin: &str, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
         let state = HostState::standalone();
-        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: None, declared: None };
+        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some(plugin), asked_by: None, declared: None };
         dispatch_command_core(host, cmd, &args.to_string()).await
     }
 
@@ -1703,6 +1727,40 @@ mod tests {
         assert!(desk.browser.lock().unwrap().is_empty(), "nothing may reach the browser: {:?}", desk.browser.lock().unwrap());
         browser_call(&desk, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
         assert_eq!(*desk.browser.lock().unwrap(), vec!["https://example.com/a".to_string()]);
+    }
+
+    /// The fill goes to the plugin that called, whatever name it passes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fill_browser_panel_reaches_the_app_as_the_calling_plugin() {
+        let desk = PanelRecorder::default();
+        let fill = serde_json::json!({ "editor": { "body": ".editor" }, "parts": [{ "html": "<p>a</p>" }] });
+        let reply = browser_call(&desk, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
+        assert_eq!(reply, r#"{"filled":true}"#);
+        assert_eq!(*desk.fill.lock().unwrap(), Some(("mastodon".to_string(), "/tmp/none".to_string(), fill)));
+    }
+
+    /// A plugin tells a cancel from a failure by this text alone, so the
+    /// engine's rejection and moss-api's `SignInCancelled` must agree on it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_superseded_sign_in_rejects_with_the_text_moss_api_reads_as_cancelled() {
+        use crate::plugins::runtime::browser_sign_in::CANCELLED;
+        let desk = std::sync::Arc::new(PanelRecorder::default());
+        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        let waiting = {
+            let desk = desk.clone();
+            tokio::spawn(async move { browser_call_as(&desk, "cancel-probe", "browser_sign_in_wait", serde_json::json!({ "url": "https://example.com/authorize" })).await })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while desk.browser.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the sign-in never opened the browser");
+        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        assert_eq!(waiting.await.unwrap(), Err(CANCELLED.to_string()));
+        let moss_api = include_str!("../../../../packages/moss-api/src/utils/browser.ts");
+        assert!(moss_api.contains(&format!("const CANCELLED = \"{CANCELLED}\";")), "moss-api's SignInCancelled reads a different text");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1810,6 +1868,7 @@ mod tests {
             ("close_action_panel", "null"),
             ("open_system_browser", r#"{"url":"https://example.com"}"#),
             ("return_to_editor", "null"),
+            ("fill_browser_panel", r#"{"fill":{}}"#),
         ];
         for (cmd, args_json) in cases {
             let err = dispatch_command_test_stub("/tmp/none", None, cmd, args_json)
@@ -1899,6 +1958,7 @@ mod tests {
             async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
             async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }
             async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
+            async fn fill_browser_panel(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<serde_json::Value, String> { unreachable!() }
             async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
             fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
             fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }

@@ -3,6 +3,7 @@
 //! rows whose column holds a value. Built through the real CLI, so the cells'
 //! markdown (links, emphasis) is rendered by the page's own markdown pass.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -50,7 +51,7 @@ fn a_data_file_lists_its_rows_and_where_picks_them() {
     let out = moss(&["build", s, "--no-plugins", "--strict"], moss_home.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "build must be clean under --strict; stderr:\n{stderr}");
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("index.html")).unwrap();
     // How moss opens outside links is not this feature's business.
     let html = html.replace(r#" target="_blank" rel="noopener""#, "");
 
@@ -101,7 +102,7 @@ fn a_list_embed_that_shares_its_line_stays_a_table_and_says_why() {
     let s = site.to_str().unwrap();
     let out = moss(&["build", s, "--no-plugins"], moss_home.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("index.html")).unwrap();
     let quote = &html[html.find("<blockquote").expect("a blockquote")..html.find("</blockquote>").unwrap()];
     assert!(quote.contains("<td>Atlas of the Coast</td>"), "the table stays inside the quote:\n{html}");
     assert!(!html.contains("<li>Atlas"), "no list leaks out of the quote:\n{html}");

@@ -49,6 +49,7 @@ vi.mock("../preview/navigation-manager", () => ({
 vi.mock("../preview/preview-hairline", () => ({
   PreviewHairline: vi.fn().mockImplementation(() => ({
     cancelPendingDissolve: vi.fn(),
+    handOverToPaint: vi.fn(),
     dissolveAfter: vi.fn(),
     setBuildProgress: vi.fn(),
     complete: vi.fn((cb?: () => void) => cb?.()),

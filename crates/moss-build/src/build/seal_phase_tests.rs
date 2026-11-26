@@ -30,7 +30,7 @@ struct Vault {
     folder_key: String,
     mp: crate::moss_paths::MossPaths,
     session: Arc<FolderSession>,
-    served: Arc<RwLock<std::path::PathBuf>>,
+    served: crate::moss_paths::ServedCell,
     _record: Arc<crate::build::lifecycle::LifecycleCell>,
 }
 
@@ -53,7 +53,7 @@ impl Vault {
         let mp = crate::moss_paths::MossPaths::new(&folder);
         let record = crate::build::lifecycle::lock_for(&mp);
         std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nv0\n").unwrap();
-        Self { _serial: serial, _tmp: tmp, folder, folder_key, mp, session, served: Arc::new(RwLock::new(std::path::PathBuf::new())), _record: record }
+        Self { _serial: serial, _tmp: tmp, folder, folder_key, mp, session, served: crate::moss_paths::Served::test_cell(std::path::PathBuf::new()), _record: record }
     }
 
     /// One long-lived-arm build (`exits_after_build: false`, a real
@@ -80,7 +80,7 @@ impl Vault {
             watch: false,
             start_server: false,
             host,
-            trigger: BuildTrigger::Full,
+            trigger: BuildTrigger::Full, reason: None,
             exits_after_build,
             site_url_override: None,
             server_port: None,
@@ -245,7 +245,7 @@ impl Vault {
             watch: false,
             start_server: true,
             host,
-            trigger: BuildTrigger::Unobserved,
+            trigger: BuildTrigger::Unobserved, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -376,6 +376,19 @@ async fn search_entry(port: u16) -> Result<String, String> {
     .unwrap()
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_that_stops_at_its_entry_still_gives_the_preview_address() {
+    let vault = Vault::new();
+    // The first seal leaves its media unsettled; the second open settles it.
+    for _ in 0..2 {
+        vault.open().await;
+        settle(&vault.mp).await;
+    }
+    let message = vault.open().await;
+    assert!(message.starts_with("Unchanged since the last build."), "the open stopped: {message}");
+    assert!(message.contains("http://localhost:47312"), "no preview address: {message}");
+}
+
 /// A search read after a session's last edit publishes a bundle no build has
 /// adopted, so staging still holds the bundle before it, and an open that
 /// stops builds nothing that would adopt it. The search mount answers from
@@ -466,11 +479,11 @@ async fn selected_page_with_late_copied_local_stylesheet_becomes_servable() {
     vault.drained().await;
     assert!(vault.mp.staging_dir().join("critical.css").is_file(), "deferred copy must land before the seal projection");
     assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("critical.css"));
-    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
+    assert_eq!(vault.served.read().unwrap().dir, vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
     crate::build::seal_phase::settle(&vault.mp).await;
 
     assert!(vault.mp.current_generation_id().is_ok(), "a complete selected page should promote");
-    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the late-ready latest render should be revealed");
+    assert_eq!(vault.served.read().unwrap().dir, vault.mp.staging_dir(), "the late-ready latest render should be revealed");
 }
 
 /// The selected page cannot promote a generation while its linked local CSS

@@ -26,24 +26,6 @@ pub enum Ability {
     RunsProgram { program: String },
 }
 
-impl Ability {
-    /// Whether two abilities are the same thing being allowed, whatever
-    /// wording the plugin gives it: a reworded label is not a new ability.
-    pub fn same_as(&self, other: &Ability) -> bool {
-        self.identity() == other.identity()
-    }
-
-    fn identity(&self) -> (&'static str, &str) {
-        match self {
-            Ability::DrawsPages { style, .. } => ("draws_pages", style),
-            Ability::AddsToPages { block } => ("adds_to_pages", block),
-            Ability::Publishes { hook } => ("publishes", hook),
-            Ability::SignsIn { domain } => ("signs_in", domain.as_deref().unwrap_or_default()),
-            Ability::RunsProgram { program } => ("runs_program", program),
-        }
-    }
-}
-
 /// The abilities `manifest` declares, in a fixed order: listing styles by id,
 /// then deploy, syndicate, sign-in, then programs in `requires` order.
 pub fn abilities(manifest: &PluginManifest) -> Vec<Ability> {

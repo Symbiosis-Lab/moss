@@ -7,7 +7,7 @@
 //! answer a run already asks for. Reading it never asks the channel, because
 //! asking can be a billed call.
 
-use crate::identity::keystore::validate_entry_name;
+use crate::identity::keystore::EntryName;
 use crate::plugins::manager::copies::Account;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -51,12 +51,12 @@ impl SignIns {
     /// The store beside the secret store; `None` when the platform has no data
     /// directory.
     pub fn app_default() -> Option<Self> {
-        crate::infra::app_data::app_data_dir_early().map(|d| Self::in_app_data(&d))
+        crate::infra::app_data::credential_root().map(|d| Self::in_app_data(&d))
     }
 
     fn path(&self, channel: &str) -> Result<PathBuf, String> {
-        validate_entry_name(channel).map_err(|_| format!("'{channel}' is not a channel name"))?;
-        Ok(self.root.join(format!("{channel}.json")))
+        let entry = EntryName::new(channel).map_err(|_| format!("'{channel}' is not a channel name"))?;
+        Ok(self.root.join(format!("{}.json", entry.file)))
     }
 
     /// The channel's record; `None` when it has never answered on this computer.
@@ -103,6 +103,12 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_test_never_opens_the_real_store() {
+        let root = SignIns::app_default().unwrap().root;
+        assert!(root.starts_with(std::env::temp_dir()), "{}", root.display());
+    }
 
     fn known(id: &str, name: Option<&str>) -> Account {
         Account::Known { id: id.into(), name: name.map(str::to_string) }

@@ -54,3 +54,6 @@ export function turnAt(p: number, bounds: PhaseBounds = DEFAULT_PHASE_BOUNDS): {
   if (phase === 'in') return { from: 'y', p: (outEnd * (1 - p)) / (1 - inStart) };
   return { from: 'mix', p: outEnd };
 }
+
+export { sphereLegAt, DEFAULT_SPHERE_BOUNDS } from './sphere.js';
+export type { SphereBounds } from './sphere.js';

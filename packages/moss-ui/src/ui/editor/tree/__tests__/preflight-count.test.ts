@@ -87,3 +87,58 @@ describe('where a row shows its count', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 });
+
+describe('keyboard focus across a re-render', () => {
+  const ROOT = '/Users/me/Sites/garden';
+  const PAGE = 'en/writing/case.md';
+  const DRAFT = 'drafts/d.md';
+  let fileTree: FileTree;
+  let container: HTMLElement;
+
+  const seg = (path: string) => container.querySelector<HTMLElement>(`.seg[data-path="${path}"]`)!;
+  const count = (path: string) => seg(path).querySelector<HTMLButtonElement>('button.tree-preflight-count');
+  const missing = (page: number, draft: number) => ({
+    build_generation: 1,
+    missing_references: [
+      ...Array.from({ length: page }, () => ({ source_path: PAGE })),
+      ...Array.from({ length: draft }, () => ({ source_path: DRAFT })),
+    ],
+  }) as never;
+
+  beforeEach(async () => {
+    mockGetProjectPath.mockResolvedValue({ status: 'ok', data: ROOT });
+    mockListTree.mockResolvedValue({ status: 'ok', data: dir(ROOT, [
+      dir(`${ROOT}/drafts`, [file(`${ROOT}/${DRAFT}`)]),
+      dir(`${ROOT}/en`, [dir(`${ROOT}/en/writing`, [file(`${ROOT}/${PAGE}`)])]),
+    ], { name: 'garden' }) });
+    fileTree = new FileTree(new EntryRegistry());
+    container = document.body.appendChild(document.createElement('div'));
+    await fileTree.mount(container, ROOT, false);
+    fileTree.highlight(`${ROOT}/${PAGE}`);
+    fileTree.setPublishPreflight(missing(3, 2));
+    priv(fileTree).handleToggleTop(0);
+  });
+  afterEach(() => { fileTree.unmount(); container.remove(); });
+
+  it('a focused count button is replaced by the new one, which has focus', () => {
+    const before = count(PAGE)!;
+    before.focus();
+    fileTree.setPublishPreflight(missing(4, 2));
+    expect(count(PAGE)).not.toBe(before);
+    expect(document.activeElement).toBe(count(PAGE));
+  });
+
+  it('a focused row keeps focus when its count changes', () => {
+    seg('drafts').focus();
+    fileTree.setPublishPreflight(missing(3, 0));
+    expect(seg('drafts').querySelector('.tree-preflight-count')).toBeNull();
+    expect(document.activeElement).toBe(seg('drafts'));
+  });
+
+  it("when the open page's focused count goes away, focus stays in the tree", () => {
+    count(PAGE)!.focus();
+    fileTree.setPublishPreflight(missing(0, 2));
+    expect(count(PAGE)).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector('[tabindex="0"]'));
+  });
+});

@@ -3,6 +3,7 @@
 //! Federated sources for the moss design contract:
 //! - [`tokens`]: W3C Design Tokens (CSS variables, defaults, groups, descriptions)
 //! - [`components`]: emitter contract — class names, data attributes, examples
+//! - [`retired`]: the released names moss no longer writes, and what replaces them
 //!
 //! Consumed by the codegen binary in the desktop app (`generate-artifacts`),
 //! by `moss describe` and by snapshot tests.
@@ -12,5 +13,6 @@ pub mod components;
 pub mod custom_props;
 pub mod describe;
 pub mod frontmatter;
+pub mod retired;
 pub mod shortcodes;
 pub mod sizes;

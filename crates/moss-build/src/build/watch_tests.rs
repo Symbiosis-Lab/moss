@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::load_previous_hashes;
 use crate::build::stat::{RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
@@ -1239,7 +1240,7 @@ fn path_to_relative_key_returns_none_for_path_outside_folder() {
 fn gate_write_manifest(folder: &std::path::Path, hashes: &crate::types::content::SiteHashes) {
     // load_previous_hashes reads from MossPaths::hashes(folder), which is
     // .moss/build.nosync/hashes.json. Mirror that layout in tests.
-    let build = folder.join(".moss").join("build.nosync");
+    let build = MossPaths::new(folder).build_dir();
     fs::create_dir_all(&build).unwrap();
     fs::write(
         build.join("hashes.json"),
@@ -1493,6 +1494,63 @@ fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
     }
 }
 
+fn image_record(path: &std::path::Path, bytes: &[u8]) -> crate::types::content::SiteHashes {
+    let mut hashes = crate::types::content::SiteHashes::new();
+    hashes.sources.insert(
+        "cover.png".into(),
+        SourceMetadata { hash: gate_sha256_hex(bytes), stat: FileStat::of(&std::fs::metadata(path).unwrap()) },
+    );
+    hashes
+}
+
+fn metadata_any() -> EventKind {
+    EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any))
+}
+
+#[test]
+fn a_metadata_only_change_on_an_image_defers_to_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("cover.png");
+    assert_eq!(pump_gate(metadata_any(), dir.path().to_str().unwrap(), &[image]), PumpGate::DeferHashCheck);
+}
+
+/// A sync provider setting flags on a file it has just synced moves ctime and
+/// nothing else; the image's last build already has those bytes.
+#[cfg(unix)]
+#[test]
+fn an_attribute_change_on_a_recorded_image_is_suppressed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = image_record(&image, b"png bytes");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(!should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
+/// The record may describe the build before last, so equal bytes prove
+/// nothing for an image: a replaced file builds even when its hash matches.
+#[test]
+fn a_replaced_image_builds_even_with_a_matching_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = image_record(&image, b"png bytes");
+    let temp = gate_write_file(dir.path(), "cover.tmp", b"png bytes");
+    std::fs::rename(&temp, &image).unwrap();
+
+    assert!(should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
+#[test]
+fn a_metadata_only_change_on_an_unrecorded_image_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = crate::types::content::SiteHashes::new();
+
+    assert!(should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
 /// A root agent-instruction file is excluded from watch triggers regardless
 /// of who wrote it — the author's own edit to it must not rebuild the site
 /// any more than moss's own guidance sync would, were it still writing here.
@@ -1712,28 +1770,46 @@ fn rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
     );
 }
 
-/// The stash must describe what the screen shows (build.rs guards the
-/// `record_content_hashes` call with this). A cloud-withheld build
-/// (`publishable == false`) and a cancelled build never switch the preview
-/// (`pipeline::run` only calls `switch_to` under `if publishable`, and the
-/// cancelled early-return precedes both arms), so stashing their hashes made
-/// the watcher's next refresh diff compare against a build the user never
-/// saw — a later publishable build's `changed_output_files` then omitted
-/// pages edited before the withheld build and the preview never refreshed.
+/// The stash and the top-level listing describe what the screen shows. A
+/// withheld render or a cancelled build (no render) never switched the
+/// preview: stashing its hashes would make the next refresh diff against
+/// output the user never saw, and recording its listing would make the sweep
+/// skip the rebuild that shows an entry it took. A withheld render its tail
+/// revealed is on screen, so its sealed view is the baseline.
 #[test]
-fn stash_only_when_the_preview_switched_to_this_build() {
-    use crate::build::should_stash_hashes;
+fn only_a_shown_build_replaces_the_stash_and_the_listing() {
+    use crate::build::lifecycle::{adopt_server, show_render};
+    use crate::build::stash_shown_build;
+    let tmp = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    let folder = tmp.path().to_str().unwrap();
+    let _record = adopt_server(&mp, &crate::moss_paths::Served::test_cell(PathBuf::new()));
+    let records = crate::system::build_records::records();
+    let listing = |name: &str| Some(vec![PathBuf::from(format!("{folder}/{name}"))]);
+    let shown = |records: &crate::system::build_records::BuildRecords| {
+        (records.content_hashes(folder).map(|h| h.files.get("research/index.html").cloned()), records.scanned_listing(folder))
+    };
 
-    // The one combination where the preview switched to this build's output.
-    assert!(should_stash_hashes(true, false));
+    let first_render = show_render(&mp, true).0;
+    stash_shown_build(folder, Some(&first_render), page_at("v1"), listing("first.md"));
+    let first = shown(records);
+    assert_eq!(first.1, Some(vec![PathBuf::from(format!("{folder}/first.md"))]));
 
-    // Withheld: staged but never shown — must not become the baseline.
-    assert!(!should_stash_hashes(false, false));
+    let withheld = show_render(&mp, false).0;
+    stash_shown_build(folder, Some(&withheld), page_at("v2"), listing("withheld.md"));
+    assert_eq!(shown(records), first, "a withheld build changes neither");
+    stash_shown_build(folder, None, page_at("v2"), listing("cancelled.md"));
+    assert_eq!(shown(records), first, "a cancelled build changes neither");
 
-    // Cancelled: pipeline returns publishable=false too, but the guard must
-    // not rely on that coupling holding forever.
-    assert!(!should_stash_hashes(false, true));
-    assert!(!should_stash_hashes(true, true));
+    assert!(withheld.reveal_if_latest());
+    stash_shown_build(folder, Some(&withheld), page_at("v3"), None);
+    assert_eq!(shown(records).0, Some(Some("100644:v3".to_string())), "a revealed render's sealed view is not the baseline");
+    assert_eq!(shown(records).1, first.1, "a build whose listing failed keeps the last one");
+
+    let newer = show_render(&mp, true).0;
+    stash_shown_build(folder, Some(&newer), page_at("v4"), None);
+    stash_shown_build(folder, Some(&withheld), page_at("v3"), None);
+    assert_eq!(shown(records).0, Some(Some("100644:v4".to_string())), "an older tail replaced a newer shown render's baseline");
 }
 
 
@@ -1747,6 +1823,23 @@ impl crate::build::ports::reporter::BuildReporter for HeardChanges {
             self.0.lock().unwrap().push(e.clone());
         }
     }
+}
+
+/// A save that renders identically still tells the editor its source moved,
+/// but the preview reloads for output only, so the show says no reload.
+#[test]
+fn a_save_that_renders_identically_announces_its_source_and_no_reload() {
+    let mut before = page_at("same");
+    before.source_to_output.insert("research.md".into(), "research/index.html".into());
+    before.sources.insert("research.md".into(), page_hash("v1"));
+    let mut after = before.clone();
+    after.sources.insert("research.md".into(), page_hash("v2"));
+    let (plan, heard) = plan_with(Baseline::Shown(before));
+
+    assert!(!plan.announce(&after, &SiteHashes::new(), |_| true, 3), "no output changed: no reload");
+    let heard = heard.0.lock().unwrap();
+    assert_eq!(heard.len(), 1, "the editor still hears the source change");
+    assert_eq!(heard[0].modified_paths.as_deref(), Some(&["research.md".to_string()][..]));
 }
 
 fn plan_with(baseline: Baseline) -> (RefreshPlan, std::sync::Arc<HeardChanges>) {
@@ -1793,16 +1886,16 @@ fn a_refresh_plan_takes_the_stash_else_the_disk_else_nothing() {
 fn the_show_event_diffs_against_the_stash_else_hashes_json_else_nothing() {
     let written = |_: &str| true;
     let (plan, heard) = plan_with(Baseline::Shown(page_at("v1")));
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert!(plan.announce(&page_at("v2"), &page_at("v2"), written, 1));
     assert_eq!(named(&heard), [["research/index.html"]], "the stash wins over a poisoned hashes.json");
 
     let (plan, heard) = plan_with(Baseline::Disk);
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
-    plan.announce(&page_at("v2"), &page_at("v1"), written, 2);
+    assert!(!plan.announce(&page_at("v2"), &page_at("v2"), written, 1), "nothing changed against hashes.json: no reload");
+    assert!(plan.announce(&page_at("v2"), &page_at("v1"), written, 2));
     assert_eq!(named(&heard), [["research/index.html"]], "without a stash, hashes.json is the baseline");
 
     let (plan, heard) = plan_with(Baseline::Gone);
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert!(plan.announce(&page_at("v2"), &page_at("v2"), written, 1));
     assert_eq!(named(&heard), [["research/index.html"]], "with staging gone, everything is new");
 }
 
@@ -1818,8 +1911,8 @@ fn the_show_event_names_only_keys_whose_bytes_are_already_shown() {
     after.insert("notes/handout.css".into(), "100644:blue".into());
     let (plan, heard) = plan_with(Baseline::Shown(before));
 
-    plan.announce(&after, &SiteHashes::new(), |key| key == "research/index.html", 7);
-    plan.announce(&after, &SiteHashes::new(), |_| false, 8);
+    assert!(plan.announce(&after, &SiteHashes::new(), |key| key == "research/index.html", 7));
+    assert!(!plan.announce(&after, &SiteHashes::new(), |_| false, 8), "a show that names nothing reloads nothing");
 
     let heard = heard.0.lock().unwrap();
     assert_eq!(heard.len(), 1, "the render that wrote nothing changed sends nothing: {heard:?}");
@@ -3126,7 +3219,7 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
     // cancelled build records no stash.
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());
@@ -3142,7 +3235,7 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3202,7 +3295,7 @@ async fn a_save_between_the_builds_read_and_its_stash_is_built() {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3227,7 +3320,7 @@ async fn a_save_between_the_builds_read_and_its_stash_is_built() {
     let read = crate::build::render::blocking::source_metadata(None, b"# Note\n\nsecond\n").hash;
     assert_eq!(stash.sources.get("note.md").map(|m| m.hash.clone()), Some(read), "the stash holds the hash of the bytes build 2 read");
 
-    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]) };
+    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]), reason: None };
     assert!(request.gate_admits(&folder_key, "test").await, "the second save is admitted, not gated");
     build(edit()).await.expect("build 3");
     crate::system::build_records::records().forget_content_hashes(&folder_key);
@@ -3279,7 +3372,7 @@ async fn a_watch_rebuild_sends_file_changed_when_it_shows_the_render() {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3388,7 +3481,7 @@ async fn announce_one_save(evict_another_page: bool) {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger: BuildTrigger::Full,
+            trigger: BuildTrigger::Full, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3488,7 +3581,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let folder_key = root.as_str().to_string();
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());
@@ -3504,7 +3597,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3575,7 +3668,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
     let folder_key = root.as_str().to_string();
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());
@@ -3591,7 +3684,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3758,9 +3851,9 @@ fn source_asset_request_paths_markdown_never_emits() {
 fn source_asset_request_paths_excludes_moss_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(&root).staging_dir().join("assets")).unwrap();
     let kind = EventKind::Create(notify::event::CreateKind::Folder);
-    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build.nosync/staging/assets")]);
+    let out = source_asset_request_paths(&root, kind, &[MossPaths::new(&root).staging_dir().join("assets")]);
     assert!(out.is_empty(), ".moss build outputs must never notify the editor");
 }
 
@@ -4294,7 +4387,8 @@ fn an_atomic_save_of_a_known_page_is_a_content_edit() {
         BuildTrigger::Structural(_) => "structural",
         BuildTrigger::Full => "full",
         BuildTrigger::Unobserved => "unobserved",
-        BuildTrigger::ImagesSettled => "images-settled",
+        BuildTrigger::ImagesSettled { .. } => "images-settled",
+        BuildTrigger::VideosSettled => "videos-settled",
     };
     let renamed_over = || event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), &["a.md"]);
     assert_eq!(kind(renamed_over(), Some(&baseline)), "content");

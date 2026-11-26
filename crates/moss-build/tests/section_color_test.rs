@@ -3,6 +3,7 @@
 //! card for such a page carries the property too. A site that sets no `color:`
 //! builds as before.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -37,7 +38,7 @@ fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Re
         watch: false,
         start_server: false,
         host: cli_host_ports(folder_path),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -70,7 +71,7 @@ impl Site {
     }
 
     fn html(&self, rel: &str) -> String {
-        fs::read_to_string(self.0.join(".moss/build.nosync/staging").join(rel)).unwrap()
+        fs::read_to_string(MossPaths::new(&self.0).staging_dir().join(rel)).unwrap()
     }
 }
 
@@ -239,9 +240,9 @@ fn a_coloured_page_carries_a_readable_text_colour_for_each_theme() {
     assert!(contrast(&dark, bg_dark) >= 4.5, "dark {dark} on {bg_dark}: {body}");
     assert_ne!(light, "#f2d64b", "a pale yellow is darkened for the light page");
     // The stylesheet turns the two variants into the one a theme reads.
-    let css = fs::read_dir(site.0.join(".moss/build.nosync/staging"))
+    let css = fs::read_dir(MossPaths::new(&site.0).staging_dir())
         .unwrap()
-        .chain(fs::read_dir(site.0.join(".moss/build.nosync/staging/_moss")).into_iter().flatten())
+        .chain(fs::read_dir(MossPaths::new(&site.0).staging_dir().join("_moss")).into_iter().flatten())
         .filter_map(|e| fs::read_to_string(e.ok()?.path()).ok())
         .find(|c| c.contains("--moss-section-text:"))
         .expect("a stylesheet that defines --moss-section-text");

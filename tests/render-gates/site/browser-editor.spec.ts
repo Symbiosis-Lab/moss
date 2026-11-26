@@ -65,7 +65,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { png } from '../../e2e/helpers/contents-ruler-site';
-import { openEditor as openEditorFrames, useEditServe } from '../../e2e/helpers/edit-serve';
+import { openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -207,7 +207,8 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
   // The preview follows to the PDF's own address, and the shell asks what backs it.
   const backing = page.waitForResponse(
     (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('doc.pdf'),
-    { timeout: 15_000 },
+    // Its clock starts before the click and the viewer's mount, which take up to 15 s of their own on a loaded machine.
+    { timeout: 30_000 },
   );
   // Every PDF viewer the editor mounts or removes from here on, read as the test's last step.
   await editor.evaluate(() => {
@@ -458,6 +459,19 @@ test("an event's start and end open date and time controls that write what the b
   await expect.poll(file, { timeout: 15_000 }).toBe(fair(`start: ${today}\n`));
 });
 
+test("the shell follows the site's theme and page colour", async ({ page }) => {
+  const { shell, preview } = await openShell(page, serve, 'Hello garden.');
+  const pageColor = () => shell.evaluate(() => document.documentElement.style.getPropertyValue('--moss-page-color'));
+  const siteColor = () => preview.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--moss-color-bg').trim());
+  await expect.poll(pageColor, { timeout: 10_000 }).toBe(await siteColor());
+  const before = await pageColor();
+  const flipped = (await shell.evaluate(() => document.documentElement.dataset.theme)) === 'dark' ? 'light' : 'dark';
+  await preview.click('.nav-theme-btn');
+  await expect.poll(() => shell.evaluate(() => document.documentElement.dataset.theme), { timeout: 10_000 }).toBe(flipped);
+  await expect.poll(pageColor, { timeout: 10_000 }).not.toBe(before);
+  expect(await pageColor()).toBe(await siteColor());
+});
+
 test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
   const { editor } = await openEditor(page);
   await openTreeRoot(editor);
@@ -494,7 +508,9 @@ async function shots(page: Page, name: string, browserName: string) {
 test("a page's problem count shows once, and steps through its problems", async ({ page, browserName }) => {
   const { editor } = await openCasePage(page);
   const count = (path: string) => editor.locator(`.seg[data-path="${path}"] .tree-preflight-count`);
-  const colour = (selector: string) => editor.locator(selector).first().evaluate((el) => getComputedStyle(el).color);
+  // Read through the selector in one step: a build landing re-renders the breadcrumb's children, and a
+  // style read off a node it has just replaced is empty.
+  const colour = (selector: string) => editor.evaluate((s) => getComputedStyle(document.querySelector(s)!).color, selector);
 
   // The breadcrumb: the page's number, and no number on any folder above it;
   // each folder's chevron wears the number's colour instead.
@@ -512,13 +528,17 @@ test("a page's problem count shows once, and steps through its problems", async 
   });
   const button = editor.locator('.seg.bc-current button.tree-preflight-count');
   await expect(button).toHaveAccessibleName('7 unresolved references. Go to the next');
-  expect(await button.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer');
+  await expect(button).toHaveCSS('cursor', 'pointer');
   await button.click();
   await expect.poll(caretLine).toContain('slide-01.jpg');
   // A key that is not a modifier: WebKit shows the focus ring only after one.
   await page.keyboard.press('ArrowRight');
   await button.focus();
   expect(await button.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
+  // A build landing between the focus and the key rebuilds the button; the key must still reach it.
+  const focused = await button.elementHandle();
+  writeFileSync(join(serve.site, 'en', 'writing', 'other.md'), '---\ntitle: Other\n---\nStill nothing missing.\n');
+  await expect.poll(() => focused!.evaluate((el) => el.isConnected), { timeout: 15_000 }).toBe(false);
   await page.keyboard.press('Enter');
   await expect.poll(caretLine).toContain('slide-02.jpg');
 
@@ -692,6 +712,32 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
 });
 
+// Red only in WebKit without the fix: Chromium's in-place refresh succeeds mid-navigation, WebKit's fails and falls back to a reload.
+test('a build landing while a clicked page loads does not send the preview back', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  // Hold the clicked page's response so the build below always lands mid-navigation.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/zh-hans/**', async (route) => {
+    await held;
+    await route.continue().catch(() => {}); // a navigation the frame cancelled has nothing to continue
+  });
+  const refreshes: string[] = [];
+  page.on('console', (m) => m.text().startsWith('[preview-refresh]') && refreshes.push(m.text()));
+
+  await preview.click('a:has-text("To the Chinese pages")');
+  // Both the page being left and the page being loaded change, so the shell refreshes whichever it watches.
+  for (const file of ['index.md', join('zh-hans', 'index.md')]) {
+    writeFileSync(join(serve.site, file), readFileSync(join(serve.site, file), 'utf8') + '\nA held line.\n');
+  }
+  await expect.poll(() => refreshes.length, { timeout: 30_000, message: 'the build refreshed the preview' }).toBeGreaterThan(0);
+  release();
+
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
+  await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+});
+
 test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
   const { shell, editor, preview } = await openEditor(page);
   await preview.click('a:has-text("To the Chinese pages")');
@@ -759,7 +805,7 @@ test(PICTURE_GATE, async ({ page }) => {
     await shown('harbour');
     // A build that seals while the picture still encodes is the one that dropped the
     // sizes, so they are read from the first paint until the encode has staged its files.
-    const encoded = () => readdirSync(join(serve.site, '.moss'), { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
+    const encoded = () => existsSync(serve.buildDir) && readdirSync(serve.buildDir, { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
     for (const until = Date.now() + 120_000; ; ) {
       const [p, done] = [await picture('harbour'), encoded()];
       if (p) expect(p.sources, 'a build made while the picture encodes dropped its sizes').toBeGreaterThan(0);

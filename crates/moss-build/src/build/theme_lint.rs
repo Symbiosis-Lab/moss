@@ -4,7 +4,8 @@
 //! Best-effort scan: strips CSS block comments, then checks three surfaces
 //! against `moss-core`'s contract tables:
 //!
-//! 1. Retired class names — a closed list theme authors should migrate off.
+//! 1. Retired names (`moss_core::contract::retired`): classes and `--moss-*`
+//!    properties moss released and no longer writes, with what replaces them.
 //! 2. Custom-property references (`var(--moss-x)`) and declarations
 //!    (`--moss-x: ...`) against the design-token table
 //!    (`moss_core::contract::tokens`) and the escape-hatch table
@@ -55,7 +56,8 @@ use std::sync::LazyLock;
 
 use crate::build::scan::section_text::Rgb;
 
-use moss_core::contract::components::{retired_class_names, COMPONENTS};
+use moss_core::contract::components::COMPONENTS;
+use moss_core::contract::retired::{self, Retired, RetiredKind, RETIRED};
 use moss_core::contract::custom_props::CUSTOM_PROPS;
 use moss_core::contract::tokens::load_tokens;
 
@@ -82,7 +84,7 @@ pub fn lint_theme_css(css: &str, scheme: crate::build::page::color_scheme::Color
     let stripped = strip_comments(css);
     let mut warnings = Vec::new();
 
-    lint_retired_classes(&stripped, &mut warnings);
+    lint_retired_names(&stripped, &mut warnings);
     lint_custom_properties(&stripped, &mut warnings);
     lint_classes(&stripped, &mut warnings);
     if scheme == crate::build::page::color_scheme::ColorScheme::Auto {
@@ -288,15 +290,41 @@ fn lint_light_only_colours(stripped: &str, warnings: &mut Vec<String>) {
     ));
 }
 
-fn lint_retired_classes(stripped: &str, warnings: &mut Vec<String>) {
-    for class in retired_class_names() {
-        let pattern = format!(".{}", class);
-        if find_complete_class(stripped, &pattern) {
-            warnings.push(format!(
-                "theme uses retired class .{}: moss no longer emits it",
-                class
-            ));
+fn lint_retired_names(stripped: &str, warnings: &mut Vec<String>) {
+    for (r, _) in retired_uses(stripped) {
+        let uses = if r.kind == RetiredKind::Class { format!("selects .{}", r.name) } else { format!("uses {}", r.name) };
+        warnings.push(retired_warning(r, &uses));
+    }
+}
+
+/// Every retired class and property a comment-stripped stylesheet still
+/// names, with how many times: classes in table order, then properties by
+/// name. The build's warnings and `moss migrate --list` both read this.
+pub(crate) fn retired_uses(stripped: &str) -> Vec<(&'static Retired, usize)> {
+    let mut found: Vec<(&'static Retired, usize)> = RETIRED
+        .iter()
+        .filter(|r| r.kind == RetiredKind::Class)
+        .map(|r| (r, count_complete_class(stripped, &format!(".{}", r.name))))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    let mut properties: std::collections::BTreeMap<&'static str, (&'static Retired, usize)> = std::collections::BTreeMap::new();
+    for c in PROP_DECL.captures_iter(stripped).chain(VAR_REF.captures_iter(stripped)) {
+        if let Some(r) = retired::find(RetiredKind::Property, &c[1]) {
+            properties.entry(r.name).or_insert((r, 0)).1 += 1;
         }
+    }
+    found.extend(properties.into_values());
+    found
+}
+
+/// What the build tells a theme's author about a retired name it still uses.
+fn retired_warning(r: &Retired, uses: &str) -> String {
+    let when = r.retired_in.map_or_else(|| "before moss 0.6.6".to_string(), |v| format!("in moss {v}"));
+    let verb = if r.kind == RetiredKind::Class { "select" } else { "use" };
+    match r.replaced_by() {
+        Some(now) if r.aliased => format!("theme {uses}, renamed {when}: moss still writes it beside {now}; {verb} {now} instead"),
+        Some(now) => format!("theme {uses}, retired {when}: {}; {verb} {now} instead", r.note),
+        None => format!("theme {uses}, retired {when}: {}; nothing replaces it", r.note),
     }
 }
 
@@ -315,9 +343,11 @@ fn lint_custom_properties(stripped: &str, warnings: &mut Vec<String>) {
 
     // References: warn only when the name is neither a known token/escape
     // hatch nor something the theme declares itself.
+    let retired_property = |name: &str| retired::find(RetiredKind::Property, &format!("--{name}"));
+
     let mut warned_refs: Vec<&String> = referenced
         .iter()
-        .filter(|name| !known_tokens.contains(name.as_str()) && !declared.contains(*name))
+        .filter(|name| !known_tokens.contains(name.as_str()) && !declared.contains(*name) && retired_property(name).is_none())
         .collect();
     warned_refs.sort();
     for name in warned_refs {
@@ -333,7 +363,7 @@ fn lint_custom_properties(stripped: &str, warnings: &mut Vec<String>) {
     // the theme invents for its own use would be referenced somewhere.
     let mut warned_decls: Vec<&String> = declared
         .iter()
-        .filter(|name| !known_tokens.contains(name.as_str()) && !referenced.contains(*name))
+        .filter(|name| !known_tokens.contains(name.as_str()) && !referenced.contains(*name) && retired_property(name).is_none())
         .collect();
     warned_decls.sort();
     for name in warned_decls {
@@ -352,6 +382,7 @@ fn lint_classes(stripped: &str, warnings: &mut Vec<String>) {
         .captures_iter(stripped)
         .map(|c| c[1].to_string())
         .filter(|class| !known_classes.contains(class.as_str()))
+        .filter(|class| retired::find(RetiredKind::Class, class).is_none())
         .filter(|class| !class.starts_with("moss-embed-plugin-"))
         .collect::<HashSet<_>>()
         .into_iter()
@@ -399,11 +430,11 @@ fn nearest_name<'a>(needle: &str, candidates: impl Iterator<Item = &'a str>) -> 
         .unwrap_or_else(|| needle.to_string())
 }
 
-/// Does the CSS contain `pattern` as a complete class reference?
-/// A complete reference is followed by a character that is NOT a CSS-class
-/// continuation character (so `.moss-card-grid-overlay` does NOT match `.moss-card-grid`).
-fn find_complete_class(css: &str, pattern: &str) -> bool {
-    css.match_indices(pattern).any(|(idx, _)| {
+/// How many times the CSS names `pattern` as a complete class: followed by a
+/// character that cannot continue a class name, so `.moss-card-grid-overlay`
+/// is not `.moss-card-grid`.
+fn count_complete_class(css: &str, pattern: &str) -> usize {
+    css.match_indices(pattern).filter(|(idx, _)| {
         match css
             .get(idx + pattern.len()..)
             .and_then(|after| after.chars().next())
@@ -411,7 +442,7 @@ fn find_complete_class(css: &str, pattern: &str) -> bool {
             None => true,
             Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '-',
         }
-    })
+    }).count()
 }
 
 /// The browser's root font size, which moss's stylesheet leaves as it is.
@@ -908,16 +939,41 @@ mod tests {
         assert!(warnings[0].contains("--moss-color-accent"));
     }
 
-    /// Retired classes keep their existing, more specific migration-link
-    /// warning rather than falling into the generic unknown-class bucket.
+    /// A retired class gets one warning that names what replaces it, never
+    /// the generic unknown-class one.
     #[test]
-    fn retired_class_keeps_migration_warning() {
-        let retired = retired_class_names().next().expect("at least one retired class");
-        let css = format!(".{} {{ color: red; }}", retired);
-        let warnings = lint_theme_css(&css, ColorScheme::Auto);
+    fn retired_class_names_its_replacement() {
+        let warnings = lint_theme_css(".moss-card-grid-title { color: red; }", ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
-        assert!(warnings[0].contains("retired class"));
-        assert!(warnings[0].contains("no longer emits it"));
+        assert!(warnings[0].contains("retired before moss 0.6.6"), "{}", warnings[0]);
+        assert!(warnings[0].contains("select .moss-cards[data-layout=grid] .moss-card-title instead"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn retired_class_with_no_replacement_says_so() {
+        let warnings = lint_theme_css(".moss-series-nav-label { font-size: 12px; }", ColorScheme::Auto);
+        assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
+        assert!(warnings[0].contains("retired in moss 0.15.26"), "{}", warnings[0]);
+        assert!(warnings[0].contains("nothing replaces it"), "{}", warnings[0]);
+    }
+
+    /// The retired list reaches names without the `moss-` prefix, which the
+    /// unknown-class check cannot.
+    #[test]
+    fn retired_unprefixed_class_warns() {
+        let warnings = lint_theme_css(".callout-tip { border: 0; }", ColorScheme::Auto);
+        assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
+        assert!(warnings[0].contains(".callout[data-type=tip]"), "{}", warnings[0]);
+    }
+
+    /// A renamed property warns with its new name instead of falling back to
+    /// the browser default in silence.
+    #[test]
+    fn retired_property_names_its_replacement() {
+        let warnings = lint_theme_css("p { font-size: var(--moss-font-size); }", ColorScheme::Auto);
+        assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
+        assert!(warnings[0].contains("uses --moss-font-size, retired in moss 0.7.4"), "{}", warnings[0]);
+        assert!(warnings[0].contains("use --moss-reading-size instead"), "{}", warnings[0]);
     }
 
     /// An unknown class (not retired, not a component, not plugin-namespaced)

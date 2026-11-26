@@ -73,10 +73,14 @@ pub fn install(id: &str, folder: &Path, origin: &str, keys: &[&str]) -> Result<I
     }
     let site = folder.to_string_lossy().into_owned();
     let app_data = crate::infra::app_data::app_data_dir_early().ok_or("no app-data directory to keep the plugin catalog in")?;
+    let roots = crate::infra::app_data::AppRoots::running();
+    let settings = roots.as_ref().map(|roots| roots.config_path());
+    let preview_on = settings.as_deref().is_some_and(crate::infra::app_data::preview_features_in);
 
     // Reads the folder answers and records none: the command installs code,
     // and only the person, in the app, trusts a folder to run it.
-    enforce::install_headless(Some(&app_data), false);
+    let trust = roots.as_ref().map(super::registry_client::trust::root);
+    enforce::install_headless(Some(&app_data), trust.as_deref(), false);
     let refreshed = fetch::refresh_from(&app_data, origin, keys);
     let unreached = match &refreshed.index {
         fetch::RefreshOutcome::Updated => None,
@@ -90,7 +94,7 @@ pub fn install(id: &str, folder: &Path, origin: &str, keys: &[&str]) -> Result<I
     let notice = unreached.as_ref().filter(|_| have_catalog).map(|why| {
         format!("could not refresh the plugin catalog ({why}); using the copy cached {}", age(cached_at.as_deref()))
     });
-    crate::plugins::registry::install_plugin(id, &site).map_err(|e| match &unreached {
+    crate::plugins::registry::install_plugin_allowing(id, &site, preview_on, settings.as_deref()).map_err(|e| match &unreached {
         Some(why) if !have_catalog => format!("could not fetch the plugin catalog ({why}) and none is cached: {e}"),
         _ => e,
     })?;

@@ -430,25 +430,23 @@ fn owns_moss_requires_a_directory() {
 
 #[test]
 fn owns_moss_skips_moss_home_and_a_symlink_to_it() {
-    crate::infra::home::with_moss_home(|_| {
-        let tmp = tempfile::tempdir().unwrap();
-        let user = tmp.path().join("user");
-        fs::create_dir_all(user.join(".moss")).unwrap();
-        std::env::set_var("MOSS_HOME", user.join(".moss"));
-        assert!(!owns_moss(&user), "moss's own home is not a site marker");
+    let tmp = tempfile::tempdir().unwrap();
+    let user = tmp.path().join("user");
+    fs::create_dir_all(user.join(".moss")).unwrap();
+    let _home = crate::infra::home::thread_moss_home(&user.join(".moss"));
+    assert!(!owns_moss(&user), "moss's own home is not a site marker");
 
-        let alias = tmp.path().join("alias");
-        fs::create_dir_all(&alias).unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(user.join(".moss"), alias.join(".moss")).unwrap();
-            assert!(!owns_moss(&alias), "nor is a symlink to it");
-        }
+    let alias = tmp.path().join("alias");
+    fs::create_dir_all(&alias).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(user.join(".moss"), alias.join(".moss")).unwrap();
+        assert!(!owns_moss(&alias), "nor is a symlink to it");
+    }
 
-        let site = tmp.path().join("site");
-        fs::create_dir_all(site.join(".moss")).unwrap();
-        assert!(owns_moss(&site));
-    });
+    let site = tmp.path().join("site");
+    fs::create_dir_all(site.join(".moss")).unwrap();
+    assert!(owns_moss(&site));
 }
 
 #[test]

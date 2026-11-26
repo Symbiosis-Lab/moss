@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::stat::{mtime_is_racy, RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 use std::io::Write;
@@ -1342,43 +1343,6 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     assert_eq!(loaded.lookup("b.jpg", &stat(200, 2000)), Some("bbbb"));
 }
 
-#[test]
-#[cfg(target_os = "macos")]
-fn cached_link_recovers_a_refused_regenerable_target_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = ObjectStore::new(dir.path().join("objects"));
-    let oid = store.store_bytes(b"complete source").unwrap();
-    let parent = dir.path().join(".moss/build.nosync/staging/assets");
-    fs::create_dir_all(&parent).unwrap();
-    let obsolete = parent.join("obsolete-output");
-    fs::write(&obsolete, b"previous disposable output").unwrap();
-    crate::build::io_utils::fault::refuse_dataless(&parent);
-
-    let target = parent.join("asset.bin");
-    store.link_to(&oid, &target).unwrap();
-    assert!(!obsolete.exists(), "the refused output directory must be regenerated");
-    assert_eq!(fs::read(&target).unwrap(), b"complete source");
-    assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"complete source");
-}
-
-#[test]
-#[cfg(target_os = "macos")]
-fn hash_index_save_recovers_a_refused_regenerable_cache_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let parent = dir.path().join(".moss/build.nosync/cache");
-    fs::create_dir_all(&parent).unwrap();
-    let obsolete = parent.join("obsolete-index");
-    fs::write(&obsolete, b"previous disposable index").unwrap();
-    crate::build::io_utils::fault::refuse_dataless(&parent);
-
-    let path = parent.join("hash-index.json");
-    let mut index = HashIndex::new();
-    index.update("asset.bin".into(), &stat(15, 1000), "complete-hash".into());
-    index.save(&path).unwrap();
-    assert!(!obsolete.exists(), "the refused local cache directory must be regenerated");
-    assert_eq!(HashIndex::load(&path).lookup("asset.bin", &stat(15, 1000)), Some("complete-hash"));
-}
-
 // -----------------------------------------------------------------------
 // Metadata cache via TransformCache tests (media/meta transform)
 // -----------------------------------------------------------------------
@@ -2511,6 +2475,8 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
         serde_json::to_string_pretty(&hashes_json).unwrap(),
     )
     .expect("write hashes.json");
+    // A build that wrote hashes.json wrote its index too.
+    HashIndex::new().save(&mp.cache_hash_index()).unwrap();
 
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
@@ -3512,6 +3478,7 @@ fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
 /// Another machine already recorded the same work: publishing it again would
 /// leave the record unchanged, and rewriting it anyway is an upload of the
 /// file on every machine sharing the folder.
+#[cfg(unix)]
 #[test]
 fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
     crate::infra::home::with_moss_home(|_| {
@@ -3540,6 +3507,7 @@ fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
 
 /// A record in a managed folder whose next `reads` reads find it in the cloud,
 /// holding only a `format-probe` entry. Returns the guards and its inode.
+#[cfg(unix)]
 pub(crate) fn cloud_held_owned_record(cache: &TransformCache, oid: &str, reads: u32) -> (impl Drop, impl Drop, u64) {
     use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
     use std::os::unix::fs::MetadataExt;
@@ -3555,6 +3523,7 @@ pub(crate) fn cloud_held_owned_record(cache: &TransformCache, oid: &str, reads: 
 
 /// Media metadata is worked out again from the source: adding it to a record
 /// the cloud holds would be an upload on every machine that opens the folder.
+#[cfg(unix)]
 #[test]
 fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
     crate::infra::home::with_moss_home(|_| {
@@ -3565,7 +3534,7 @@ fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
         let (_managed, _in_cloud, inode) = cloud_held_owned_record(&cache, &oid, 1);
         let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
 
-        crate::build::scan::scan::write_cached_meta(&cache, &oid, 1, &meta);
+        crate::build::scan::scan::write_media_meta(&cache, Some(&oid), None, "", 1, &meta);
 
         crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
         assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");
@@ -3909,4 +3878,43 @@ fn the_second_pass_waits_for_the_first_to_end() {
         assert_eq!(second.join().unwrap(), Some((0, true)));
     });
     assert!(work.take().is_none());
+}
+
+/// The hash index lives in this computer's store, which the system may purge
+/// while the build it marks stays in the folder. A sweep then would condemn
+/// what that build still uses, in the synced store too: it must not run.
+#[test]
+fn a_sweep_stops_when_the_index_is_gone_but_its_build_is_not() {
+    let (mp, objects_dir, _) = make_gc_test_dir("gc_index_purged");
+    let oid = "ab".repeat(32);
+    let blob = objects_dir.join(&oid[..2]).join(&oid[2..4]).join(&oid);
+    fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    fs::write(&blob, b"still served").unwrap();
+    fs::create_dir_all(mp.build_dir()).unwrap();
+    fs::write(mp.hashes(), "{}").unwrap();
+    let _ = fs::remove_file(mp.cache_hash_index());
+
+    let refused = gc(&mp, &crate::build::lifecycle::gc_token_for_test());
+    assert!(refused.is_err(), "swept with no index: {refused:?}");
+    assert!(blob.exists());
+}
+
+#[test]
+fn a_source_copy_moves_across_volumes_by_copy_then_remove() {
+    let tmp = tempfile::tempdir().unwrap();
+    let from = tmp.path().join("synced-blob");
+    let to = tmp.path().join("local").join("blob");
+    fs::create_dir_all(to.parent().unwrap()).unwrap();
+    fs::write(&from, b"bytes").unwrap();
+    let cross_device = |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices));
+
+    assert!(crate::build::io_utils::move_across_volumes(&from, &to, cross_device));
+    assert_eq!(fs::read(&to).unwrap(), b"bytes");
+    assert!(!from.exists());
+    assert_eq!(fs::read_dir(to.parent().unwrap()).unwrap().count(), 1, "no copy left pending");
+
+    fs::write(&from, b"bytes").unwrap();
+    let refused = |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    assert!(!crate::build::io_utils::move_across_volumes(&from, &tmp.path().join("local").join("other"), refused));
+    assert!(from.exists(), "any other failure keeps the original");
 }

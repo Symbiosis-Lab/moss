@@ -1993,6 +1993,45 @@ mod tests {
         }
     }
 
+    /// A pack whose fine layers other than land are empty, as a smaller
+    /// pack in the same format would be, draws with every renderer and no
+    /// flag for it.
+    #[test]
+    fn every_renderer_draws_a_pack_whose_detail_layers_are_empty() {
+        let mut pack = crate::build::place_map::embedded().unwrap();
+        for layer in pack.tiers[1].layers.iter_mut().filter(|layer| layer.id != 2) {
+            layer.features.clear();
+            layer.feature_count = 0;
+        }
+        let context = PlaceMapContext::new(pack);
+        let point = ProjectedPoint::new(35.5, 33.89).unwrap();
+        let target = PlaceMapTarget {
+            places: vec![ResolvedPlace {
+                key: "places/probe".to_string(),
+                display: "Probe".to_string(),
+                longitude: Some(point.longitude),
+                latitude: Some(point.latitude),
+                precision: Precision::Exact,
+            }],
+            frame: Some(Frame::from_points(&[point], [Precision::Exact].into_iter()).unwrap()),
+            aggregate_name: None,
+            route: false,
+        };
+        let drawn = [
+            ("world", crate::build::place_map::emit_world_svg(&context)),
+            ("tile", crate::build::place_map::emit_tile_svg(&context, 20, 12)),
+            ("locator", emit_locator(&context, &target, SvgMapOptions::new("p", 0, "Probe", Precision::Exact)).unwrap().svg),
+            ("page map", emit_svg(&context, &target, "p", 0)),
+        ];
+        for (renderer, svg) in &drawn {
+            for name in ["lakes", "rivers", "ice", "salt", "reefs", "built-up"] {
+                assert!(!layer_body(svg, name).contains("<path"), "{renderer} draws an empty {name}");
+            }
+        }
+        assert!(layer_body(&drawn[2].1, "land").contains("<use"), "the locator still draws land");
+        assert!(layer_body(&drawn[3].1, "globe").contains("<path"), "the globe inset still draws land");
+    }
+
     fn world_frame() -> Option<Frame> {
         let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
         let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();

@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 
 fn registry() -> moss_core::contract::tokens::Tokens {
@@ -98,7 +99,7 @@ fn build(files: &[(&str, &str)]) -> (tempfile::TempDir, std::path::PathBuf, crat
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, body).unwrap();
     }
-    let out = root.join(".moss").join("build.nosync").join("site");
+    let out = MossPaths::new(&root).build_dir().join("site");
     std::fs::create_dir_all(&out).unwrap();
     let structure = crate::build::scan::scan::scan_folder(root.to_str().unwrap()).unwrap();
     let mut pending = crate::build::manifest::PendingManifest::for_build(Default::default(), crate::build::cloud_ledger::InputEvidence::new(&root));

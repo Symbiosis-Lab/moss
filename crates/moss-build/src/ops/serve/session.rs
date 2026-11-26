@@ -53,7 +53,7 @@ pub struct Session {
     rename_undo: RenameUndoStore,
     publish_dates: crate::editor::filesystem::PublishDateMemo,
     /// The server's live serve-dir pointer.
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
 }
 
 impl Session {
@@ -90,7 +90,7 @@ impl CommandHost for Session {
     }
 
     fn served_dir(&self) -> PathBuf {
-        self.site_dir.read().map(|d| d.clone()).unwrap_or_else(|e| e.into_inner().clone())
+        self.site_dir.read().map(|d| d.dir.clone()).unwrap_or_else(|e| e.into_inner().dir.clone())
     }
 
     fn publish(&self, event: &MossEvent) {
@@ -127,7 +127,7 @@ impl InvokeCtx {
     /// session now in force — authoritative across folder switches. Binding
     /// the vault already bound returns the existing session; binding a
     /// different one mints a fresh token, publishes it to that vault's
-    /// `.moss/build.nosync/http-token`, and retires the previous session — which is
+    /// the folder's `http-token` record on this computer, and retires the previous session — which is
     /// what invalidates every token handed out for the previous vault. A serve
     /// dir that resolves to no vault retires the session in force and returns
     /// `None`: the gated tiers then 401 and the token-free tier reports no
@@ -145,15 +145,15 @@ impl InvokeCtx {
     /// with the record, and a request that read the serve dir before a switch
     /// must not rebind the old vault over the new one afterwards. The publish
     /// is a small synchronous write that runs only on a switch; do not move
-    /// it off the lock. Best-effort on the publish itself: a vault whose build
-    /// dir cannot be written still gets a token, and a client that cannot read
+    /// it off the lock. Best-effort on the publish itself: a vault whose local
+    /// record cannot be written still gets a token, and a client that cannot read
     /// it is simply 401 — the read-only tier is unaffected.
-    pub fn bind(&self, site_dir: &Arc<RwLock<PathBuf>>) -> Option<Arc<Session>> {
+    pub fn bind(&self, site_dir: &crate::moss_paths::ServedCell) -> Option<Arc<Session>> {
         let mut session = self.session.write().unwrap_or_else(|e| e.into_inner());
         let vault = site_dir
             .read()
             .ok()
-            .and_then(|dir| VaultRoot::find_containing(&dir));
+            .map(|served| served.folder.clone());
         let Some(vault) = vault else {
             if let Some(previous) = session.take() {
                 previous.retired.cancel();
@@ -165,10 +165,14 @@ impl InvokeCtx {
         }
         let token = Arc::new(super::carrier_token::mint());
         match super::carrier_token::publish(vault.path(), &token) {
-            Ok(()) => log::info!(
-                target: "preview",
-                "HTTP carrier token published under .moss/build.nosync/ (loopback-readable)"
-            ),
+            Ok(()) => {
+                let path = super::carrier_token::token_path(vault.path());
+                // Discovery is required even when routine status output is quiet.
+                crate::build::cli_output::write_status_line(
+                    std::io::stderr().lock(),
+                    format_args!("HTTP carrier token file: {}", serde_json::json!(path.to_string_lossy())),
+                );
+            }
             Err(e) => log::warn!(target: "preview", "could not publish HTTP carrier token: {e}"),
         }
         let fresh = Arc::new(Session {
@@ -186,15 +190,19 @@ impl InvokeCtx {
     }
 }
 
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
+
 impl ServerHandle {
     /// Point the server at a new serve dir — the folder switch. Rebinds the
     /// carrier in the same step, so the previous vault's token and SSE
     /// streams are retired when the switch happens, not when the next
     /// carrier request happens to observe it (the desktop app talks Tauri
     /// IPC, so without this nothing guarantees such a request ever comes).
-    pub fn point_at(&self, dir: PathBuf) {
+    pub fn point_at(&self, served: crate::moss_paths::Served) {
         if let Ok(mut current) = self.site_dir.write() {
-            *current = dir;
+            *current = served;
         }
         if let Some(ctx) = &self.carrier {
             ctx.bind(&self.site_dir);

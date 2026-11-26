@@ -2,6 +2,7 @@
 //! exit code is non-zero, stderr names the file and quotes the parser's
 //! line and message, and stdout never claims a generated site.
 
+use moss_build::moss_paths::MossPaths;
 use std::process::{Command, Stdio};
 
 #[test]
@@ -35,5 +36,5 @@ fn unparseable_config_fails_the_build_and_quotes_the_parse_error() {
         "stderr:\n{stderr}"
     );
     assert!(!stdout.contains("Site generated") && !stdout.contains("Build complete"), "stdout:\n{stdout}");
-    assert!(!site_dir.join(".moss/build.nosync/current").exists());
+    assert!(!MossPaths::new(&site_dir).current_ptr().exists());
 }

@@ -2,6 +2,7 @@
 //! reach that picture's `<img>` wherever the picture sits: a gallery item, a collage
 //! cell, or a lone embed.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
@@ -19,7 +20,7 @@ fn build(folder: &Path) -> Result<String, String> {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -65,7 +66,7 @@ fn home_html(body: &str) -> String {
     std::fs::copy(root.join("Photos/tall.jpg"), root.join("Photos/海报 tall.jpg")).unwrap();
     let built = build(&root);
     assert!(built.is_ok(), "{built:?}");
-    let html = fs::read_to_string(root.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(&root).staging_dir().join("index.html")).unwrap();
     drop(site);
     html
 }

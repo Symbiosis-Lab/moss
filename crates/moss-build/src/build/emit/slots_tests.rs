@@ -50,8 +50,9 @@ impl Site {
         self.paths().staging_dir().join(rel)
     }
 
+    /// The store `ship_phase` reads: this computer's first, then the synced one.
     fn objects(&self) -> ObjectStore {
-        ObjectStore::new(self.paths().cache_objects())
+        ObjectStore::for_site(&self.paths())
     }
 
     /// One real build, awaited to its seal, persisted so the next `build` sees
@@ -521,6 +522,7 @@ fn materialize_and_promote_ships_the_sealed_bytes_of_a_page_the_stage_no_longer_
         crate::build::ship::next_promotion_epoch(),
         None,
         crate::build::ship::ShipVerdict::Ship,
+        None,
     )
     .expect("materialize");
 

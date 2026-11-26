@@ -31,11 +31,17 @@ pub struct Teaser {
 pub struct Article {
     pub title: String,
     pub html: String,
+    /// The page as written, in plain text: no title, no link back.
+    #[serde(default)]
+    pub text: String,
     #[serde(default)]
     pub description: Option<String>,
     /// Absolute, like a teaser's.
     #[serde(default)]
     pub cover: Option<String>,
+    /// `html` as an editor is given it, split at its pictures.
+    #[serde(default)]
+    pub blocks: Vec<super::pictures::Block>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +83,11 @@ fn hex(bytes: &[u8]) -> String {
 /// A page's absolute address on the site at `site_url`.
 pub fn page_url(site_url: &str, url_path: &str) -> String {
     format!("{}/{}", site_url.trim_end_matches('/'), moss_core::resolve::fuzzy_path::percent_encode_url(url_path.trim_start_matches('/')))
+}
+
+/// The site's own name, or its host when the build has none.
+pub fn site_name(opts: &ShapeOptions, site_url: &str) -> Option<String> {
+    opts.site_name.clone().or_else(|| url::Url::parse(site_url).ok().and_then(|url| url.host_str().map(str::to_string)))
 }
 
 /// Settings shared by previews and sends. Without a built output, math stays text.
@@ -130,25 +141,19 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         }
         if spec.takes(Form::Thread) && parts.len() > 1 && parts.iter().all(|p| spec.fits(&p.text)) {
             (Form::Thread, parts, None, None)
-        } else if spec.takes(Form::Long) {
-            let (mut html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
+        } else if let Some((article, included, omitted)) = long_article(post, &page, site_url, spec, opts) {
             included_pictures = included;
             omitted_pictures = omitted;
-            if opts.link_back {
-                let escape = crate::build::features::html_escape;
-                let host = url::Url::parse(site_url).ok().and_then(|url| url.host_str().map(str::to_string));
-                let name = escape(opts.site_name.as_deref().or(host.as_deref()).unwrap_or(&page));
-                let url = escape(&page);
-                let lang = super::record::effective_language(post, None, opts.lang.as_deref());
-                let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
-                html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
-            }
-            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), html, description: described(post), cover: cover(post, site_url) }))
+            (Form::Long, Vec::new(), None, Some(article))
         } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)
         } else {
-            return Err("the whole page, including its title and link back, fits none of this channel's declared forms".into());
+            let name = spec.name.as_deref().unwrap_or("This channel");
+            return Err(match spec.max_article_chars.filter(|_| spec.takes(Form::Long)) {
+                Some(max) => format!("{name} takes articles of up to {max} characters; this one is longer."),
+                None => format!("{name} doesn't take articles."),
+            });
         }
     };
     let pictures = if form == Form::Long { Vec::new() } else {
@@ -158,6 +163,57 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         pictures
     };
     Ok(Shaped { form, parts, teaser, article, pictures, included_pictures, omitted_pictures })
+}
+
+/// The article, where the channel takes one this long. The limit is checked
+/// on the article as plain text with its link back, as a network that takes
+/// no markup receives it.
+fn long_article(post: &ArticleInfo, page: &str, site_url: &str, spec: &ChannelSpec, opts: &ShapeOptions) -> Option<(Article, usize, usize)> {
+    if !spec.takes(Form::Long) { return None; }
+    let (html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
+    let mut html = super::pictures::clean(&html, &post.title);
+    if opts.link_back {
+        let escape = crate::build::features::html_escape;
+        let name = escape(site_name(opts, site_url).as_deref().unwrap_or(page));
+        let url = escape(page);
+        let lang = super::record::effective_language(post, None, opts.lang.as_deref());
+        let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
+        html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
+    }
+    if !spec.article_fits(&plain_text(&html)) { return None; }
+    let article = Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, text: lower(&post.content, page, site_url).text, description: described(post), cover: cover(post, site_url) };
+    Some((article, included, omitted))
+}
+
+/// HTML as plain text: each block and list item on its own line, a list
+/// item marked `- `, pictures and markup dropped.
+fn plain_text(html: &str) -> String {
+    use scraper::{Html, Node};
+    fn walk(node: ego_tree::NodeRef<'_, Node>, out: &mut String) {
+        match node.value() {
+            Node::Text(t) => out.push_str(t),
+            Node::Element(e) => {
+                let name = e.name();
+                if matches!(name, "script" | "style" | "figure") { return; }
+                if name == "br" { out.push('\n'); }
+                if name == "li" { out.push_str("- "); }
+                for child in node.children() { walk(child, out); }
+                if matches!(name, "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "blockquote" | "pre" | "div" | "ul" | "ol") { out.push_str("\n\n"); }
+            }
+            _ => for child in node.children() { walk(child, out); },
+        }
+    }
+    let mut out = String::new();
+    walk(Html::parse_fragment(html).tree.root(), &mut out);
+    let mut text = String::new();
+    let mut blank = 0;
+    for line in out.lines().map(str::trim_end) {
+        if line.is_empty() { blank += 1; continue; }
+        if !text.is_empty() { text.push_str(if blank > 0 { "\n\n" } else { "\n" }); }
+        blank = 0;
+        text.push_str(line);
+    }
+    text
 }
 
 /// Assess with the same selector as sends. An unknown publish address cannot
@@ -312,7 +368,7 @@ fn end_paragraph(text: &mut String) {
 }
 
 /// A link's address as a reader elsewhere can follow it.
-pub(super) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
+pub(crate) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
     // An address with its own scheme (https, mailto, tel) is kept as the author wrote it.
     if url::Url::parse(dest).is_ok() {
         return dest.to_string();
@@ -325,30 +381,25 @@ pub(super) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
         .unwrap_or_else(|_| format!("{}/{}", page_url.trim_end_matches('/'), dest))
 }
 
-/// The teaser and link: the title, the description (or the opening, cut at the
-/// last sentence end that fits), and the address, together within the limit.
+/// The link post for a page no other form takes: the title, the author's own
+/// `description` and the address. A description that does not fit whole is
+/// left out, never cut, and the page's text is never quoted.
 fn teaser(post: &ArticleInfo, spec: &ChannelSpec, page_url: &str, site_url: &str) -> Result<(Teaser, Part), String> {
     let title = if post.untitled || post.title.trim().is_empty() { String::new() } else { post.title.trim().to_string() };
-    let description = described(post).unwrap_or_else(|| {
-        let first = split_parts(&post.content).into_iter().next().unwrap_or_default();
-        lower(&first, page_url, site_url).text.split("\n\n").next().unwrap_or_default().to_string()
-    });
-    let compose = |desc: &str| {
-        [title.as_str(), desc, page_url].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n\n")
+    let compose = |desc: &str, url: &str| {
+        [title.as_str(), desc, url].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n\n")
     };
-    let fitted = fit(&description, |d| {
-        // The authored title and opening still obey the limit before a publish
-        // address exists. Only the mandatory final address is deferred.
-        let known = if site_url.is_empty() {
-            [title.as_str(), d].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
-        } else { compose(d) };
-        spec.fits(&known)
-    })
-        .ok_or_else(|| "the post's title and address alone are longer than this network allows".to_string())?;
+    // Before a publish address exists, only the final address is left out of the count.
+    let fits = |desc: &str| spec.fits(&compose(desc, if site_url.is_empty() { "" } else { page_url }));
+    let description = match described(post).map(|d| d.trim().to_string()).filter(|d| fits(d)) {
+        Some(d) => d,
+        None if fits("") => String::new(),
+        None => return Err("the post's title and address alone are longer than this network allows".to_string()),
+    };
     let cover = cover(post, site_url);
-    let text = compose(&fitted);
+    let text = compose(&description, page_url);
     let part = Part { links: addresses(&text), text };
-    Ok((Teaser { title, description: fitted, url: page_url.to_string(), cover }, part))
+    Ok((Teaser { title, description, url: page_url.to_string(), cover }, part))
 }
 
 fn described(post: &ArticleInfo) -> Option<String> {
@@ -359,38 +410,6 @@ fn described(post: &ArticleInfo) -> Option<String> {
 fn cover(post: &ArticleInfo, site_url: &str) -> Option<String> {
     let c = post.frontmatter.get("cover")?.as_str()?;
     Some(if c.contains("://") { c.to_string() } else { page_url(site_url, c) })
-}
-
-/// The longest prefix of `text` that `fits` and ends a sentence; else the
-/// longest that ends a word, with an ellipsis; else nothing at all.
-fn fit(text: &str, fits: impl Fn(&str) -> bool) -> Option<String> {
-    let text = text.trim();
-    if fits(text) {
-        return Some(text.to_string());
-    }
-    let ends = |pred: &dyn Fn(char) -> bool| -> Vec<usize> {
-        text.char_indices().filter(|(_, c)| pred(*c)).map(|(i, c)| i + c.len_utf8()).collect()
-    };
-    let sentence_ends = ends(&|c| matches!(c, '.' | '!' | '?' | '。' | '！' | '？' | '…'));
-    for end in sentence_ends.into_iter().rev() {
-        if fits(&text[..end]) {
-            return Some(text[..end].trim().to_string());
-        }
-    }
-    let mut cut: Vec<usize> = ends(&|c| c.is_whitespace() || is_wide(c));
-    cut.reverse();
-    for end in cut {
-        let candidate = format!("{}…", text[..end].trim_end());
-        if fits(&candidate) {
-            return Some(candidate);
-        }
-    }
-    fits("").then(String::new)
-}
-
-/// A character after which a line may break without a space (CJK).
-fn is_wide(c: char) -> bool {
-    matches!(c as u32, 0x3000..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
 }
 
 #[cfg(test)]

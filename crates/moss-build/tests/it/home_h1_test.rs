@@ -3,32 +3,9 @@
 //! opening hero stands in for the masthead, and a visible one otherwise; a
 //! page that opens with `# Title` already has one and adds none.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -50,9 +27,9 @@ fn home_html(home_body: &str) -> String {
     write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
     write(&tmp, "index.md", &format!("---\ntitle: Harbor Notes\n---\n\n{home_body}\n"));
     write(&tmp, "posts/first.md", "---\ntitle: First Post\n---\n\nHello.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html")).unwrap()
 }
 
 fn h1s(html: &str) -> Vec<String> {
@@ -109,9 +86,9 @@ fn page_saved_with_a_byte_order_mark_keeps_its_own_h1() {
     write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
     write(&tmp, "posts/note.md", "\u{feff}# A heading\n\nSaved by a Windows tool.\n");
     write(&tmp, "posts/host.md", "---\ntitle: Host\n---\n\n![[note]]\n\n![[note#A heading]]\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let staging = tmp.join(".moss/build.nosync/staging/posts");
+    let staging = MossPaths::new(&tmp).staging_dir().join("posts");
     let html = fs::read_to_string(staging.join("note/index.html")).unwrap();
     assert!(!html.contains('\u{feff}'), "{html}");
     assert_eq!(h1s(&html).iter().filter(|h| h.ends_with("|A heading")).count(), 1, "{html}");
@@ -130,9 +107,9 @@ fn folder_page_html(folder_note_body: &str) -> String {
     write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
     write(&tmp, "notes/Notes.md", &format!("---\ntitle: Field Notes\n---\n\n{folder_note_body}\n"));
     write(&tmp, "notes/first.md", "---\ntitle: First\n---\n\nHello.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/notes/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("notes/index.html")).unwrap()
 }
 
 #[test]
@@ -156,9 +133,9 @@ fn article_html(article_body: &str, nav: bool) -> String {
     let nav_line = if nav { "nav: true\n" } else { "" };
     write(&tmp, "posts/story.md", &format!("---\ntitle: The Story\n{nav_line}---\n\n{article_body}\n"));
     write(&tmp, "posts/other.md", "---\ntitle: Other\n---\n\nHello.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/posts/story/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("posts/story/index.html")).unwrap()
 }
 
 #[test]

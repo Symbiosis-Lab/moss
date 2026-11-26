@@ -129,9 +129,18 @@ body.moss-action-panel-open .moss-modal {
   max-width: calc(100% - var(--action-panel-width) - 32px);
 }
 
+/* Shells reserve the title row only when they actually mount it. Editor
+   webviews and standalone dialogs have no titlebar and stay window-centered. */
+body {
+  --moss-modal-titlebar-height: 0px;
+}
+body:has(#moss-titlebar) {
+  --moss-modal-titlebar-height: var(--moss-titlebar-height);
+}
+
 .moss-modal {
   position: fixed;
-  top: 50%;
+  top: calc(50% + var(--moss-modal-titlebar-height, 0px) / 2);
   left: 50%;
   transform: translate(-50%, -50%) scale(0.95);
   background: var(--moss-color-bg);

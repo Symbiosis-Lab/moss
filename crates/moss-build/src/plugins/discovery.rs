@@ -507,12 +507,11 @@ pub struct HookConfig {
     pub deploy: Option<String>,
 }
 
-/// Check whether a login-capable plugin needs connection for the given project.
-///
-/// Returns `true` when ALL of:
-///   - The plugin's `config.json` exists under `.moss/plugins/<plugin_id>/`
-///   - `boundUserName` is absent or empty
-///   - `login_dismissed` is not `true`
+/// Check whether a login-capable plugin needs connection for the given project:
+/// the folder records no account for it
+/// ([`account_binding`](crate::plugins::manager::accounts::account_binding))
+/// and the person has neither dismissed the sign-in (`login_dismissed` in the
+/// plugin's config) nor signed the folder out.
 ///
 /// This is the signal the manager's process run reports as
 /// `PipelineEvent::PluginNeedsConnection` before the hooks execute.
@@ -521,26 +520,8 @@ pub fn plugin_needs_connection(project_path: &str, plugin_id: &str) -> bool {
         .ok()
         .and_then(|c| c.get("login_dismissed").and_then(|v| v.as_bool()))
         .unwrap_or(false);
-    !plugin_is_bound(project_path, plugin_id) && !dismissed
-}
-
-/// Whether the plugin's per-folder config records a bound account
-/// (`boundUserName` present and non-empty).
-///
-/// `affirmBindingFromProfile` writes `boundUserName` ONLY on a genuine successful
-/// login — so this cleanly distinguishes a real login from a dismissed panel,
-/// unlike [`plugin_needs_connection`] which returns `false` for a dismiss too.
-/// Used by `connect_account` to fire the post-login process hook exactly once,
-/// only when login actually bound a previously-unbound folder.
-pub fn plugin_is_bound(project_path: &str, plugin_id: &str) -> bool {
-    get_plugin_config(project_path, plugin_id)
-        .ok()
-        .and_then(|c| {
-            c.get("boundUserName")
-                .and_then(|v| v.as_str())
-                .map(|s| !s.is_empty())
-        })
-        .unwrap_or(false)
+    use crate::plugins::manager::accounts::{account_binding, marked_signed_out};
+    account_binding(project_path, plugin_id).is_none() && !dismissed && !marked_signed_out(project_path, plugin_id)
 }
 
 // The `[hooks]` writer, `save_hook_config`, lives in `domain::config`
@@ -1183,85 +1164,6 @@ lang = "en"
         assert!(
             plugin_needs_connection(dir.path().to_str().unwrap(), "matters"),
             "login_dismissed=false + no boundUserName → needs_connection should be true"
-        );
-    }
-
-    // ─── plugin_is_bound + post-login-sync gate (download-after-login regression) ─
-
-    /// No config → not bound.
-    #[test]
-    fn test_is_bound_no_config() {
-        let dir = TempDir::new().unwrap();
-        assert!(!plugin_is_bound(dir.path().to_str().unwrap(), "matters"));
-    }
-
-    /// boundUserName present + non-empty → bound (a real login succeeded).
-    #[test]
-    fn test_is_bound_with_user() {
-        let dir = TempDir::new().unwrap();
-        write_plugin_config(&dir, "matters", r#"{"boundUserName":"@alice"}"#);
-        assert!(plugin_is_bound(dir.path().to_str().unwrap(), "matters"));
-    }
-
-    /// Empty boundUserName → not bound.
-    #[test]
-    fn test_is_bound_empty_user() {
-        let dir = TempDir::new().unwrap();
-        write_plugin_config(&dir, "matters", r#"{"boundUserName":""}"#);
-        assert!(!plugin_is_bound(dir.path().to_str().unwrap(), "matters"));
-    }
-
-    /// CRITICAL: a DISMISSED login must NOT read as bound. `plugin_needs_connection`
-    /// returns false for a dismiss (so it CANNOT distinguish dismiss from a real
-    /// login) — which is exactly why `connect_account` gates the post-login process
-    /// hook on `plugin_is_bound`, not `plugin_needs_connection`. A dismiss ⇒ no
-    /// spurious download.
-    #[test]
-    fn test_is_bound_dismissed_is_not_bound() {
-        let dir = TempDir::new().unwrap();
-        write_plugin_config(&dir, "matters", r#"{"login_dismissed":true}"#);
-        let p = dir.path().to_str().unwrap();
-        assert!(!plugin_is_bound(p, "matters"), "dismiss must not read as bound");
-        // The conflation the gate avoids: needs_connection is ALSO false for a
-        // dismiss, so gating the post-login sync on it would wrongly fire.
-        assert!(
-            !plugin_needs_connection(p, "matters"),
-            "dismiss ⇒ needs_connection is false too (the trap plugin_is_bound sidesteps)"
-        );
-    }
-
-    /// The `connect_account` gate `!bound_before && bound_after` fires the
-    /// download ONLY on a genuine login (unbound → bound), and is inert on a
-    /// dismiss and on an already-bound folder (which the next build syncs).
-    #[test]
-    fn test_post_login_sync_gate_fires_only_on_real_login() {
-        // Fresh unbound folder → real login binds it → gate fires.
-        let dir = TempDir::new().unwrap();
-        let p = dir.path().to_str().unwrap();
-        write_plugin_config(&dir, "matters", r#"{}"#);
-        let bound_before = plugin_is_bound(p, "matters");
-        write_plugin_config(&dir, "matters", r#"{"boundUserName":"@alice"}"#);
-        assert!(
-            !bound_before && plugin_is_bound(p, "matters"),
-            "unbound → bound must fire the post-login download"
-        );
-
-        // Already-bound re-login → gate inert (no spurious re-sync).
-        let bound_before2 = plugin_is_bound(p, "matters");
-        assert!(
-            !(!bound_before2 && plugin_is_bound(p, "matters")),
-            "already-bound re-login must NOT fire the download"
-        );
-
-        // Dismiss on a fresh folder → still unbound → gate inert.
-        let dir2 = TempDir::new().unwrap();
-        let p2 = dir2.path().to_str().unwrap();
-        write_plugin_config(&dir2, "matters", r#"{}"#);
-        let bb = plugin_is_bound(p2, "matters");
-        write_plugin_config(&dir2, "matters", r#"{"login_dismissed":true}"#);
-        assert!(
-            !(!bb && plugin_is_bound(p2, "matters")),
-            "dismissed login must NOT fire the download"
         );
     }
 }

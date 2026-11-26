@@ -3,6 +3,7 @@
 //! as nested. Built through the real CLI, because the closer rule is applied
 //! in the markdown pipeline, not only in the parser.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -35,7 +36,7 @@ fn a_hero_nested_in_a_same_length_fence_stays_inside_its_block() {
         .expect("run moss-cli");
     assert!(out.status.success(), "build must be clean; stderr:\n{}", String::from_utf8_lossy(&out.stderr));
 
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).expect("index.html is built");
+    let html = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("index.html")).expect("index.html is built");
     assert!(!html.contains(":::"), "no fence may survive as literal text:\n{html}");
     let body = &html[html.find("<main").expect("a page body")..];
     let block = body.find("id=\"crew\"").expect("the crew block is built");
@@ -44,7 +45,7 @@ fn a_hero_nested_in_a_same_length_fence_stays_inside_its_block() {
     let after = body.find("After the block.").expect("the text after the block is built");
     assert!(block < hero && hero < still && still < after, "{body}");
 
-    let built = std::fs::canonicalize(site.join(".moss/build.nosync/current")).unwrap();
+    let built = std::fs::canonicalize(MossPaths::new(&site).current_ptr()).unwrap();
     let files: Vec<String> = std::fs::read_dir(&built).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     assert!(files.iter().any(|f| f == "crew.w800.webp"), "the nested hero's rung is built: {files:?}");
     assert!(files.iter().any(|f| f == "crew.jpg" || f == "crew.webp"), "the nested hero's base is built: {files:?}");

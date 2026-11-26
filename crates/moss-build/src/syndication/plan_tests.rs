@@ -246,7 +246,7 @@ fn unavailable_pages_are_skipped_before_any_new_record_is_written() {
         let m = map(vec![article.clone()]);
         let inputs = PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &config, site_url, previously_live: None, edited_sources: &HashSet::new() };
         let plans = decide(&inputs, &records);
-        assert!(matches!(&actions(&plans)[0].2, Action::Unavailable { reason } if reason.contains("fits none")));
+        assert!(matches!(&actions(&plans)[0].2, Action::Unavailable { reason } if reason.contains("take articles")));
         apply(plans, &records, site_url, Some(&m), &HashMap::new());
         assert!(!records.exists("u", "bluesky"));
     }
@@ -293,13 +293,13 @@ fn unavailable_first_work_cancels_and_resumes_on_a_fitting_edit() {
         let mut impossible = article.clone();
         impossible.content = "too long ".repeat(80);
         let (plan, _) = replan_edit(&records, impossible);
-        assert!(matches!(&plan[0].action, Action::Unavailable { reason } if reason.contains("fits none")));
+        assert!(matches!(&plan[0].action, Action::Unavailable { reason } if reason.contains("take articles")));
         let blocked = records.get("u", "bluesky").unwrap();
         assert_eq!(blocked.next_op(false), None, "stale first publication remains sendable: {state:?}");
         assert_eq!(blocked.next_op(true), None);
         assert_eq!(blocked.state, State::Unavailable);
         assert!(blocked.post.is_none());
-        assert!(blocked.reason.as_deref().unwrap().contains("fits none"));
+        assert!(blocked.reason.as_deref().unwrap().contains("take articles"));
         let mut fitting = article;
         fitting.content = "Fits again.".into();
         replan_edit(&records, fitting);

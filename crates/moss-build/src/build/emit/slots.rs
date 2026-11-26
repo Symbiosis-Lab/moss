@@ -51,7 +51,7 @@ pub fn apply_to_stage_and_manifest(
         record.save(paths);
     }
     let object_store = crate::build::cache::ObjectStore::for_slot_pass(paths);
-    let transform_cache = crate::build::cache::TransformCache::over(paths, &object_store);
+    let transform_cache = crate::build::cache::TransformCache::for_slot_pass(paths, &object_store);
     // Emit the feature stylesheets the resolved slots link to, BEFORE the
     // injection that writes those <link> tags into pages. Slot resolution can
     // name a content-hashed file but has no manifest to write one; this is the

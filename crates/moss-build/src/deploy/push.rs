@@ -405,7 +405,7 @@ async fn push_site_inner_impl(
                                 if e.kind() == std::io::ErrorKind::NotFound {
                                     format!(
                                         "Manifest claims '{}' exists but it's missing on disk. \
-                                         Your build cache (.moss/build.nosync/hashes.json) may be stale. \
+                                         Your build record (hashes.json) may be stale. \
                                          Try rebuilding the site. Underlying error: {}",
                                         file_path, e
                                     )
@@ -668,16 +668,17 @@ async fn push_site_inner_impl(
         ],
     });
 
-    // Use the env-derived URL rather than the server-echoed one so staging
-    // deploys surface the correct staging URL (not the prod-shaped echo).
-    // Mirrors the already-fixed short-circuit paths at :324/:346.
+    // The address hosting serves the site at, as it answered: which of the
+    // environment's suffixes a site is under is the server's to say, and the
+    // next build bakes what is stored here.
     //
     // This is the SUBDOMAIN url on purpose: `last_deployment_url` must stay
     // the original serving URL even when a custom domain exists (the publish
     // panel's "Also redirects from …" caption derives from it — see
     // `build_deployment_status`). The user-facing success URL is resolved
     // separately below, after the domain orchestrator has run.
-    let subdomain_url = format!("https://{}{}", site_id, environment.site_suffix());
+    let hosted = crate::deploy::hosted_address(&environment, &site_id, &commit_result.url);
+    let subdomain_url = hosted.clone().unwrap_or_else(|| environment.assumed_site_url(&site_id));
     let deployed_at = chrono::DateTime::from_timestamp(commit_result.timestamp as i64, 0)
         .unwrap_or_else(chrono::Utc::now)
         .to_rfc3339();
@@ -688,7 +689,7 @@ async fn push_site_inner_impl(
             deployed_at,
             dns_target: moss_dns_target,
             generation_id: Some(generation.clone()),
-            // No site_url: moss derives it from site_id at build time.
+            site_url: hosted,
             ..Default::default()
         },
     ) {
@@ -2235,6 +2236,119 @@ mod tests {
         let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
         assert!(matches!(result, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {result:?}");
         assert_profile_upload_count(dir.path());
+    }
+
+    /// One hosted publish of a one-file site, its commit answered with the
+    /// address `answered`. Returns the folder and the address the publish
+    /// reported; the caller has pinned the environment.
+    async fn hosted_publish_answered_with(answered: &str) -> (tempfile::TempDir, String) {
+        let addr = mock_seta_sequence(vec![
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            json_200(r#"{"need":["index.html"],"remove":[]}"#),
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            json_200(&format!(r#"{{"url":"{answered}","files_updated":1,"files_removed":0,"timestamp":1700000000}}"#)),
+        ])
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"her-blog\"\n").unwrap();
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        let sp = ServedPath::from_source("index.html").unwrap();
+        pending.register_hashed(&sp, &crate::types::content::file_entry("0000000000000000"), HashBucket::Files);
+        let sealed = pending.seal();
+
+        let identity = Identity::generate().expect("generate identity");
+        let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        std::fs::write(gen_dir.join("index.html"), b"<html>x</html>").unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "her-blog",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+        let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
+        let Ok(PushResult::Success { url, .. }) = result else { panic!("got: {result:?}") };
+        (dir, url)
+    }
+
+    /// What a folder's record and its next build say the site's address is.
+    fn recorded_and_built_address(folder: &Path) -> (Option<String>, Option<String>, String) {
+        let folder = folder.to_str().unwrap();
+        let record = crate::build::site_config::get_domain_config(folder).unwrap();
+        let built = crate::build::site_url::resolve_for_project(folder, None).unwrap();
+        (record.site_url, record.last_deployment_url, built.as_str().to_string())
+    }
+
+    /// Hosting says which of its domains a site is served under, and the next
+    /// build bakes that address without asking again. Ablated by deleting
+    /// `site_url: hosted` from the record `push_site_inner` writes.
+    #[tokio::test]
+    async fn a_hosted_publish_stores_the_address_hosting_answered_and_the_next_build_bakes_it() {
+        let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
+        let (dir, reported) = hosted_publish_answered_with("https://her-blog.mosspub.page").await;
+        let page = "https://her-blog.mosspub.page".to_string();
+        assert_eq!(reported, page);
+        assert_eq!(recorded_and_built_address(dir.path()), (Some(page.clone()), Some(page.clone()), page));
+    }
+
+    /// The answer is another machine's word. One that is not this site's
+    /// address on this environment's hosting is not stored, and the folder
+    /// keeps the address it was assumed to be at.
+    #[tokio::test]
+    async fn a_hosted_publish_does_not_store_an_address_that_is_not_this_sites() {
+        let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
+        for answered in [
+            "https://evil.example",
+            "https://other-site.mosspub.page",
+            "https://her-blog-test.mosspub.page",
+            "https://her-blog.mosspub.page.evil.example",
+            "http://her-blog.mosspub.page",
+        ] {
+            let (dir, reported) = hosted_publish_answered_with(answered).await;
+            let assumed = "https://her-blog.mosspub.com".to_string();
+            assert_eq!(reported, assumed, "{answered}");
+            assert_eq!(recorded_and_built_address(dir.path()), (None, Some(assumed.clone()), assumed), "{answered}");
+        }
+    }
+
+    /// The same through `--prebuilt`. Ablated by deleting `site_url: hosted`
+    /// from the record `push_prebuilt_inner` writes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_prebuilt_publish_stores_the_address_hosting_answered() {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
+        for (answered, stored, serving) in [
+            ("https://behind-test.mosspub.page", Some("https://behind-test.mosspub.page"), "https://behind-test.mosspub.page"),
+            ("https://evil.example", None, "https://behind-test.mosspub.com"),
+        ] {
+            let folder = folder_that_last_published(true);
+            let site = prebuilt_site();
+            let addr = mock_seta_sequence(vec![
+                json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+                json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+                json_200(r#"{"need":["index.html"],"remove":[]}"#),
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                json_200(&format!(r#"{{"url":"{answered}","files_updated":1,"files_removed":0,"timestamp":1790258580}}"#)),
+            ])
+            .await;
+            let published = with_seta_url(
+                addr,
+                crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
+            )
+            .await;
+            let Ok(PushResult::Success { url, .. }) = published else { panic!("got: {published:?}") };
+            assert_eq!(url, serving, "{answered}");
+            let (stored_url, last_url, _) = recorded_and_built_address(folder.path());
+            assert_eq!((stored_url.as_deref(), last_url.as_deref()), (stored, Some(serving)), "{answered}");
+        }
     }
 
     fn assert_profile_upload_count(folder: &Path) {

@@ -25,7 +25,7 @@ export const LENS_WITH_IMAGE = [true, true, true, true, true, true, false];
 /** The section whose picture is cropped to a focal point, and that point. */
 export const FOCAL_ROW = 2;
 export const FOCUS_POINT = "20% 70%";
-export const MANY = 40;
+export const MANY = 80;
 /** A band under the open list, light in the light theme and dark in the dark one. */
 export const BAND_LIGHT = "rgb(214, 226, 240)";
 export const BAND_DARK = "rgb(30, 50, 80)";

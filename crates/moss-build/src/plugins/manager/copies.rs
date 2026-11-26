@@ -14,7 +14,8 @@ pub struct CopyChannel {
     pub spec: ChannelSpec,
     /// Hosts its copies live on, so a `syndicated:` address there is taken as
     /// this channel's copy rather than posted again: the manifest's `domains`
-    /// (else `domain`), and the host of the setting `host_setting` names.
+    /// (else `domain`), the host of the setting `host_setting` names, and the
+    /// host of the account the folder is signed in to.
     pub domains: Vec<String>,
     /// The name its network goes by, which a `syndicate:` entry may use for it.
     pub name: Option<String>,
@@ -51,8 +52,7 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .filter(|p| installed.is_installed(&p.manifest.name))
         .filter_map(|p| {
             let mut spec = copy_spec(&p.manifest)?.clone();
-            let declared = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
-            let mut domains: Vec<String> = declared.iter().filter_map(|d| host_of(d)).collect();
+            let mut domains: Vec<String> = p.manifest.declared_domains().iter().filter_map(|d| host_of(d)).collect();
             if spec.host_setting.is_some() || spec.long_setting.is_some() {
                 let config = super::hook_context::hook_config_for_plugin(project_path, p);
                 if let Some(key) = &spec.host_setting {
@@ -62,8 +62,10 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
                     spec.forms.retain(|form| *form != Form::Long);
                 }
             }
+            domains.extend(super::accounts::account_host(project_path, &p.manifest.name).as_deref().and_then(host_of));
             let channel = p.manifest.contributes.as_ref().and_then(|c| c.channel.as_ref());
             let name = channel.and_then(|c| c.display_name.clone()).or_else(|| p.manifest.display_name.clone());
+            spec.name = name.clone();
             Some((p.manifest.name.clone(), CopyChannel { spec, domains, name }))
         })
         .collect()
@@ -136,8 +138,7 @@ impl PluginManager {
         match self.execute_hook_with_result(&plugin, hook, &context).await {
             Ok(Some(result)) => CopyCall::Answered(result),
             Ok(None) => CopyCall::Unknown(format!("{hook} returned no result")),
-            // The engine reports a missing export by this exact substring.
-            Err(e) if e.contains("Hook function not found") => CopyCall::NoExport,
+            Err(e) if crate::engine::is_missing_export(&e) => CopyCall::NoExport,
             Err(e) => CopyCall::Unknown(e),
         }
     }
@@ -161,6 +162,7 @@ mod tests {
         std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
         let channels = crate::syndication::landing::channels(root);
         assert_eq!(channels["social"].domains, ["social.example.net"]);
+        assert_eq!(channels["social"].spec.name.as_deref(), Some("Social"), "a refusal names the channel");
     }
 
     #[test]

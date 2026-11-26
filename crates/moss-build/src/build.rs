@@ -68,6 +68,8 @@
 //! - `ship::ship_phase` — writes the generation from the sealed manifest.
 
 pub mod pipeline;
+pub mod reason;
+pub use reason::BuildReason;
 pub mod cloud_ledger;
 pub(crate) mod cloud_prefetch;
 pub mod cloud_provider;
@@ -222,22 +224,39 @@ pub enum BuildTrigger {
     /// first. The gates may prove from the last sealed manifest what changed
     /// since (`incremental_gates::ChangeProof`), and render everything when
     /// they cannot. Opt-in: `Full` stays the answer for a caller that needs
-    /// every page rendered, such as a publish.
+    /// every page rendered, such as `moss build --strict`.
     Unobserved,
     /// Pictures the last render could not finish have settled (their blur and
     /// colour, `media::promise`). Proved from the last seal like `Unobserved`,
     /// which may not hold its media settled; renders the pages that show one.
-    ImagesSettled,
+    ///
+    /// `edited`: a save merged into it, so the user started this build and it
+    /// announces itself; the render is the same either way.
+    ImagesSettled { edited: bool },
+    /// A video's poster or streams settled. Renders every page, as `Full`
+    /// does, because a video output can change a page no verdict models.
+    VideosSettled,
 }
 
 impl BuildTrigger {
+    /// Whether the shells hear this build's progress. A re-render only media
+    /// settling started is not one the user asked for, so the line, already
+    /// on "Updated", stays there; its errors and its completion still arrive.
+    pub fn announces(&self) -> bool {
+        match self {
+            BuildTrigger::ImagesSettled { edited } => *edited,
+            BuildTrigger::VideosSettled => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::Structural(_) | BuildTrigger::ContentOnly(_) => true,
+        }
+    }
+
     /// A rebuild for paths the watcher saw, rather than a build that stands
     /// alone or starts a session. Every variant is named, so a new one has to
     /// choose.
     pub fn is_watch_batch(&self) -> bool {
         match self {
             BuildTrigger::ContentOnly(_) | BuildTrigger::Structural(_) => true,
-            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled { .. } | BuildTrigger::VideosSettled => false,
         }
     }
 
@@ -256,9 +275,12 @@ impl BuildTrigger {
     /// it may absorb only triggers caused by a disk change, so every variant
     /// is named below and a new one has to choose. `ImagesSettled` absorbs
     /// those and `Unobserved` alike: its proof is the same walk, and the
-    /// pictures it owes still have to render.
+    /// pictures it owes still have to render; absorbing anything but another
+    /// settle makes it `edited`. `VideosSettled` renders every page, so it
+    /// stays itself only beside a quiet settle and is `Full` beside anything
+    /// the user started.
     pub fn merge(self, other: BuildTrigger) -> BuildTrigger {
-        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved};
+        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved, VideosSettled};
         fn union(mut a: Vec<PathBuf>, b: Vec<PathBuf>) -> Vec<PathBuf> {
             for p in b {
                 if !a.contains(&p) {
@@ -269,7 +291,11 @@ impl BuildTrigger {
         }
         match (self, other) {
             (Full, _) | (_, Full) => Full,
-            (ImagesSettled, _) | (_, ImagesSettled) => ImagesSettled,
+            (VideosSettled, VideosSettled | ImagesSettled { edited: false })
+            | (ImagesSettled { edited: false }, VideosSettled) => VideosSettled,
+            (VideosSettled, _) | (_, VideosSettled) => Full,
+            (ImagesSettled { edited: a }, ImagesSettled { edited: b }) => ImagesSettled { edited: a || b },
+            (ImagesSettled { .. }, _) | (_, ImagesSettled { .. }) => ImagesSettled { edited: true },
             (Unobserved, Unobserved | ContentOnly(_) | Structural(_))
             | (ContentOnly(_) | Structural(_), Unobserved) => Unobserved,
             (Structural(a), Structural(b))
@@ -318,6 +344,9 @@ pub struct PipelineConfig {
     /// What triggered this build — see `BuildTrigger`. Read by
     /// `incremental_gates::ChangeProof::for_build`.
     pub trigger: BuildTrigger,
+    /// Why the host asked for this build, printed on its `build.summary` line.
+    /// `None` where the host does not say, as in the CLI and tests.
+    pub reason: Option<BuildReason>,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
     /// callers cannot rely on a background task to fill the link-meta or
@@ -556,7 +585,7 @@ fn collect_native_slots_for_documents(
         let sections =
             crate::build::features::email::site_audience_list(Some(site_lang), &pages);
         let meta_path =
-            crate::moss_paths::MossPaths::new(Path::new(folder_path)).build_dir().join("site-languages.json");
+            crate::moss_paths::MossPaths::new(Path::new(folder_path)).site_languages();
         if let Ok(json) = serde_json::to_string(&sections) {
             let _ = crate::build::io_utils::write_output(&meta_path, json.as_bytes());
         }
@@ -690,19 +719,27 @@ pub fn sample_cache_keys() -> crate::build::ports::CacheKeyInputs {
     }
 }
 
-/// Should this build's in-memory content hashes become the watcher's refresh
-/// baseline? Only when the build actually became what the preview shows.
+/// Makes `hashes` the watcher's refresh baseline, only while `render` is what
+/// the preview shows.
 ///
-/// The stash must describe what the screen shows. The pipeline shows this
-/// build's staging output only when `publishable` is true
-/// (`lifecycle::show_render`), and a cancelled build early-returns before it
-/// (with `publishable: false, cancelled: true`). Stashing a non-switched
-/// build's hashes poisons the baseline: the next publishable build's
-/// `changed_output_files` diff (`watch::RefreshPlan`) then compares
-/// against output the user never saw, drops pages edited before the withheld
-/// build, and the preview silently never refreshes.
-pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
-    publishable && !cancelled
+/// A withheld render was never shown and a cancelled build has no render.
+/// Stashing either's hashes poisons the baseline: the next build's
+/// `changed_output_files` diff (`watch::RefreshPlan`) then compares against
+/// output the user never saw, drops pages edited before it, and the preview
+/// silently never refreshes. An older render's tail is refused the same way
+/// once a newer render is shown.
+///
+/// The top-level listing the build took before its scan rides the same guard:
+/// the sweep skips an entry-set change only when a shown build listed it.
+pub(crate) fn stash_shown_build(folder_path: &str, render: Option<&crate::build::lifecycle::Render>, hashes: crate::types::content::SiteHashes, listing: Option<Vec<PathBuf>>) {
+    let Some(render) = render else { return };
+    render.while_shown(|| {
+        let records = crate::system::build_records::records();
+        records.record_content_hashes(folder_path, hashes);
+        if let Some(listing) = listing {
+            records.record_scanned_listing(folder_path, listing);
+        }
+    });
 }
 
 /// Run one build end to end, then log the single `build.summary` INFO line
@@ -712,7 +749,20 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// `Result<String, String>` has no room to carry timing data back out, and
 /// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
 /// returns, not read after the fact from a task that no longer exists.
-pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+pub async fn run_pipeline(mut config: PipelineConfig) -> Result<String, String> {
+    if !config.trigger.announces() {
+        config.progress = std::sync::Arc::new(ports::reporter::Unannounced(config.progress));
+        let host = &mut config.host.services.reporter;
+        *host = std::sync::Arc::new(ports::reporter::Unannounced(host.clone()));
+    }
+    // Ownership precedes migrations, cache leases and render/output writes.
+    // The server retains a shared guard when this build returns.
+    let _owner = crate::ops::serve::ownership::acquire_for_folder(
+        config.source(), crate::ops::serve::ownership::HostKind::Cli,
+        crate::system::app_version().to_string(), String::new(),
+        if config.start_server && config.watch { crate::ops::serve::ownership::OnConflict::StandBy }
+        else { crate::ops::serve::ownership::OnConflict::Refuse }, None,
+    ).await?;
     let _activity = crate::platform::begin_build();
     let pipeline_start = std::time::Instant::now();
     let (result, collector) = crate::build::phase::with_collector(async {
@@ -726,24 +776,46 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         pipeline_start.elapsed(),
         if result.is_ok() { "ok" } else { "error" },
         &config.trigger,
+        config.reason,
     );
-    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger);
+    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger, config.reason);
     result
 }
 
 use crate::build::media::promise::{drive_passes, Pass, PassOutcome};
 
 async fn run_passes(config: &PipelineConfig) -> Result<String, String> {
-    let (outcome, completion_held) = drive_passes(config.plugins, |pass| run_pipeline_body(config, pass)).await?;
-    if completion_held {
-        emit_build_complete(&config.progress, outcome.port, outcome.is_empty);
+    let passes = drive_passes(config.plugins, |pass| run_pipeline_body(config, pass)).await;
+    end_build(&config.progress, &config.host.events, passes)
+}
+
+/// Tells the shells how the whole build ended. Only the passes' joint result
+/// counts: a second pass that fails leaves the first pass's sealed site.
+pub(crate) fn end_build(progress: &ProgressSink, events: &ProgressSink, passes: Result<(PassOutcome, bool), BuildStopped>) -> Result<String, String> {
+    match passes {
+        Ok((outcome, completion_held)) => {
+            if completion_held {
+                emit_build_complete(progress, outcome.port, outcome.is_empty, None);
+            }
+            Ok(outcome.message)
+        }
+        Err(stopped) => {
+            report_failure(events, &stopped);
+            Err(stopped.into_message())
+        }
     }
-    Ok(outcome.message)
+}
+
+/// Tells the shells a build failed, so the line does not stay on "Updating…".
+pub(crate) fn report_failure(events: &ProgressSink, stopped: &BuildStopped) {
+    if !stopped.shells_know() {
+        events.report(&progress::PipelineEvent::Error { phase: "build".to_string(), message: stopped.message().to_string() });
+    }
 }
 
 /// The "Build complete" progress event. `port` is what the preview server is
-/// listening on right now, if one is.
-fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: bool) {
+/// listening on right now, if one is; `reloads` is whether a paint follows it.
+fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: bool, reloads: Option<bool>) {
     progress::emit_event(
         progress,
         &progress::PipelineEvent::Progress {
@@ -753,17 +825,18 @@ fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: boo
             completed: true,
             port,
             is_empty: Some(is_empty),
+            reloads,
         },
     );
 }
 
-async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOutcome, String> {
+async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOutcome, BuildStopped> {
     use crate::build::phase::PhaseTrace;
     let _pipeline_trace = PhaseTrace::start("run_pipeline");
     let folder_path = config.root.as_str().to_string();
 
     if folder_path.is_empty() {
-        return Err("Empty folder path provided".to_string());
+        return Err("Empty folder path provided".into());
     }
 
     // This build's ordered identity is acquired before any work that can
@@ -780,6 +853,13 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // pipeline's background handle, and a retried attempt takes a fresh one if
     // the first attempt's handle took it down with it.
     let lifecycle_paths = crate::moss_paths::MossPaths::new(config.source());
+    // A build with no place on this computer for its output stops here, so
+    // the output never lands in the folder. Then the output an older moss
+    // kept in the folder moves out, before anything below reads the records
+    // that came with it.
+    let build_root = lifecycle_paths.resolve_build_root()?;
+    crate::build::lifecycle::tree_migration::move_output_out(&lifecycle_paths);
+    log::info!(target: "build", "build.root {}", build_root.display());
     let cache_lease = std::sync::Arc::new(std::sync::Mutex::new(Some(
         crate::build::lifecycle::cache_write_lease(&lifecycle_paths),
     )));
@@ -794,8 +874,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // hole on the way.
     config.host.store.run_vault_migrations(&config.root);
     // Before anything below reads `.moss/`. A later write there (a
-    // migration of the build tree, a process hook) moves the next build's
-    // record, which costs that build one full render, never a stale page.
+    // migration of the build tree) moves the next build's record, which costs
+    // that build one full render, never a stale page; process hooks remeasure.
     let options = crate::build::inputs::options(config.site_url_override.as_deref(), matches!(pass.plugins, PluginMode::Skip));
     let mut last_seal = incremental_gates::LastSeal::read(config.source(), options.clone(), config.exits_after_build && !config.defers_image_placeholders());
 
@@ -803,22 +883,12 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let moss_dir_path = config.source().join(".moss");
     let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
 
-    // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
-    // BEFORE anything below writes into it: the CLI's link-meta fetch writes
-    // `.moss/build.nosync/cache/link-meta/`, and a marker cannot un-sync bytes a
-    // provider already took.
-    // allow:raw_write `.moss` itself; the regenerable tree starts below it
+    // allow:raw_write `.moss` itself
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
-    // Before the tree is marked or held: the split layout is what both assume.
     let paths_at_start = crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf());
     crate::build::lifecycle::tree_migration::migrate_build_tree(&paths_at_start);
+    crate::infra::moss_paths::move_local_facts_out(&paths_at_start);
     crate::vault::synced_siblings::reconcile_synced_state(&paths_at_start);
-    crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
-    // Hold `.moss/build.nosync` by fd from here so a cloud sync client's rename-aside
-    // mid-build cannot silently move where `build_dir()` reads or writes.
-    crate::build::lifecycle::open_build_root_handle(&lifecycle_paths);
-    // This build's root identity, to compare against later phases.
-    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build.nosync"), "start", None);
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
@@ -856,7 +926,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         .host
         .site_dir
         .clone()
-        .unwrap_or_else(|| std::sync::Arc::new(std::sync::RwLock::new(initial_serve_dir.clone())));
+        .unwrap_or_else(|| crate::moss_paths::Served::of(&lifecycle_paths, initial_serve_dir.clone()).into_cell());
     let standalone_state = SiteDirectoryState { current_dir: shared_dir };
     // Points the cell here only if it names nothing or another folder: every
     // later move belongs to `lifecycle`, which never steps the preview back to
@@ -892,7 +962,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     message: e.clone(),
                     open_in_another_app: crate::ops::serve::ownership::open_in_another_app(&standalone_state.current_dir).await,
                 });
-                None
+                return Err(BuildStopped::told(e));
             }
         }
     } else {
@@ -919,31 +989,23 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         );
         log::info!("Prior output for early preview: {:?}", prior);
         if prior.may_show_early() {
-            progress::emit_event(
-                &config.progress,
-                &progress::PipelineEvent::Progress {
-                    step: "server-ready".to_string(),
-                    message: "Loading preview...".to_string(),
-                    percentage: 5,
-                    completed: false,
-                    port: Some(p),
-                    is_empty: Some(false),
-                },
-            );
+            pipeline::send_progress(Some(&*config.progress), "server-ready", "Loading preview...", 5, false, Some(p), Some(false));
         }
     }
 
     // Below the server launch: a serving build that stops has already put the
     // sealed generation on screen.
-    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options, port_now()).await {
+    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options.clone(), port_now()).await {
         Ok(outcome) => return Ok(outcome),
         Err(at_entry) => at_entry,
     };
-    let last_seal = std::sync::Arc::new(last_seal);
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
     // (process hooks, enhance, build).
+    // Before the scan, so the scan saw every entry it names.
+    let scanned_listing = watch::scope::watch_targets_with_error(Path::new(&folder_path)).ok()
+        .map(|targets| targets.into_iter().map(|(path, _)| path).collect::<Vec<_>>());
     let _scan_trace = PhaseTrace::start("scan");
     let scan_failure = |failure: scan::scan::ScanFailure| {
         let evidence = cloud_ledger::InputEvidence::new(config.source());
@@ -973,6 +1035,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             config.host.metadata_dedup.as_deref(),
             config.host.scan_events.as_ref(),
             config.defers_image_placeholders(),
+            cloud_readiness::storage::OperationOwner::of(config.host.services.session.as_ref()),
         )
         .map_err(&scan_failure)?;
         let pi = ProjectInfo::from_structure(&ps, &config.root);
@@ -1032,6 +1095,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             }
             let waited_ms = await_start.elapsed().as_millis();
             progress::announce_process_hook_done(&config.progress, waited_ms, port_now());
+            // This build renders what the hook wrote under `.moss/`, so it
+            // proves from a measurement taken after it.
+            last_seal.remeasure(config.source(), options);
         } else {
             // Live preview (NonBlocking + running server): honor the contract —
             // do NOT await. `spawn_process_hooks` already runs the hook in its
@@ -1048,6 +1114,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             drop(handle);
         }
     }
+
+    let last_seal = std::sync::Arc::new(last_seal);
 
     // Sample the cache keys here, and only here.
     //
@@ -1133,17 +1201,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let port_owned = port_now.clone(); // moved into whichever run-arm executes
 
     // Emit build-start progress for CLI (the stdout reporter prints to stderr)
-    progress::emit_event(
-        &config.progress,
-        &progress::PipelineEvent::Progress {
-            step: "build".to_string(),
-            message: "Building site...".to_string(),
-            percentage: 10,
-            completed: false,
-            port: port_now(),
-            is_empty: None,
-        },
-    );
+    pipeline::send_progress(Some(&*config.progress), "build", "Building site...", 10, false, port_now(), None);
 
     // --- BUILD: Generate marked HTML, then resolve slots before artifact finalization ---
     // The internal pipeline renders HTML with <!-- slot:NAME --> markers, writes
@@ -1197,7 +1255,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render, unready_derivations, folder_lock, locked_at_nanos } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, reloads, render, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1272,18 +1330,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // watcher's refresh diff and the admission-time content-hash gate. Were a
     // failed build's hashes stashed, the user's edit could compare "unchanged"
     // against output that never rendered and the retry be gated out forever.
-    // Pinned by `a_failed_build_leaves_the_previous_stash_as_the_gate_baseline`
-    // (watch_tests.rs); do not move this block ahead of the error return.
-    //
-    // Guarded by `should_stash_hashes`: the stash must describe what the
-    // screen shows. A withheld (`publishable == false`) or cancelled build
-    // never switched the preview, so stashing its hashes would make the
-    // watcher diff the next build against output the user never saw — and a
-    // page edited before the withheld build would then read as "unchanged"
-    // and never refresh.
-    if should_stash_hashes(publishable, cancelled) {
-        crate::system::build_records::records().record_content_hashes(&folder_path, content_hashes);
-    }
+    // Do not move this block ahead of the error return.
+    stash_shown_build(&folder_path, render.as_ref(), content_hashes, scanned_listing);
 
     // Install this completed build's full publish evidence as one ordered
     // snapshot. An empty vector is the answer that unblocks publish; the
@@ -1420,7 +1468,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 // be reading `stage_dir`. Never reclaim here.
                                 final_sweep: None,
                                 cache_lease,
-                                build_root_identity: start_identity,
                                 // Long-lived runtime: the materialize is
                                 // debounced (`build::seal_phase`), and the
                                 // hand-off is non-blocking, so the `sealing` hold
@@ -1515,7 +1562,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             // that manifest names. Reclaim now or never.
                             final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
-                            build_root_identity: start_identity,
                             handoff: Handoff::Caller,
                         },
                     )
@@ -1559,25 +1605,22 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     //
     // Held back while a second pass is owed: `run_passes` emits it after the last.
     if !cancelled && !media_rerender_owed {
-        emit_build_complete(&config.progress, port_now(), _is_empty); // port: again about NOW
+        emit_build_complete(&config.progress, port_now(), _is_empty, reloads); // port: again about NOW
     }
 
-    let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
+    let port = port_now();
+    Ok(PassOutcome { message: generated_message(config, port), owed: media_rerender_owed, is_empty: _is_empty, port })
+}
 
-    let site_paths = crate::moss_paths::MossPaths::new(config.source());
-    let current_output = site_paths.current_ptr();
-    let base_message = crate::ops::serve::ownership::generated_line(folder_name, &current_output, &site_paths.staging_dir(), port_now().is_some());
-
-    if let Some(p) = port_now() {
-        let preview_url = format!("http://localhost:{}", p);
-        Ok(PassOutcome {
-            message: format!("{}\n{}", base_message, crate::ops::serve::ownership::preview_ready_line(&preview_url)),
-            owed: media_rerender_owed,
-            is_empty: _is_empty,
-            port: Some(p),
-        })
-    } else {
-        Ok(PassOutcome { message: base_message, owed: media_rerender_owed, is_empty: _is_empty, port: None })
+/// What a finished build says it generated, and the preview's address when it
+/// serves one.
+fn generated_message(config: &PipelineConfig, port: Option<u16>) -> String {
+    use crate::ops::serve::ownership::{generated_line, preview_ready_line};
+    let paths = crate::moss_paths::MossPaths::new(config.source());
+    let generated = generated_line(config.root.name_opt().unwrap_or("unnamed-site"), &paths.current_ptr(), &paths.staging_dir(), port.is_some());
+    match port {
+        Some(port) => format!("{generated}\n{}", preview_ready_line(&format!("http://localhost:{port}"))),
+        None => generated,
     }
 }
 
@@ -1772,12 +1815,6 @@ pub(crate) struct SealGuards {
     /// pass in the same process starts from the sealed manifest, so it inherits
     /// the sweep), so the tail reclaims it now (`ship::reclaim_staging_now`).
     pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
-    /// The identity `root_identity::log_build_root` observed for this
-    /// build's root at "start", carried here because this is the one value
-    /// that already reaches both the detached seal task and `advertise_sealed`
-    /// — the next one joins as a field for the same reason `cache_lease` and
-    /// `final_sweep` do.
-    pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
     /// The build's `lifecycle::CacheWriteLease`, handed back by
     /// `BackgroundHandle::await_completion` instead of being dropped there.
     /// Held across `materialize_and_promote` (`ship_phase`) in
@@ -1966,8 +2003,8 @@ async fn advertise_sealed(
     folder_path: &str,
     // The seal tail's one-off RAII permits — see `SealGuards` for what each
     // field is and when it is read or dropped. `final_sweep` is consumed
-    // below, inline; `cache_lease` and `build_root_identity` travel into the
-    // returned `PendingSeal` for the materialize phase to read or drop.
+    // below, inline; `cache_lease` travels into the returned `PendingSeal`
+    // for the materialize phase to drop.
     guards: SealGuards,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
     // The seal's per-build half, which a detached tail runs after `run_pipeline`
@@ -2196,6 +2233,10 @@ async fn advertise_sealed(
             ports.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
         }
     }
+    // The show's stash lacks what landed after it (deferred share cards) and
+    // the repairs; while the preview still shows this render, its sealed view
+    // is the next build's baseline, or a save that changes nothing reloads.
+    stash_shown_build(folder_path, render.as_ref(), view.clone(), None);
 
     // Everything from here down needs a materialized generation (or needs to
     // know whether one exists) — handed to the materialize phase, which runs
@@ -2215,9 +2256,9 @@ async fn advertise_sealed(
         is_pinned,
         session: session.clone(),
         cache_lease: guards.cache_lease,
-        build_root_identity: guards.build_root_identity,
         folder_lock: None,
         media_rerender_owed,
+        parse: crate::build::parse_cache::take_for_seal(std::path::Path::new(folder_path)),
     };
     // Under the guard, so within one folder session the lane's requests
     // arrive in lock order and its last is the newest render's.

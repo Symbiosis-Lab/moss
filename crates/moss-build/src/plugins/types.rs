@@ -152,6 +152,15 @@ pub struct PluginManifest {
 }
 
 impl PluginManifest {
+    /// Every domain the plugin works on: `domains`, else `domain`. Empty for
+    /// a plugin that declares neither, which has no cookies of its own.
+    pub fn declared_domains(&self) -> Vec<String> {
+        match &self.domains {
+            Some(domains) if !domains.is_empty() => domains.clone(),
+            _ => self.domain.iter().cloned().collect(),
+        }
+    }
+
     /// Check if this plugin has a specific capability
     pub fn has_capability(&self, capability: &Capability) -> bool {
         self.capabilities.contains(capability)

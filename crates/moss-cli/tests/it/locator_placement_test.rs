@@ -2,6 +2,7 @@
 //! column, after a body with no text, or beside the first text block. All
 //! names are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -60,7 +61,7 @@ fn built_page(pages: &[(&str, &str)], page: &str) -> String {
         .output()
         .expect("spawn moss-cli");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let html = std::fs::read_to_string(root.join(".moss/build.nosync/current").join(page)).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&root).current_ptr().join(page)).unwrap();
     // The head repeats the page's text and images; only the article is placed.
     html[html.find("<article").expect("an article")..].to_string()
 }

@@ -54,6 +54,22 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
 }
 
+/// Whether a page that is not bare draws the floating nav island. The render
+/// verdict folds it into the page's fingerprint, so a `[site].floating_nav`
+/// toggle re-renders only the pages whose answer moved.
+pub(crate) fn shows_nav_island(layout: &LayoutConfig, doc: Option<&ParsedDocument>) -> bool {
+    let (contents_pictures, contents_list) = contents_lane(doc);
+    (layout.floating_nav && contents_list) || contents_pictures || layout.header == crate::build::components::nav::HeaderMode::None
+}
+
+/// `contents: pictures`, and whether the island lists the page's sections:
+/// sections too short to navigate get no list unless `contents: pictures`
+/// asks for one. A bare page never takes `contents: pictures`.
+fn contents_lane(doc: Option<&ParsedDocument>) -> (bool, bool) {
+    let pictures = doc.is_some_and(|d| !d.bare && d.raw_frontmatter.get("contents").and_then(|v| v.as_str()) == Some("pictures"));
+    (pictures, pictures || doc.is_some_and(|d| d.contents_list))
+}
+
 impl PageChromeContext<'_, '_> {
     pub fn site_title(&self, doc: Option<&ParsedDocument>) -> String {
         let fallback = if self.layout.site_name.is_empty() {
@@ -82,10 +98,7 @@ impl PageChromeContext<'_, '_> {
     ) -> ShellVars {
         let generated = matches!(family, PageFamily::GeneratedFolder);
         let bare = doc.is_some_and(|d| d.bare);
-        // The contents lane's list is the island's, which a bare page has not.
-        let contents_pictures = !bare && doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("pictures");
-        // Sections too short to navigate: no floating bar (`contents: pictures` asks for one).
-        let contents_list = contents_pictures || doc.is_some_and(|d| d.contents_list);
+        let (contents_pictures, contents_list) = contents_lane(doc);
         let site_title = self.site_title(doc);
         let ui_lang = doc.map(|d| d.lang).unwrap_or(self.site_lang);
         let page_lang_tag = doc.and_then(|d| d.lang_tag.clone())
@@ -190,7 +203,7 @@ impl PageChromeContext<'_, '_> {
             colophon_credit: self.layout.colophon_credit.clone(),
             // A bare page keeps only the controls, loose where a headerless
             // site's island would put them at the top of the page.
-            nav_island: if bare { nav.nav_icons_html() } else if (self.layout.floating_nav && contents_list) || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
+            nav_island: if bare { nav.nav_icons_html() } else if shows_nav_island(self.layout, doc) { nav.generate_nav_island() } else { String::new() },
             footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),

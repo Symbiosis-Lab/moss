@@ -37,7 +37,7 @@ pub fn header_ink(grid: &Ground, aspect: f32, frame: &Frame) -> Option<Ink> {
 
 /// The ink a header laid over an opening picture takes in each theme; `None`
 /// where no ink clears and the stylesheet's strong wash carries white.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HeaderOver {
     pub ink: Option<Ink>,
     pub ink_night: Option<Ink>,

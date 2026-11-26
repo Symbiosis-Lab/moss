@@ -2,34 +2,10 @@
 //! nav bar, after the content entries, in the order the kinds appear in the
 //! config. Without it the nav is what it was.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::site;
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 /// Build a site with the given `[terms]` config and return the nav links
 /// (`href`, text) of its home page.
@@ -55,8 +31,8 @@ fn nav_links_with(terms_config: &str, pages: &[(&str, &str)]) -> Vec<(String, St
     for (file, front) in pages {
         write(file, &format!("---\n{front}\nnav: true\n---\n\nBody.\n"));
     }
-    let result = build_sync(&tmp.to_string_lossy());
-    let html = fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html"));
+    let result = crate::site::build_full(&tmp.to_string_lossy());
+    let html = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html"));
     let _ = fs::remove_dir_all(&tmp);
     assert!(result.is_ok(), "build failed: {result:?}");
     let html = html.unwrap();

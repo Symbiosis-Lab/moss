@@ -417,7 +417,7 @@ mod tests {
             b"<!doctype html>", crate::build::manifest::HashBucket::Files);
         let sealed = pending.seal();
         crate::build::ship::materialize_and_promote(&sealed, &mp, &mp.staging_dir(), 1, None,
-            crate::build::ship::ShipVerdict::Ship).unwrap();
+            crate::build::ship::ShipVerdict::Ship, None).unwrap();
         sealed.write_to_disk(&mp.hashes()).unwrap();
         let generation = mp.generation_dir(&mp.current_generation_id().unwrap());
         Built { _temp: temp, root, generation }

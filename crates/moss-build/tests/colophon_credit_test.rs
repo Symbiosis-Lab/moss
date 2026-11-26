@@ -4,7 +4,7 @@
 #[path = "it/site.rs"]
 mod site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const PAGES: [(&str, &str); 2] = [
     ("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"),
@@ -40,7 +40,7 @@ fn without_the_key_the_colophon_is_what_it_was() {
 
 #[test]
 fn the_credit_stands_before_the_mark_and_the_link_keeps_its_name() {
-    let site = Site::with_config(CREDIT, &PAGES);
+    let site = LoggedSite::with_config(CREDIT, &PAGES);
     let colophon = colophon_of(&site.html("index.html")).to_string();
     let credit_at = colophon.find("<span class=\"moss-colophon-credit\">Designed by <a").expect(&colophon);
     assert!(colophon.contains("href=\"https://example.org\">Example Studio</a></span>"), "{colophon}");
@@ -61,7 +61,7 @@ fn the_credit_is_escaped_like_other_text() {
 
 #[test]
 fn block_markdown_is_a_build_problem_naming_the_key_and_leaves_the_colophon_alone() {
-    let site = Site::with_config("credit = \"# Big\"\n", &PAGES);
+    let site = LoggedSite::with_config("credit = \"# Big\"\n", &PAGES);
     let problems = &site.problems;
     assert!(problems.iter().any(|p| p.contains("[site].credit")), "{problems:?}");
     let html = site.html("index.html");
@@ -71,7 +71,7 @@ fn block_markdown_is_a_build_problem_naming_the_key_and_leaves_the_colophon_alon
 
 #[test]
 fn colophon_false_leaves_out_the_credit_too_and_says_so_without_failing_strict() {
-    let site = Site::with_config(&format!("colophon = false\n{CREDIT}"), &PAGES);
+    let site = LoggedSite::with_config(&format!("colophon = false\n{CREDIT}"), &PAGES);
     let html = site.html("index.html");
     assert!(!html.contains("moss-colophon") && !html.contains("Example Studio"), "{html}");
     assert!(site.logged.iter().any(|l| l.contains("[site].credit is not shown")), "{:?}", site.logged);
@@ -126,7 +126,7 @@ mod closing_picture {
 
 #[test]
 fn raw_html_in_the_credit_is_shown_as_text_and_unsafe_links_are_dropped_with_a_problem() {
-    let site = Site::with_config("credit = \"Hi <script>alert(1)</script> [x](javascript:alert(1)) [y](https://example.org)\"\n", &PAGES);
+    let site = LoggedSite::with_config("credit = \"Hi <script>alert(1)</script> [x](javascript:alert(1)) [y](https://example.org)\"\n", &PAGES);
     let colophon = colophon_of(&site.html("index.html")).to_string();
     assert!(!colophon.contains("<script") && colophon.contains("&lt;script&gt;"), "{colophon}");
     assert!(!colophon.contains("javascript:"), "{colophon}");

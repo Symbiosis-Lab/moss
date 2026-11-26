@@ -30,6 +30,15 @@ fn spec(forms: &[Form], max: u32) -> ChannelSpec {
 }
 
 #[test]
+fn a_page_no_declared_form_takes_is_refused_in_one_plain_line() {
+    let long = post("Essay", &"A sentence about autumn. ".repeat(100));
+    let mut bluesky = spec(&[Form::Short], 300);
+    assert_eq!(shape(&long, &bluesky, SITE).unwrap_err(), "This channel doesn't take articles.");
+    bluesky.name = Some("Bluesky".into());
+    assert_eq!(shape(&long, &bluesky, SITE).unwrap_err(), "Bluesky doesn't take articles.");
+}
+
+#[test]
 fn a_short_post_is_its_own_text_with_links_spelled_out() {
     let p = post("", "Autumn's **first** hotpot, after [the walk](/notes/walk/) and https://example.com.\n");
     let s = shape(&p, &spec(&[Form::Short, Form::Teaser], 300), SITE).unwrap();
@@ -72,15 +81,49 @@ fn a_rule_without_a_blank_line_above_is_not_a_break() {
 }
 
 #[test]
-fn too_long_for_the_network_becomes_a_teaser_cut_at_a_sentence() {
+fn too_long_for_the_network_becomes_a_link_post_that_never_quotes_the_page() {
     let body = "First sentence here. Second sentence is longer than the limit allows for sure.\n";
-    let p = post("", body);
     let limit = (PAGE.chars().count() + 2 + "First sentence here.".len()) as u32;
-    let s = shape(&p, &spec(&[Form::Short, Form::Teaser], limit), SITE).unwrap();
+    let s = shape(&post("", body), &spec(&[Form::Short, Form::Teaser], limit), SITE).unwrap();
     assert_eq!(s.form, Form::Teaser);
-    assert_eq!(s.parts[0].text, format!("First sentence here.\n\n{PAGE}"));
+    assert_eq!(s.parts[0].text, PAGE, "no description: the opening is not excerpted");
     assert_eq!(s.parts[0].links, [PAGE]);
-    assert!(spec(&[], limit).fits(&s.parts[0].text));
+    let titled = shape(&post("Essay", body), &spec(&[Form::Teaser], limit), SITE).unwrap();
+    assert_eq!(titled.parts[0].text, format!("Essay\n\n{PAGE}"));
+}
+
+#[test]
+fn an_article_longer_than_the_networks_article_form_goes_as_a_link_post() {
+    // A list's plain text is longer than its markdown: each item gets a marker and a blank line.
+    let mut p = post("Autumn", "- a\n- b\n");
+    p.html_content = Some(format!("<ul>{}</ul>", "<li>leaf</li>".repeat(50)));
+    p.frontmatter.insert("description".into(), serde_json::json!("About the season."));
+    let mut channel = spec(&[Form::Long, Form::Teaser], 200);
+    channel.name = Some("Threads".into());
+    channel.max_article_chars = Some(10_000);
+    assert_eq!(shape(&p, &channel, SITE).unwrap().form, Form::Long);
+    channel.max_article_chars = Some(300);
+    let s = shape(&p, &channel, SITE).unwrap();
+    assert_eq!(s.form, Form::Teaser);
+    assert_eq!(s.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));
+    channel.forms = vec![Form::Long];
+    assert_eq!(shape(&p, &channel, SITE).unwrap_err(), "Threads takes articles of up to 300 characters; this one is longer.");
+}
+
+#[test]
+fn an_articles_plain_text_puts_each_block_and_item_on_its_own_line() {
+    let html = "<h2>One</h2><p>It <em>ends</em> &amp; begins.<br>Again.</p><figure><img src=\"x\"></figure><ul><li>a</li><li>b</li></ul>";
+    assert_eq!(plain_text(html), "One\n\nIt ends & begins.\nAgain.\n\n- a\n\n- b");
+}
+
+#[test]
+fn a_description_that_does_not_fit_whole_is_left_out_not_cut() {
+    let mut p = post("Autumn", "A long essay.\n");
+    p.frontmatter.insert("description".into(), serde_json::json!("今天很冷。我们去吃火锅了，吃了很久很久很久很久。"));
+    let limit = (PAGE.chars().count() + "Autumn".len() + 4 + 5) as u32;
+    let s = shape(&p, &spec(&[Form::Teaser], limit), SITE).unwrap();
+    assert_eq!(s.teaser.unwrap().description, "");
+    assert_eq!(s.parts[0].text, format!("Autumn\n\n{PAGE}"));
 }
 
 #[test]
@@ -99,8 +142,8 @@ fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
     assert_eq!(teaser.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));
     assert_eq!(teaser.teaser.unwrap().description, "About the season.");
 
-    let mut with_link = post("", "Out by the river: https://example.com/river and on.\n\n---\n\nMore.\n");
-    with_link.title = "Walk".into();
+    let mut with_link = post("Walk", "More.\n");
+    with_link.frontmatter.insert("description".into(), serde_json::json!("Out by the river: https://example.com/river and on."));
     let t = shape(&with_link, &spec(&[Form::Teaser], 300), SITE).unwrap();
     assert_eq!(t.parts[0].links, ["https://example.com/river", PAGE], "an address in the teaser's own words is a link too");
 }
@@ -109,14 +152,6 @@ fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
 fn a_post_too_long_with_no_teaser_is_refused() {
     let p = post("", &"word ".repeat(100));
     assert!(shape(&p, &spec(&[Form::Short], 50), SITE).is_err());
-}
-
-#[test]
-fn chinese_text_is_cut_at_a_full_stop() {
-    let p = post("", "今天很冷。我们去吃火锅了，吃了很久很久很久很久。\n");
-    let limit = (PAGE.chars().count() + 2 + 5) as u32;
-    let s = shape(&p, &spec(&[Form::Teaser], limit), SITE).unwrap();
-    assert_eq!(s.teaser.unwrap().description, "今天很冷。");
 }
 
 #[test]
@@ -139,7 +174,8 @@ fn backlinks_fit_at_the_boundary_for_every_counting_rule() {
                 let mut channel = ChannelSpec { forms: if form == Form::Teaser { vec![form] } else { vec![form, Form::Teaser] }, counting, link_chars, ..Default::default() };
                 let limit = channel.length(&text) as u32;
                 channel.max_chars = Some(limit);
-                let p = post("", "秋 🍁");
+                let mut p = post("", "秋 🍁");
+                p.frontmatter.insert("description".into(), serde_json::json!("秋 🍁"));
                 let exact = shape(&p, &channel, SITE).unwrap();
                 assert_eq!(exact.form, form);
                 assert_eq!(exact.parts[0].text, text);
@@ -189,7 +225,9 @@ fn a_long_copy_ends_with_its_escaped_address_whatever_the_networks_short_limit()
     let expected = "<p>html</p>\n<p>Originally published on <a href=\"https://example.org/essay/?a=1&amp;b=&quot;two&quot;\">example.org</a>.</p>";
     let copy = shape(&p, &spec(&[Form::Long, Form::Teaser], 10), SITE).unwrap();
     assert_eq!(copy.form, Form::Long);
-    assert_eq!(copy.article.unwrap().html, expected);
+    let article = copy.article.unwrap();
+    assert_eq!(article.html, expected);
+    assert_eq!(article.blocks, vec![super::super::pictures::Block::Html { html: expected.into() }], "an editor is given the same article");
 }
 
 #[test]
@@ -424,6 +462,7 @@ fn provisional_teasers_preserve_known_limits_and_form_order() {
     assert!(assess(&p, &channel, None, &ShapeOptions::default(), &record).is_err(), "an unknown URL cannot exempt the title");
     p.title = "Title".into();
     p.content = "First. More words that cannot all fit. ".repeat(40);
+    p.frontmatter.insert("description".into(), serde_json::json!("First."));
     let teaser = assess(&p, &channel, None, &ShapeOptions::default(), &record).unwrap();
     assert_eq!(teaser.form, Form::Teaser, "the whole body still exceeds the short limit");
     let card = teaser.teaser.unwrap();
@@ -468,4 +507,26 @@ fn old_maps_without_page_names_use_the_hostname() {
     let html = shape_with(&p, &spec(&[Form::Long], 300), SITE, &options).unwrap().article.unwrap().html;
     assert!(html.contains("example.org</a>"));
     assert!(!html.contains("Stale default"));
+}
+
+#[test]
+fn an_articles_plain_text_is_the_page_as_written_without_title_or_footer() {
+    let p = post("Autumn", "Leaves *fall* on [the river](/river/).\n\nSecond paragraph.\n");
+    let article = shape(&p, &spec(&[Form::Long], 30), SITE).unwrap().article.unwrap();
+    assert_eq!(article.text, "Leaves fall on the river (https://example.org/river/).\n\nSecond paragraph.");
+    assert!(article.html.contains("Originally published"), "the footer stays in the html only");
+}
+
+#[test]
+fn the_site_name_falls_back_to_the_host() {
+    assert_eq!(site_name(&ShapeOptions::default(), SITE).as_deref(), Some("example.org"));
+    let named = ShapeOptions { site_name: Some("山居".into()), ..Default::default() };
+    assert_eq!(site_name(&named, SITE).as_deref(), Some("山居"));
+}
+
+#[test]
+fn an_article_of_short_paragraphs_goes_long_where_the_network_also_takes_threads() {
+    let body = (0..12).map(|i| format!("Paragraph {i} is short.")).collect::<Vec<_>>().join("\n\n");
+    let copy = shape(&post("Essay", &body), &spec(&[Form::Short, Form::Thread, Form::Long], 300), SITE).unwrap();
+    assert_eq!(copy.form, Form::Long, "only parts the author divided with a rule make a thread");
 }

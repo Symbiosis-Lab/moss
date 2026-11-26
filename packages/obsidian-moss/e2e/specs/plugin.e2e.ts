@@ -1,11 +1,13 @@
 // E2E against a REAL Obsidian (wdio-obsidian-service). Proves what unit
 // tests cannot: the plugin loads, leaves a vault that is not a moss folder
 // untouched, shows frontmatter diagnostics in real editor pixels once the
-// vault becomes one, and the preview command spawns the CLI (shim), parses
+// vault becomes one, and the preview command spawns the CLI (the shim, or a real moss), parses
 // its output, and shows the served page in the pane.
 import { browser, expect } from "@wdio/globals";
 import * as path from "node:path";
 import { obsidianPage } from "wdio-obsidian-service";
+
+const realMoss = Boolean(process.env.MOSS_E2E_MOSS_DIR);
 
 /** Starts the preview and answers the first-build question (the shim never creates .moss/). */
 async function startPreview(): Promise<void> {
@@ -75,17 +77,19 @@ describe("moss plugin", () => {
     await browser.$(".modal button:not(.mod-cta)").click();
     await browser.pause(1000);
     expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
-    expect(await browser.$(".status-bar-item.plugin-moss").isDisplayed()).toBe(false);
+    expect(await browser.$(".status-bar-item.moss-preview-status").isDisplayed()).toBe(false);
   });
 
   it("runs Preview this folder: spawns the CLI, parses the URL, shows the page", async () => {
+    // A real moss shows the open note's page.
+    if (realMoss) await obsidianPage.openFile("welcome.md");
     await startPreview();
 
     const iframe = browser.$("iframe.moss-preview-iframe");
     await iframe.waitForExist({ timeout: 30000 });
     await browser.waitUntil(
       async () => /^http:\/\/localhost:\d+/.test((await iframe.getAttribute("src")) ?? ""),
-      { timeout: 30000, timeoutMsg: "iframe src never pointed at the shim server" },
+      { timeout: 30000, timeoutMsg: "iframe src never pointed at the preview server" },
     );
     const src = await iframe.getAttribute("src");
     expect(src).toMatch(/^http:\/\/localhost:\d+/);
@@ -93,13 +97,18 @@ describe("moss plugin", () => {
     // Prove real bytes rendered, not just an attribute: enter the frame and
     // read the served page.
     await browser.switchFrame(iframe);
-    const heading = browser.$("h1");
-    await heading.waitForExist({ timeout: 15000 });
-    expect(await heading.getText()).toBe("Hello from moss shim");
-    await browser.switchFrame(null);
+    try {
+      // The shim serves one fixed page.
+      const expected = realMoss ? "Welcome" : "Hello from moss shim";
+      await browser.waitUntil(async () => (await browser.$("body").getText()).includes(expected), {
+        timeout: 30000, timeoutMsg: `the served page never showed "${expected}"`,
+      });
+    } finally {
+      await browser.switchFrame(null);
+    }
 
     // Status bar reflects the running server (the plugin's own item).
-    const status = browser.$(".status-bar-item.plugin-moss");
+    const status = browser.$(".status-bar-item.moss-preview-status");
     await status.waitForExist({ timeout: 10000 });
     expect(await status.getText()).toContain("Previewing");
 
@@ -115,7 +124,7 @@ describe("moss plugin", () => {
 
   it("stops the server when the preview pane is closed", async () => {
     await startPreview();
-    const status = browser.$(".status-bar-item.plugin-moss");
+    const status = browser.$(".status-bar-item.moss-preview-status");
     await browser.waitUntil(async () => (await status.getText()).includes("Previewing"), {
       timeout: 30000,
       timeoutMsg: "preview never started",

@@ -566,7 +566,12 @@ pub(crate) fn render_hero_html_typed(
         // Overlay URLs were already resolved by `resolve_shortcode_urls`, and
         // the snapshot hooks route inline images through the synthesizer.
         let mut html_content = String::new();
-        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets).with_strings(crate::i18n::hook_strings(lang));
+        // A picture among an opening hero's words is on the first screen and often its
+        // largest paint (a background filling the viewport is not a candidate), so it
+        // loads with priority beside the background; each of several such pictures does.
+        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets)
+            .eager_image(!closing)
+            .with_strings(crate::i18n::hook_strings(lang));
         moss_core::ast::render::render_blocks_with_meta(
             &hooks,
             &mut html_content,
@@ -921,14 +926,11 @@ mod tests {
     // Grid arm in `crates/moss-core/src/ast/hooks.rs`. Test coverage
     // for the AST-level Grid shape lives in `moss-core` lib tests.
 
-    /// A regression on the branch production actually takes. The overlay is
-    /// rendered by `render_hero_html_typed` with a PRIMED snapshot, so the
-    /// embed's fit/position must survive the synth path
-    /// (`ImageRenderOptions.extra_attrs`) and not just the bare-`<img>`
-    /// fallback — the two are different code, and only the fallback was
-    /// covered before.
-    #[test]
-    fn hero_overlay_embed_keeps_img_style_through_the_synth_path() {
+    /// A hero over `header.png` whose words are one picture, `photo.jpg`, with its
+    /// dimensions known so it takes the synth path.
+    fn hero_with_a_photo_in_its_words(
+        classes: &str,
+    ) -> (crate::build::media::dimensions::MediaDimensionLookup, moss_core::ast::HeroShortcode) {
         use crate::build::media::dimensions::MediaDimensionLookup;
         use moss_core::ast::{Block, HeroShortcode, Inline, ResolvedUrl, Url, UrlKind};
         let meta = crate::types::content::MediaMetadata {
@@ -962,8 +964,35 @@ mod tests {
                 link: None,
             }],
             image: Some(Url::Resolved(ResolvedUrl::new("header.png", UrlKind::Asset))),
+            classes: classes.to_string(),
             ..Default::default()
         };
+        (lookup, args)
+    }
+
+    /// A picture among an opening hero's words is on the first screen; loaded lazily it
+    /// paints late, after the web fonts. A closing hero's is at the foot of the page.
+    #[test]
+    fn a_picture_in_an_opening_heros_words_loads_with_priority() {
+        let (lookup, args) = hero_with_a_photo_in_its_words("");
+        let html = render_hero_html_typed(&args, Some(&lookup), None, None, crate::i18n::Language::En);
+        let words = &html[html.find("moss-hero-content").expect("the hero has words")..];
+        assert!(words.contains(r#"loading="eager" fetchpriority="high""#), "got: {words}");
+
+        let (lookup, args) = hero_with_a_photo_in_its_words("moss-hero-closing");
+        let html = render_hero_html_typed(&args, Some(&lookup), None, None, crate::i18n::Language::En);
+        let words = &html[html.find("moss-hero-content").expect("the hero has words")..];
+        assert!(words.contains(r#"loading="lazy""#), "got: {words}");
+        assert!(!html.contains("fetchpriority"), "got: {html}");
+    }
+
+    /// The overlay is rendered by `render_hero_html_typed` with a PRIMED
+    /// snapshot, so the embed's fit/position must survive the synth path
+    /// (`ImageRenderOptions.extra_attrs`) and not just the bare-`<img>`
+    /// fallback — the two are different code.
+    #[test]
+    fn hero_overlay_embed_keeps_img_style_through_the_synth_path() {
+        let (lookup, args) = hero_with_a_photo_in_its_words("");
         let html = render_hero_html_typed(&args, Some(&lookup), None, None, crate::i18n::Language::En);
         assert!(
             html.contains("<picture"),

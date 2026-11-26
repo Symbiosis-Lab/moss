@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 // `is_port_available` is no longer needed by the production server-start
 // path (the bind-with-scan helper is the authoritative check), but tests
@@ -65,7 +66,7 @@ async fn test_server_starts_without_index_html() {
     assert!(!temp_dir.path().join("index.html").exists());
 
     // Create site directory state
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
 
     // Use a high port range (55000+) to avoid conflicts with other tests
     // and production port 8080
@@ -96,7 +97,7 @@ async fn test_server_with_asset_registry_starts() {
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let asset_registry = Arc::new(AssetRegistry::new());
 
     // Test that server starts with asset registry (integrated functionality)
@@ -122,7 +123,7 @@ async fn test_server_graceful_shutdown_frees_port() {
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
 
     let (port, _, shutdown_tx) =
         start_server(ServeConfig {
@@ -163,7 +164,7 @@ async fn test_image_file_returns_wrapped_html() {
     // Write a fake PNG file (content doesn't matter for wrapping logic)
     std::fs::write(temp_dir.path().join("test.png"), b"PNG fake data").unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58000)
     })
@@ -216,7 +217,7 @@ async fn test_raw_param_serves_original_file() {
     let original_bytes: &[u8] = b"PNG fake image data for raw test";
     std::fs::write(temp_dir.path().join("test.png"), original_bytes).unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58500)
     })
@@ -263,7 +264,7 @@ async fn test_html_file_passes_through() {
     )
     .unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59000)
     })
@@ -325,6 +326,7 @@ async fn cold_start_serves_generation_through_current_symlink() {
         "<html><body>FROZEN-GEN</body></html>",
     )
     .unwrap();
+    mp.finish_test_generation("gen001");
     mp.set_current_ptr("gen001").unwrap();
 
     // site/ is empty — the regression rested here and 404'd.
@@ -335,7 +337,7 @@ async fn cold_start_serves_generation_through_current_symlink() {
         "cold start must rest on the current generation"
     );
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(serve_dir.clone()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(serve_dir.clone());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59500)
     })
@@ -383,7 +385,7 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
     )
     .unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61700)
     })
@@ -474,13 +476,13 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
     let shipped_dir = TempDir::new().expect("shipped temp dir");
     std::fs::write(shipped_dir.path().join("index.html"), &shipped_page).unwrap();
 
-    let staging_state = Arc::new(std::sync::RwLock::new(staging_dir.path().to_path_buf()));
+    let staging_state = crate::moss_paths::Served::test_cell(staging_dir.path().to_path_buf());
     let (staging_port, _, staging_shutdown) = start_server(ServeConfig {
         ..ServeConfig::new(staging_state, 61800)
     })
     .await
     .expect("staging server should start");
-    let shipped_state = Arc::new(std::sync::RwLock::new(shipped_dir.path().to_path_buf()));
+    let shipped_state = crate::moss_paths::Served::test_cell(shipped_dir.path().to_path_buf());
     let (shipped_port, _, shipped_shutdown) = start_server(ServeConfig {
         ..ServeConfig::new(shipped_state, 61900)
     })
@@ -618,7 +620,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
 
     let _record = lifecycle::lock_for(&mp);
     std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
-    let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    let site_dir_cell = crate::moss_paths::Served::test_cell(std::path::PathBuf::new());
     let _ = lifecycle::adopt_server(&mp, &site_dir_cell);
     let shown = lifecycle::show_render(&mp, true).0;
     assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(&shown), "g1", true).unwrap());
@@ -637,7 +639,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     };
 
     let permit = lifecycle::park_for_rebuild(&mp, false, Default::default()).expect("a caught-up lifecycle permits the sweep");
-    assert_eq!(*site_dir_cell.read().unwrap(), mp.current_ptr(), "and parks the server off staging first");
+    assert_eq!(site_dir_cell.read().unwrap().dir, mp.current_ptr(), "and parks the server off staging first");
     remove_stale_html(&stage, &lifecycle::StaleHtml::licence(Some(&permit), false, &stage, vec![("old-page/index.html".to_string(), None)]), &Default::default());
 
     // Only the next render moves the server back onto `stage`.
@@ -684,7 +686,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     std::fs::write(mp.generation_dir("g1").join("index.html"), "<html>g1</html>").unwrap();
 
     // Render 1 is shown and promoted as g1, which has no `fresh/`.
-    let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(std::path::PathBuf::new());
     let _ = lifecycle::adopt_server(&mp, &cell);
     let r1 = lifecycle::show_render(&mp, true).0;
     assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(&r1), "g1", true).unwrap());
@@ -716,11 +718,11 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     }
     let sealed = pending.seal();
     let promotion =
-        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&r2), ShipVerdict::Ship);
+        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&r2), ShipVerdict::Ship, None);
     assert_eq!(promotion, Ok(Promotion::Promoted));
 
     assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");
-    assert_eq!(*cell.read().unwrap(), mp.current_ptr(), "and it parks on current");
+    assert_eq!(cell.read().unwrap().dir, mp.current_ptr(), "and it parks on current");
     assert_eq!(get("fresh/"), 200, "which now holds render 2's pages");
 
     let _ = shutdown_tx.send(());
@@ -736,7 +738,7 @@ async fn test_pdf_file_returns_unsupported_page() {
     // Write a fake PDF file
     std::fs::write(temp_dir.path().join("doc.pdf"), b"%PDF-1.4 fake").unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59500)
     })
@@ -785,7 +787,7 @@ async fn test_sub_resource_image_not_wrapped() {
     let image_bytes: &[u8] = b"PNG fake image data";
     std::fs::write(temp_dir.path().join("photo.png"), image_bytes).unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60000)
     })
@@ -829,7 +831,7 @@ async fn serve_dir_decodes_percent_2c_to_comma_named_file() {
     let image_bytes: &[u8] = b"WEBP fake rung bytes";
     std::fs::write(temp_dir.path().join("a,b.w800.webp"), image_bytes).unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60400)
     })
@@ -879,7 +881,7 @@ async fn source_passthrough_serves_full_original_for_pending_webp() {
     registry.set_pending("assets/hero.webp".to_string(), Some((100, 100)), None);
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60100)
@@ -925,7 +927,7 @@ async fn passthrough_response_forbids_caching_so_the_encoded_variant_can_replace
     registry.set_pending("assets/hero.webp".to_string(), Some((100, 100)), None);
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file);
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60150)
@@ -970,7 +972,7 @@ async fn passthrough_matches_a_percent_encoded_request_against_its_decoded_key()
     registry.set_pending("images/冬.webp".to_string(), Some((100, 100)), None);
     registry.set_source_passthrough("images/冬.webp".to_string(), source_file);
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60160)
@@ -1013,7 +1015,7 @@ async fn passthrough_range_request_on_video_returns_206() {
     registry.set_pending("videos/clip.mp4".to_string(), Some((640, 480)), None);
     registry.set_source_passthrough("videos/clip.mp4".to_string(), source_file.clone());
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60200)
@@ -1059,7 +1061,7 @@ async fn failed_variant_returns_warning_svg_despite_passthrough_registration() {
     registry.set_source_passthrough("assets/broken.webp".to_string(), source_file.clone());
     registry.set_failed("assets/broken.webp".to_string(), crate::types::assets::Failure::encode("decode error"));
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60300)
@@ -1098,7 +1100,7 @@ async fn pending_passthrough_with_deleted_source_reports_unavailable() {
     registry.set_pending("assets/gone.webp".to_string(), Some((10, 10)), None);
     registry.set_source_passthrough("assets/gone.webp".to_string(), missing);
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60400)
@@ -1123,9 +1125,8 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     // that merely exists must not produce an early, truncated 200.
     use crate::types::assets::AssetRegistry;
     use tempfile::TempDir;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static EVICTED: AtomicBool = AtomicBool::new(true);
-    fn evicted(_: &std::path::Path) -> bool { EVICTED.load(Ordering::SeqCst) }
+    // The source stays in the cloud until the server asks for its download.
+    fn evicted(path: &std::path::Path) -> bool { crate::build::icloud::pretend::requests_for(path) == 0 }
 
     let site = TempDir::new().unwrap();
     let src = TempDir::new().unwrap();
@@ -1136,8 +1137,7 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     registry.set_pending("assets/hero.webp".to_string(), Some((100, 100)), None);
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    EVICTED.store(true, Ordering::SeqCst);
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: evicted,
@@ -1145,10 +1145,6 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     })
     .await
     .expect("Server should start");
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        EVICTED.store(false, Ordering::SeqCst);
-    });
 
     let url = format!("http://localhost:{}/assets/hero.webp", port);
     let response = ureq::get(&url)
@@ -1187,7 +1183,7 @@ async fn pending_image_wait_does_not_hold_page_requests_or_browser_slots() {
     let registry = Arc::new(AssetRegistry::new());
     registry.set_pending("assets/slow.webp".into(), None, None);
     registry.set_source_passthrough("assets/slow.webp".into(), source_file);
-    let state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: evicted,
@@ -1221,7 +1217,7 @@ async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared()
 
     for (index, latest_failed) in [false, true].into_iter().enumerate() {
         let site = TempDir::new().unwrap();
-        let current = site.path().join(".moss/build.nosync/current");
+        let current = MossPaths::new(site.path()).current_ptr();
         std::fs::create_dir_all(current.join("assets")).unwrap();
         std::fs::write(current.join("assets/cover.jpg"), b"old original").unwrap();
         let registry = latest_failed.then(|| {
@@ -1231,7 +1227,7 @@ async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared()
                 site.path().join("new-attempt.jpg"));
             registry
         });
-        let state = Arc::new(std::sync::RwLock::new(current));
+        let state = crate::moss_paths::Served::test_cell(current);
         let (port, _, shutdown) = start_server(ServeConfig {
             asset_registry: registry,
             ..ServeConfig::new(state, 60650 + index as u16 * 10)
@@ -1252,13 +1248,13 @@ async fn old_current_image_waits_for_hidden_cloud_original() {
     use tempfile::TempDir;
 
     let site = TempDir::new().unwrap();
-    let current = site.path().join(".moss/build.nosync/current");
+    let current = MossPaths::new(site.path()).current_ptr();
     let assets = current.join("assets");
     std::fs::create_dir_all(&assets).unwrap();
     let stub = assets.join(".cover.jpg.icloud");
     let original = assets.join("cover.jpg");
     std::fs::write(&stub, b"cloud placeholder").unwrap();
-    let state = Arc::new(std::sync::RwLock::new(current));
+    let state = crate::moss_paths::Served::test_cell(current);
     let mut config = ServeConfig::new(state, 60760);
     config.is_evicted = signal_hidden_original_request;
     let (port, _, shutdown) = start_server(config).await.unwrap();
@@ -1311,7 +1307,7 @@ async fn waiting_for_hidden_original_stays_on_the_selected_generation() {
     use tempfile::TempDir;
 
     let site = TempDir::new().unwrap();
-    let build = site.path().join(".moss/build.nosync");
+    let build = MossPaths::new(site.path()).build_dir();
     let first = build.join("generations/first");
     let second = build.join("generations/second");
     std::fs::create_dir_all(first.join("assets")).unwrap();
@@ -1320,7 +1316,7 @@ async fn waiting_for_hidden_original_stays_on_the_selected_generation() {
     std::fs::write(second.join("assets/cover.jpg"), b"wrong generation").unwrap();
     let current = build.join("current");
     std::os::unix::fs::symlink(&first, &current).unwrap();
-    let state = Arc::new(std::sync::RwLock::new(current.clone()));
+    let state = crate::moss_paths::Served::test_cell(current.clone());
     let (port, _, shutdown) = start_server(ServeConfig::new(state, 60990)).await.unwrap();
     let arrival = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1355,7 +1351,7 @@ async fn a_readable_source_still_passes_through_when_the_probe_says_no() {
     registry.set_pending("assets/hero.webp".to_string(), Some((100, 100)), None);
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file);
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: |_path| false,
@@ -1396,7 +1392,7 @@ async fn unreadable_video_passthrough_falls_back_to_the_sized_svg_not_an_image_s
     registry.set_pending("videos/clip.mp4".to_string(), Some((640, 480)), None);
     registry.set_source_passthrough("videos/clip.mp4".to_string(), missing);
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60450)
@@ -1443,7 +1439,7 @@ async fn test_404_returns_html_with_bridge_script() {
     .unwrap();
     // Do NOT create "nonexistent.html" — this is what we're testing
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60500)
     })
@@ -1520,7 +1516,7 @@ async fn test_moss_health_endpoint_returns_marker() {
     )
     .unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61000)
     })
@@ -1570,7 +1566,7 @@ async fn test_moss_health_route_wins_over_servedir() {
     std::fs::create_dir_all(&shadow_dir).unwrap();
     std::fs::write(shadow_dir.join("index.html"), "SHADOWED-BY-USER").unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61500)
     })
@@ -1698,6 +1694,42 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn page_route_redirects_a_source_file_to_its_page_and_tells_nothing_else() {
+    let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
+    std::fs::create_dir_all(site_dir.join("posts/hello")).unwrap();
+    std::fs::write(site_dir.join("posts/hello/index.html"), b"<h1>Hello</h1>").unwrap();
+    std::fs::create_dir_all(vault.path().join("posts")).unwrap();
+    std::fs::write(vault.path().join("posts/hello.md"), b"# Hello").unwrap();
+    std::fs::write(vault.path().join("posts/unbuilt.md"), b"# Not built").unwrap();
+
+    let state = crate::moss_paths::Served::test_cell(site_dir);
+    let (port, _, shutdown_tx) = start_server(ServeConfig { ..ServeConfig::new(state.clone(), 58640) })
+        .await
+        .expect("Server should start");
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(std::time::Duration::from_secs(5)).build();
+    let ask = |path: &str| match agent.get(&format!("http://localhost:{port}/__moss/page/{path}")).call() {
+        Ok(r) => (r.status(), r.header("location").map(str::to_string), r.into_string().unwrap_or_default()),
+        Err(ureq::Error::Status(code, r)) => (code, None, r.into_string().unwrap_or_default()),
+        Err(e) => panic!("page route did not answer: {e}"),
+    };
+
+    assert_eq!(ask("posts/hello.md"), (307, Some("/posts/hello/".to_string()), String::new()));
+    // A source file that exists but has no built page answers exactly as a file that does not exist.
+    let missing = ask("posts/nothing.md");
+    assert_eq!(missing.0, 404);
+    assert_eq!(ask("posts/unbuilt.md"), missing);
+    // An HTTP client resolves `..` (even `%2E%2E`) before sending, so a path
+    // that leaves the folder is handed to the handler directly.
+    for outside in ["posts/../posts/hello.md", "/etc/hosts.md"] {
+        let r = super::page_for_source_route(state.clone(), outside.to_string()).await;
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND, "{outside}");
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
 /// One assertion for the invariant that `/__moss/source/` serves the VAULT's
 /// bytes, never the build output's file at the same path. (A built rung stands
 /// in only for an admitted raster source; see `editor::source_asset`.)
@@ -1715,14 +1747,14 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let vault_path = vault.path();
 
-    // `.moss/` is the vault marker VaultRoot::find_containing walks up to.
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    // `Served::test_cell` names the folder that holds the build output.
+    let site_dir = MossPaths::new(vault_path).current_ptr();
     std::fs::create_dir_all(site_dir.join("assets")).unwrap();
     std::fs::create_dir_all(vault_path.join("assets")).unwrap();
     std::fs::write(vault_path.join("assets/photo.txt"), b"SOURCE").unwrap();
     std::fs::write(site_dir.join("assets/photo.txt"), b"BUILT").unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site_dir.clone()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site_dir.clone());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58600)
     })
@@ -1749,14 +1781,15 @@ async fn source_route_serves_vault_bytes_not_build_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_serves_files_sandboxed() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(
         vault.path().join("drawing.svg"),
         br#"<svg xmlns="http://www.w3.org/2000/svg"><script>parent.document.title = "ran"</script></svg>"#,
     )
     .unwrap();
-    let (port, _, shutdown_tx) = start_server(ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), 58650))
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 58650))
         .await
         .expect("Server should start");
     let response = ureq::get(&format!("http://localhost:{port}/__moss/source/drawing.svg"))
@@ -1777,10 +1810,11 @@ async fn source_route_serves_files_sandboxed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_passes_the_width_query_to_the_core() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault.path().join("inside.txt"), b"INSIDE").unwrap();
-    let (port, _, shutdown_tx) = start_server(ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), 58750))
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 58750))
         .await
         .expect("Server should start");
 
@@ -1816,11 +1850,12 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(parent.path().join("secret.txt"), b"SECRET").unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    std::fs::create_dir_all(vault_path.join(".moss")).unwrap();
+    let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site_dir.clone()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site_dir.clone());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58700)
     })
@@ -1876,7 +1911,7 @@ async fn trust_boundary_refuses_a_rebound_host_but_serves_localhost() {
 
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58800)
     })
@@ -1918,7 +1953,7 @@ async fn trust_boundary_refuses_a_rebound_host_but_serves_localhost() {
 async fn trust_boundary_refuses_a_foreign_origin() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58900)
     })
@@ -1987,7 +2022,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
     // Rooted in the crate dir (not /tmp): resolve_asset canonicalizes, and on
     // macOS /tmp is a symlink — the sibling source-route test does the same.
     let vault = TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::create_dir_all(vault.path().join("assets")).unwrap();
     std::fs::write(vault.path().join("assets/hero.jpg"), b"JPGBYTES").unwrap();
@@ -2080,16 +2115,16 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 
 // ===== Token-gated HTTP mutation carrier: POST /__moss/mutate/<cmd> =====
 
-/// Stand up a vault fixture whose site dir is `<vault>/.moss/build.nosync/current`, so
-/// `VaultRoot::find_containing` (walked up by the carrier to derive the project
-/// root) resolves to the vault. Returns the TempDir (kept alive by the caller)
+/// Stand up a vault fixture whose site dir is the build output `MossPaths` names, so
+/// `Served::test_cell` names the vault as the served folder. Returns the TempDir (kept alive by the caller)
 /// and the site_dir path. Rooted in the crate dir, not /tmp: create_files /
 /// resolve canonicalize, and on macOS /tmp is a symlink (the source-route tests
 /// do the same).
 #[cfg(test)]
 fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     (vault, site_dir)
 }
@@ -2103,7 +2138,7 @@ async fn serve_bound(
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         invoke: Some(ctx.clone()),
-        ..ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), port)
+        ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), port)
     })
     .await
     .expect("Server should start");
@@ -2238,7 +2273,7 @@ async fn folder_switch_retires_the_previous_vaults_token() {
     let (vault_b, site_b) = served_vault();
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
 
-    let site_dir_state = Arc::new(std::sync::RwLock::new(site_a.clone()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(site_a.clone());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         invoke: Some(ctx.clone()),
         ..ServeConfig::new(site_dir_state.clone(), 63950)
@@ -2298,7 +2333,7 @@ async fn folder_switch_retires_the_previous_vaults_token() {
         .expect("the subscription never landed");
 
     // The folder switch: the server now serves B.
-    handle.point_at(site_b.clone());
+    handle.point_at(crate::moss_paths::Served::test(site_b.clone()));
 
     let ended = subscriber.join().expect("subscriber thread");
     assert!(ended.is_ok(), "A's SSE stream must end on the switch, got {ended:?}");
@@ -2719,7 +2754,8 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
         .unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    std::fs::create_dir_all(vault_path.join(".moss")).unwrap();
+    let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.md"), "---\ntitle: INSIDE\n---\nin the vault\n")
         .unwrap();
@@ -2777,18 +2813,20 @@ async fn reading_a_source_is_not_a_token_free_command() {
     let _ = shutdown_tx.send(());
 }
 
-/// moss's own files under `.moss/` (the carrier token among them) are out of
-/// a carrier read's reach even with the token; the site's config, which the
-/// author edits, is not.
+/// moss's own files under `.moss/`, and the carrier token outside the folder,
+/// are out of a carrier read's reach even with the token; the site's config,
+/// which the author edits, is not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_carrier_read_never_reaches_moss_own_files() {
     let (_parent, vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63440).await;
     let token_file = crate::ops::serve::carrier_token::token_path(&vault_path);
     assert!(token_file.exists(), "control: the carrier published its token file");
-    let relative = token_file.strip_prefix(&vault_path).unwrap().to_string_lossy().into_owned();
+    let own = MossPaths::new(&vault_path).article_map();
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "{}").unwrap();
 
-    for path in [relative.clone(), token_file.to_string_lossy().into_owned()] {
+    for path in [".moss/build.nosync/article-map.json".to_string(), token_file.to_string_lossy().into_owned()] {
         let res = ureq::post(&format!("http://localhost:{}/__moss/read/parse_frontmatter", port))
             .set("Content-Type", "application/json")
             .set("X-Moss-Token", &token)
@@ -3146,7 +3184,7 @@ async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
     std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
     std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
     let (port, _, shutdown_tx) = start_server(ServeConfig::new(
-        Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
+        crate::moss_paths::Served::test_cell(site.path().to_path_buf()),
         63440,
     ))
     .await
@@ -3187,7 +3225,7 @@ async fn the_shell_page_request_tells_the_derive_scheduler_what_is_on_screen() {
     std::fs::write(site.path().join("essay.html"), "<html><body>essay</body></html>").unwrap();
     std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
     let (port, _, shutdown_tx) = start_server(ServeConfig::new(
-        Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
+        crate::moss_paths::Served::test_cell(site.path().to_path_buf()),
         63460,
     ))
     .await
@@ -3226,7 +3264,7 @@ fn host_ping_router() -> axum::Router {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_route_answers_with_the_hosts_body() {
     let temp_dir = tempfile::TempDir::new().unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59200)
@@ -3254,7 +3292,7 @@ async fn host_route_is_not_shadowed_by_a_site_file_at_the_same_path() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("__moss/host")).unwrap();
     std::fs::write(temp_dir.path().join("__moss/host/ping"), b"a site author's own file").unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59300)
@@ -3290,7 +3328,7 @@ async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
     use std::net::TcpStream;
 
     let temp_dir = tempfile::TempDir::new().unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59400)
@@ -3338,7 +3376,7 @@ async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_shadowing_it() {
     let temp_dir = tempfile::TempDir::new().unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
     // Same method as the engine's own route (`POST /__moss/invoke/*cmd`):
     // a different method at the same path is not a collision at all — axum
@@ -3372,7 +3410,7 @@ async fn host_page_is_served_as_the_host_wrote_it() {
     const HOST_PAGE: &str = "<!doctype html><html><head></head><body>the host's own page</body></html>";
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("index.html"), HOST_PAGE).unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let site_dir_state = crate::moss_paths::Served::test_cell(temp_dir.path().to_path_buf());
     let host = axum::Router::new()
         .route("/__moss/host/", axum::routing::get(|| async { axum::response::Html(HOST_PAGE) }));
     let (port, _, shutdown_tx) = start_server(ServeConfig {

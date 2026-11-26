@@ -9,6 +9,7 @@
 //! Skipped when ffmpeg is absent rather than failing: the encoder is an
 //! optional runtime dependency moss downloads, not a build requirement.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,29 +19,6 @@ fn ffmpeg_on_path() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(PathBuf::from(folder_path)),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
 }
 
 /// A 1280x720 clip rich enough in bits (a ladder is only built for a source whose
@@ -73,7 +51,7 @@ impl Site {
         fs::write(self.root.join(rel), body).unwrap();
     }
     fn staging(&self) -> PathBuf {
-        self.root.join(".moss/build.nosync/staging")
+        MossPaths::new(&self.root).staging_dir()
     }
     fn page(&self, rel: &str) -> String {
         fs::read_to_string(self.staging().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
@@ -84,7 +62,7 @@ impl Site {
         html.split("<video").skip(1).map(|v| format!("<video{}", v.split("</video>").next().unwrap_or(v))).collect::<Vec<_>>().join("\n")
     }
     fn build(&self) {
-        build_sync(self.root.to_str().unwrap()).expect("build succeeds");
+        crate::site::build_full(self.root.to_str().unwrap()).expect("build succeeds");
     }
 }
 

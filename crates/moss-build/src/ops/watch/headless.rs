@@ -215,7 +215,7 @@ async fn inline_with_pump_gate(
     if !req.gate_admits(folder_path, "inline").await {
         return;
     }
-    do_rebuild(folder_path, host_ports, plugins, &req.rename_pairs, req.trigger, None)
+    do_rebuild(folder_path, host_ports, plugins, &req.rename_pairs, req.trigger, req.reason, None)
         .await;
 }
 
@@ -267,6 +267,7 @@ async fn attempt_admitted_rebuild(
         plugins,
         &req.rename_pairs,
         req.trigger.clone(),
+        req.reason,
         Some(admission_epoch),
     )
     .await;
@@ -292,6 +293,7 @@ async fn do_rebuild(
     plugins: PluginMode,
     rename_pairs: &[(String, String)],
     trigger: BuildTrigger,
+    reason: Option<crate::build::BuildReason>,
     admission_epoch: Option<u64>,
 ) -> bool {
     let source = std::path::PathBuf::from(folder_path);
@@ -306,7 +308,7 @@ async fn do_rebuild(
         server_port: None,
         live_port: None,
         host: (host_ports)(folder_path),
-        trigger,
+        trigger, reason,
         // Watch rebuilds run inside the long-lived serve process.
         exits_after_build: false,
         site_url_override: None,

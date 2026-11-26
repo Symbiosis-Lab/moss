@@ -139,12 +139,11 @@ mod generator_version_guard {
 }
 
 /// The hash naming this build's `_moss/map.<hash>/` directory: the pack's
-/// own fingerprint (its source manifest digest, from the embedded
-/// `MOSSPLM1` header — changes only when the compiled-in pack data
-/// changes), [`GENERATOR_VERSION`], and the bytes of `tiles.json`, which
-/// list the regional cells `place_map::relevant_tiles` derives from
-/// `gazetteer` (sorted, so iteration order never matters). The explorer
-/// caches `tiles.json` for good under this name, so any change to it must
+/// fingerprint (a digest of its own bytes, so it also covers the label set
+/// behind `labels.json`), [`GENERATOR_VERSION`], and the bytes of
+/// `tiles.json`, which lists the regional cells `place_map::relevant_tiles`
+/// derives from `gazetteer` (sorted, so iteration order never matters). The
+/// explorer caches `tiles.json` for good under this name, so any change to it must
 /// move the directory. Never a function of site config beyond
 /// the gazetteer, or of page content at all, so a page edit never moves
 /// this directory and a `.moss/places.toml` edit moves it only when it
@@ -163,12 +162,6 @@ pub fn assets_hash_with_layers(context: &place_map::PlaceMapContext, gazetteer: 
     let mut buf = Vec::new();
     buf.extend_from_slice(&context.pack_fingerprint());
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
-    // `labels.json` (`emit::place_map_labels`) lands in this SAME
-    // directory, so its own change fingerprint belongs in this SAME hash —
-    // see `PlaceMapContext::labels_bytes`'s own doc for why raw label
-    // bytes, not the pack fingerprint above, are what catches a
-    // generator-only change.
-    buf.extend_from_slice(context.labels_bytes());
     buf.extend_from_slice(&tile_index_json(&place_map::relevant_tiles(gazetteer, context.pack())));
     if let Some(json) = super::place_map_layers::layers_json(layers) {
         buf.extend_from_slice(&json);
@@ -275,10 +268,8 @@ pub fn emit_country_search(documents: &[crate::build::types::ParsedDocument], ou
 /// (see `emit.rs`'s module doc). `render_context` is `Some` exactly when
 /// the caller's own `kind.is_place` test built a `PlaceMapRenderContext` —
 /// `None` gates this out the same way a bool would, but also hands over
-/// the gazetteer already bundled inside it, so there is no second
-/// `load_gazetteer` call at the call site. Decode and emission errors are
-/// logged, never fatal: a broken place-map pack must not fail the whole
-/// build.
+/// the build's pack and gazetteer, so neither is loaded twice. Emission
+/// errors are logged, never fatal.
 pub fn emit_if_place_typed(
     render_context: Option<&place_map::PlaceMapRenderContext>,
     paths: &MossPaths,
@@ -288,17 +279,8 @@ pub fn emit_if_place_typed(
     let Some(render_context) = render_context else {
         return;
     };
-    match place_map::PlaceMapContext::embedded() {
-        Ok(context) => {
-            if let Err(error) = emit_with_layers(&context, render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
-                crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
-            }
-        }
-        Err(error) => {
-            crate::build::cli_output::log_warn_problem!(
-                "bundled place-map data could not be decoded ({error:?}); omitting explorer assets"
-            );
-        }
+    if let Err(error) = emit_with_layers(render_context.maps(), render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
+        crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
     }
 }
 
@@ -472,7 +454,6 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&context.pack_fingerprint());
         buf.extend_from_slice(&(GENERATOR_VERSION + 1).to_le_bytes());
-        buf.extend_from_slice(context.labels_bytes());
         let bumped = compute_binary_hash(&buf);
         assert_ne!(first, bumped);
     }
@@ -500,20 +481,19 @@ mod tests {
         assert_ne!(first, bumped);
     }
 
-    /// A label-only change must move the shared directory even though the
-    /// pack fingerprint (the source-manifest digest) does not: a generator
-    /// change that encodes different label bytes from the SAME pinned
-    /// sources is exactly the case `pack_fingerprint()` alone would miss
-    /// (see `PlaceMapContext::labels_bytes`'s own doc).
+    /// A pack regenerated from the same pinned sources keeps its source
+    /// digest, yet every asset drawn from it may change: both the per-asset
+    /// cache key and the served directory must move with the pack's bytes.
     #[test]
-    fn assets_hash_reacts_to_a_labels_only_change_even_when_the_pack_fingerprint_does_not() {
+    fn cache_key_and_directory_move_when_the_pack_changes_but_its_sources_do_not() {
         let context = place_map::PlaceMapContext::embedded().unwrap();
         let mut pack = context.pack().clone();
-        assert_ne!(pack.labels_bytes, vec![0xaa, 0xbb], "fixture must actually change the bytes");
-        pack.labels_bytes = vec![0xaa, 0xbb];
+        pack.fingerprint = [0xaa; 32];
+        assert_ne!(pack.fingerprint, context.pack().fingerprint, "fixture must actually change the fingerprint");
         let changed = place_map::PlaceMapContext::new(pack);
+        assert_ne!(Asset::World.cache_key(&context), Asset::World.cache_key(&changed));
+        assert_ne!(Asset::Tile(3, 4).cache_key(&context), Asset::Tile(3, 4).cache_key(&changed));
         let gaz = empty_gazetteer();
-        assert_eq!(context.pack_fingerprint(), changed.pack_fingerprint());
         assert_ne!(assets_hash(&context, &gaz), assets_hash(&changed, &gaz));
     }
 
@@ -586,7 +566,6 @@ mod tests {
         let mut expected = Vec::new();
         expected.extend_from_slice(&context.pack_fingerprint());
         expected.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
-        expected.extend_from_slice(context.labels_bytes());
         expected.extend_from_slice(&index);
         assert_eq!(assets_hash(&context, &gaz), compute_binary_hash(&expected));
     }

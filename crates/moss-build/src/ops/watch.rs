@@ -657,6 +657,7 @@ async fn handle_debounced_batch(
     );
 
     let trigger = classify_trigger(root_path, &actionable, || crate::system::build_records::records().content_hashes(folder_path));
+    let reason = reason_for(root_path, actionable.iter().flat_map(|ev| &ev.paths));
     dispatch(worker::RebuildRequest {
         rename_pairs,
         trigger,
@@ -664,8 +665,16 @@ async fn handle_debounced_batch(
         // hash gate; one unconditional event (create/remove/lost-scan)
         // makes the whole batch unconditional.
         gate_paths: all_gate_eligible.then_some(deferred_gate_paths),
+        reason: Some(reason),
     })
     .await;
+}
+
+/// Why a rebuild of `paths` is asked for, from the paths alone: the pump reads
+/// no file, so which `[site]` key changed is not known here.
+pub(crate) fn reason_for<'a>(folder: &Path, mut paths: impl Iterator<Item = &'a std::path::PathBuf>) -> crate::build::BuildReason {
+    let config = crate::moss_paths::MossPaths::new(folder).config();
+    if paths.any(|p| *p == config) { crate::build::BuildReason::Config } else { crate::build::BuildReason::Watch }
 }
 
 /// The watcher's verdict on one event: `Suppress` when it asks for no rebuild
@@ -703,7 +712,8 @@ pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option
         Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
         Change::Wrote(path) => return request_for_writes(folder, vec![path.to_path_buf()]),
     };
-    (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None })
+    let reason = reason_for(folder, paths.iter());
+    (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None, reason: Some(reason) })
 }
 
 /// The rebuild writes to `paths` ask for, as the watcher reads the same
@@ -719,7 +729,8 @@ pub(crate) fn request_for_writes(folder: &Path, paths: Vec<std::path::PathBuf>) 
         PumpGate::Proceed => None,
         PumpGate::DeferHashCheck => Some(paths.clone()),
     };
-    Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths })
+    let reason = reason_for(folder, paths.iter());
+    Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths, reason: Some(reason) })
 }
 
 /// Hand a change moss made to the folder's rebuild worker, so its build does

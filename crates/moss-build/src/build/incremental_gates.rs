@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 pub struct IncrementalGates {
     /// May the page-render loop carry forward pages whose
     /// fingerprint did not move? `false` without evidence of what changed
-    /// (deploy renders every page) and whenever `MOSS_NO_INCREMENTAL` is set.
+    /// (a `Full` build renders every page) and whenever `MOSS_NO_INCREMENTAL` is set.
     pub render_skip: bool,
     /// May Loop A replay the previous build's `ParsedDocument`s?
     /// Same entry-point and kill-switch rules; the difference is which changed
@@ -44,19 +44,23 @@ impl IncrementalGates {
             ChangeProof::for_build(trigger, folder, builder, seal)
         };
         crate::build::phase::record_value("proved_from_seal", usize::from(matches!(proof, ChangeProof::Manifest | ChangeProof::ImagesSettled)));
+        if let (ChangeProof::Manifest, Some(generation)) = (&proof, seal.generation_id()) {
+            crate::build::parse_cache::note_proven_seal(folder, generation);
+        }
         Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
     }
 }
 
 /// The last sealed manifest, and this build's `.moss/` measurement against
-/// its record. Taken once, at the entry point, before anything in the build
+/// its record. Taken at the entry point, before anything in the build
 /// reads `.moss/`: the proof compares the measurement and the manifest
 /// records it, so a file edited during the build moves the next record.
 ///
 /// Some inputs are fetched or written and then rendered in the same build:
-/// link cards a build fetches before rendering, the comments an exiting build
-/// refreshes before its slots, and whatever a blocking process hook writes.
-/// Each lands after this measurement, so the next build renders in full once.
+/// link cards a build fetches before rendering and the comments an exiting
+/// build refreshes before its slots. Each lands after this measurement, so the
+/// next build renders in full once. A blocking process hook's writes are
+/// measured again after it ([`LastSeal::remeasure`]).
 /// A move the build makes itself and renders from (an older link card taken
 /// into the site folder, the redirect history) is recorded at its seal
 /// instead; see [`crate::build::inputs::restamp`].
@@ -81,7 +85,7 @@ impl LastSeal {
     /// Measure `.moss/` again, against the same record, after something wrote
     /// to it; whether it still holds. A build proves from one measurement,
     /// taken after the last such write.
-    fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
+    pub(super) fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
         self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
         self.moss.holds
     }
@@ -90,6 +94,14 @@ impl LastSeal {
     /// `PendingManifest::set_build_inputs`.
     pub(crate) fn record(&self) -> Option<crate::build::inputs::BuildInputs> {
         self.moss.record.clone()
+    }
+
+    /// Whether `.moss/config.toml` differs from the seal's only in
+    /// [`FINGERPRINTED_KEYS`](crate::build::inputs::FINGERPRINTED_KEYS).
+    pub(crate) fn config_rest_holds(&self) -> bool {
+        let sealed = self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()).and_then(|r| r.config_rest.as_ref());
+        let now = self.moss.record.as_ref().and_then(|r| r.config_rest.as_ref());
+        sealed.is_some() && sealed == now
     }
 
     /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
@@ -107,10 +119,13 @@ impl LastSeal {
     /// names, and is on disk. The manifest is written before the generation
     /// is promoted, so its presence alone proves neither.
     fn sealed_generation_is_current(&self, folder: &Path) -> bool {
-        let Some(manifest) = self.manifest.as_ref() else { return false };
+        let Some(id) = self.generation_id() else { return false };
         let paths = crate::moss_paths::MossPaths::new(folder);
-        let id = crate::build::assets::paths::compute_manifest_generation_id(&manifest.files);
         paths.current_generation_id().is_ok_and(|current| current == id) && paths.sealed_generation_dir(&id).is_some()
+    }
+
+    fn generation_id(&self) -> Option<String> {
+        self.manifest.as_ref().map(|manifest| crate::build::assets::paths::compute_manifest_generation_id(&manifest.files))
     }
 
     /// The manifest as read, before key migration; `build_inner` migrates its
@@ -126,7 +141,10 @@ impl LastSeal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChangeProof {
     /// The watcher's batch, an edit or a create, remove or rename alike.
-    Events { paths: Vec<PathBuf> },
+    /// `config_held`: the batch also edited `.moss/config.toml`, and only in
+    /// keys each page's fingerprint covers ([`LastSeal::config_rest_holds`]);
+    /// those paths are not in `paths`.
+    Events { paths: Vec<PathBuf>, config_held: bool },
     /// The last sealed manifest proves that nothing but markdown pages changed
     /// since; see [`SinceSeal::walk`].
     Manifest,
@@ -145,14 +163,18 @@ impl ChangeProof {
             return Self::None;
         }
         match trigger {
-            BuildTrigger::Full => Self::None,
-            BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone() },
+            BuildTrigger::Full | BuildTrigger::VideosSettled => Self::None,
+            BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => {
+                let config = crate::moss_paths::MossPaths::new(folder).config();
+                let (held, paths): (Vec<_>, Vec<_>) = paths.iter().cloned().partition(|p| *p == config && seal.config_rest_holds());
+                Self::Events { paths, config_held: !held.is_empty() }
+            }
             // A seal whose media settled after its render leaves pages a later
             // build renders differently; only the re-render those media owe may
             // prove from it.
             BuildTrigger::Unobserved if seal.media_settled() && SinceSeal::walk(folder, builder, seal).is_some() => Self::Manifest,
-            BuildTrigger::ImagesSettled if SinceSeal::walk(folder, builder, seal).is_some() => Self::ImagesSettled,
-            BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => Self::None,
+            BuildTrigger::ImagesSettled { .. } if SinceSeal::walk(folder, builder, seal).is_some() => Self::ImagesSettled,
+            BuildTrigger::Unobserved | BuildTrigger::ImagesSettled { .. } => Self::None,
         }
     }
 
@@ -166,7 +188,8 @@ impl ChangeProof {
     ///    `None` under it). The kill switch ships with the first skip, not
     ///    after it — it is the bisect tool for the first stale-page report.
     ///    Any value counts.
-    /// 2. The batch is the watcher's. Deploy and the other entry points that
+    /// 2. The batch is the watcher's, or the proof is [`ChangeProof::Manifest`]
+    ///    (an `Unobserved` build: `moss build`, a deploy). Entry points that
     ///    pass `Full` render everything. A `Structural` batch (create, remove,
     ///    rename) is admitted: the parse re-asks every page's links, and the
     ///    render verdict judges a page entering or leaving by the digests of
@@ -177,7 +200,9 @@ impl ChangeProof {
     ///    edit also arrives as a plain modify, but it moves build-globals
     ///    (`css_version`, `site_url`, layout config) that are baked into
     ///    EVERY page's HTML while changing no page's fingerprint — the one
-    ///    way this design could silently serve a stale whole site.
+    ///    way this design could silently serve a stale whole site. The one
+    ///    exception is a `config.toml` edit `config_held` vouches for: it moved
+    ///    only keys each page's own fingerprint covers.
     /// 4. At least one path — an empty batch carries no information.
     ///
     /// Condition 3 stays MARKDOWN-ONLY here even though the parse cache below
@@ -198,7 +223,7 @@ impl ChangeProof {
     /// only markdown changed and that every build-global input held.
     pub fn allows_incremental_skip(&self) -> bool {
         match self {
-            Self::Events { paths, .. } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
+            Self::Events { paths, config_held } => (*config_held || !paths.is_empty()) && paths.iter().all(|p| is_markdown_ext(p)),
             Self::Manifest | Self::ImagesSettled => true,
             Self::None => false,
         }
@@ -233,7 +258,8 @@ impl ChangeProof {
     /// `<picture><source>` wrap into parsed HTML, so an image edit replaying a
     /// cached parse would leave the `<picture>` markup stale.
     /// `.moss/config.toml` is likewise excluded: it moves site scalars that
-    /// `process_markdown_file` reads.
+    /// `process_markdown_file` reads. A `config_held` edit is admitted, since
+    /// no fingerprinted key is a parse input.
     ///
     /// Unrecognised extensions — and extensionless paths — disable the cache.
     /// The allowlist is the whole safety argument, so it over-approximates by
@@ -241,7 +267,7 @@ impl ChangeProof {
     /// parse-irrelevant and adds it here.
     pub fn allows_parse_cache_reuse(&self) -> bool {
         match self {
-            Self::Events { paths, .. } => !paths.is_empty()
+            Self::Events { paths, config_held } => (*config_held || !paths.is_empty())
                 && paths.iter().all(|p| is_markdown_ext(p) || is_parse_irrelevant_ext(p)),
             Self::Manifest => true,
             Self::ImagesSettled | Self::None => false,
@@ -334,7 +360,12 @@ impl AtEntry {
         }
         let fetched = fetch();
         match (fetched, seal.remeasure(folder, options)) {
-            (Some(_), true) => Self::Unchanged,
+            (Some(_), true) => {
+                if let Some(generation) = seal.generation_id() {
+                    crate::build::parse_cache::note_proven_seal(folder, generation);
+                }
+                Self::Unchanged
+            }
             (comments_refreshed, _) => Self::Build { comments_refreshed: comments_refreshed.unwrap_or(false) },
         }
     }
@@ -357,17 +388,15 @@ pub(super) async fn stop_at_entry(config: &PipelineConfig, pass: Pass, seal: &mu
         return Err(at_entry);
     }
     if !config.start_server {
-        return Ok(unchanged_at_entry(config));
+        return Ok(unchanged_at_entry(config, None));
     }
     serve_unchanged(config, pass, seal, port).await.ok_or(AtEntry::Build { comments_refreshed: false })
 }
 
 /// What a build that ended at its entry reports: the generation it kept.
-fn unchanged_at_entry(config: &PipelineConfig) -> PassOutcome {
+fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>) -> PassOutcome {
     crate::build::phase::record_value("unchanged_at_entry", 1);
-    let paths = crate::moss_paths::MossPaths::new(config.source());
-    let generated = crate::ops::serve::ownership::generated_line(config.root.name_opt().unwrap_or("unnamed-site"), &paths.current_ptr(), &paths.staging_dir(), false);
-    PassOutcome { message: format!("Unchanged since the last build.\n{generated}"), owed: false, is_empty: false, port: None }
+    PassOutcome { message: format!("Unchanged since the last build.\n{}", super::generated_message(config, port)), owed: false, is_empty: false, port }
 }
 
 /// What a serving build that stopped at its entry still owes the open: staging
@@ -396,8 +425,8 @@ async fn serve_unchanged(config: &PipelineConfig, pass: Pass, seal: &LastSeal, p
         let domain = crate::build::site_config::get_domain_config(folder).unwrap_or_default();
         crate::build::features::sync::start_background_sync(folder.to_string(), domain, config.host.events.clone(), &*config.host.spawner);
     }
-    super::emit_build_complete(&config.progress, port, false);
-    Some(PassOutcome { port, ..unchanged_at_entry(config) })
+    super::emit_build_complete(&config.progress, port, false, None);
+    Some(unchanged_at_entry(config, port))
 }
 
 /// The passes a stopped build still owes the site, since they read from
@@ -459,7 +488,7 @@ impl PipelineConfig {
     pub(crate) fn may_stop_at_entry(&self, pass: crate::build::media::promise::Pass) -> bool {
         use crate::build::PluginMode;
         matches!(self.trigger, BuildTrigger::Unobserved)
-            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached))
+            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached && !self.host.announcer.needs_a_seal()))
             && !pass.repeat
             && (matches!(pass.plugins, PluginMode::Skip | PluginMode::SlotsOnly) || !self.host.plugins.get_or_create(self.root.as_str()).is_ok_and(|m| m.has_process_hooks()))
     }

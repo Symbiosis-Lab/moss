@@ -2,11 +2,13 @@
 // cached under ~/.cache/wdio-obsidian) against a scratch copy of e2e/vault
 // with this plugin installed from the package root.
 //
-// Hermetic by construction: e2e/shim/moss is prepended to PATH, so the
-// plugin's CLI detection finds a shim that prints byte-identical output to
-// the real `moss build --serve` (captured from 0.11.1) and serves a
-// one-page site. No real moss binary, no network beyond the Obsidian
-// download.
+// Hermetic by default: e2e/shim/moss is prepended to PATH, so the plugin's
+// CLI detection finds a shim that prints byte-identical output to the real
+// `moss build --serve` (captured from 0.11.1) and serves a one-page site. No
+// real moss binary, no network beyond the Obsidian download.
+//
+// MOSS_E2E_MOSS_DIR names a folder holding a real `moss` instead. The specs
+// that need a real preview server (a page per note, rebuilds) run only then.
 //
 // On a headless Linux box run it under xvfb: `xvfb-run -a pnpm run test:e2e`.
 import * as os from "node:os";
@@ -14,11 +16,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const shimDir = path.join(here, "shim");
+const mossDir = process.env.MOSS_E2E_MOSS_DIR ?? path.join(here, "shim");
 
 // The Obsidian process inherits this environment; the plugin's PATH scan
-// must find the shim first.
-process.env.PATH = `${shimDir}${path.delimiter}${process.env.PATH ?? ""}`;
+// must find this moss first.
+process.env.PATH = `${mossDir}${path.delimiter}${process.env.PATH ?? ""}`;
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -35,6 +37,16 @@ export const config: WebdriverIO.Config = {
         installerVersion: "latest",
         plugins: [path.join(here, "..")],
         vault: path.join(here, "vault"),
+      },
+    },
+    {
+      "wdio:specs": ["./specs/nested.e2e.ts"],
+      browserName: "obsidian",
+      browserVersion: "latest",
+      "wdio:obsidianOptions": {
+        installerVersion: "latest",
+        plugins: [path.join(here, "..")],
+        vault: path.join(here, "nested-vault"),
       },
     },
     {

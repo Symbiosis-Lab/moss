@@ -30,6 +30,13 @@ pub struct DescribePayload<'a> {
     /// — `<body data-page>`, `<html data-theme>`. Schema v6.
     pub scope_attributes: Vec<ScopeAttrJson>,
     pub frontmatter: Vec<FrontmatterFieldJson>,
+    /// Every contract name moss has released and no longer writes, each with
+    /// the `moss migrate` rewrite that brings a folder off it, or `null` when
+    /// the feature is gone and nothing replaces it.
+    pub retired: Vec<RetiredJson>,
+    /// moss's own shortcodes, for an editor's completion list. A plugin's
+    /// `:::` blocks are its `contributes.blocks`. Additive.
+    pub shortcodes: Vec<ShortcodeJson>,
     /// Every language code that makes a directory or filename suffix a
     /// language edition (`zh-hant/about.md`, `about.zh-hans.md`).
     ///
@@ -54,6 +61,10 @@ pub struct DescribePayload<'a> {
     pub config_tables: Vec<ConfigTableInfo>,
     /// Template injection slots: each named slot in the build pipeline.
     pub slots: Vec<SlotInfo>,
+    /// Who may write each path in a site folder. Filled by moss-build's CLI
+    /// layer from its path table; empty from `DescribePayload::new()`.
+    /// Append-only: agent tools read it.
+    pub paths: PathsJson,
     /// CLI commands: each subcommand moss exposes.
     // hand-maintained: keep in sync with run_mode.rs
     pub cli_commands: Vec<CliCommandInfo>,
@@ -150,6 +161,26 @@ pub struct CliCommandInfo {
     pub description: &'static str,
 }
 
+/// One shortcode an author can write.
+#[derive(Serialize)]
+pub struct ShortcodeJson {
+    pub name: &'static str,
+    pub summary: &'static str,
+    /// The text inserted after `:::`, in snippet syntax (`${1:placeholder}`).
+    pub template: &'static str,
+    /// Attributes the opening line accepts; a `flag` is a bare keyword (`{wide}`).
+    pub attrs: &'static [crate::contract::shortcodes::ShortcodeAttrSpec],
+}
+
+/// moss's own shortcodes an author can write.
+pub fn shortcodes() -> Vec<ShortcodeJson> {
+    crate::contract::shortcodes::catalog()
+        .into_iter()
+        .filter(|e| e.authorable)
+        .map(|e| ShortcodeJson { name: e.name, summary: e.summary, template: e.canonical_template, attrs: e.attrs })
+        .collect()
+}
+
 #[derive(Serialize)]
 pub struct TokenJson<'a> {
     pub name: &'a str,
@@ -212,6 +243,64 @@ pub struct CustomPropJson {
     pub description: &'static str,
 }
 
+/// Where an agent may write, emitted in `paths`.
+#[derive(Serialize, Default)]
+pub struct PathsJson {
+    /// Who writes a path outside `.moss/` that no rule names.
+    pub default_outside_moss: &'static str,
+    /// Who writes a path inside `.moss/` that no rule names.
+    pub default_inside_moss: &'static str,
+    pub rules: Vec<PathRuleJson>,
+}
+
+#[derive(Serialize)]
+pub struct PathRuleJson {
+    /// Folder-relative; a trailing `/` covers everything beneath it.
+    pub path: &'static str,
+    /// `author` or `moss`.
+    pub writer: &'static str,
+    /// For a `moss` path, the command that changes it; `null` when moss
+    /// regenerates it, and for an `author` path.
+    pub changed_by: Option<&'static str>,
+}
+
+/// A retired contract name, emitted in `retired`.
+#[derive(Serialize)]
+pub struct RetiredJson {
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub retired_in: Option<&'static str>,
+    pub replaced_by: Option<&'static str>,
+    /// Whether moss still writes the old name beside its replacement.
+    pub aliased: bool,
+    pub note: &'static str,
+    pub migration: Option<MigrationJson>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationJson {
+    /// What `moss migrate --list` calls it.
+    pub id: String,
+    /// Whether migrating changes nothing a reader sees.
+    pub keeps_look: bool,
+}
+
+fn retired_rows() -> Vec<RetiredJson> {
+    use crate::contract::retired::{Migrate, RETIRED};
+    RETIRED
+        .iter()
+        .map(|r| RetiredJson {
+            kind: r.kind.slug(),
+            name: r.name,
+            retired_in: r.retired_in,
+            replaced_by: r.replaced_by(),
+            aliased: r.aliased,
+            note: r.note,
+            migration: (r.migrate != Migrate::Gone).then(|| MigrationJson { id: r.id(), keeps_look: r.keeps_look() }),
+        })
+        .collect()
+}
+
 impl<'a> DescribePayload<'a> {
     pub fn new(tokens: &'a Tokens) -> Self {
         let mut tokens_map: BTreeMap<&str, Vec<TokenJson>> = BTreeMap::new();
@@ -235,7 +324,6 @@ impl<'a> DescribePayload<'a> {
 
         let components: Vec<ComponentJson> = COMPONENTS
             .iter()
-            .filter(|c| c.is_public())
             .map(|c| ComponentJson {
                 class: c.class,
                 kind: c.kind,
@@ -255,7 +343,6 @@ impl<'a> DescribePayload<'a> {
                 status: match c.status {
                     Status::Confirmed => "confirmed",
                     Status::Emerging => "emerging",
-                    Status::Retired => "retired",
                 },
                 since: c.since,
                 description: c.description,
@@ -288,6 +375,8 @@ impl<'a> DescribePayload<'a> {
                 })
                 .collect(),
             frontmatter: frontmatter_fields(),
+            retired: retired_rows(),
+            shortcodes: shortcodes(),
             languages: crate::home::known_language_codes(),
             // Populated by moss-build's CLI layer (`cli::describe`), which
             // has access to moss-build's own plugin types. Callers using
@@ -298,6 +387,7 @@ impl<'a> DescribePayload<'a> {
             site_settings: Vec::new(),
             config_tables: Vec::new(),
             slots: Vec::new(),
+            paths: PathsJson::default(),
             cli_commands: Vec::new(),
         }
     }
@@ -339,6 +429,11 @@ impl<'a> DescribePayload<'a> {
     /// Builder method: attach the `[site]` settings table. Same caller as
     /// [`DescribePayload::with_plugin_contract`], since the keys are read by
     /// moss-build.
+    pub fn with_paths(mut self, paths: PathsJson) -> Self {
+        self.paths = paths;
+        self
+    }
+
     pub fn with_site_settings(mut self, site_settings: Vec<SiteSettingInfo>) -> Self {
         self.site_settings = site_settings;
         self

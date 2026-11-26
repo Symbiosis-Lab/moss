@@ -27,12 +27,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
-/// The vault root is derived from the served site directory rather than passed
-/// in: the site dir is `<vault>/.moss/build.nosync/…`, and `VaultRoot::find_containing`
-/// walks up to the nearest ancestor owning a `.moss/`. The `find_` variant is
-/// deliberate — it returns `None` instead of falling back to the starting
-/// directory, so a server pointed somewhere unexpected 404s rather than
-/// silently exposing whatever folder it happened to start in.
+/// The vault root is the folder the server's cell names.
 ///
 /// `path` arrives percent-DECODED (axum's `Path` extractor decodes once), which
 /// is what [`serve_source_asset`] expects and matches what the Tauri scheme
@@ -40,20 +35,38 @@ use tower_http::services::{ServeDir, ServeFile};
 /// and a second decode would hand it a different string than the one that was
 /// checked.
 pub(super) async fn source_asset_route(
-    site_dir_state: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    site_dir_state: crate::moss_paths::ServedCell,
     path: String,
     query: Option<String>,
 ) -> Response {
     use crate::editor::source_asset::{serve_source_asset, SourceAssetResponse};
 
-    let site_dir = match site_dir_state.read() {
-        Ok(d) => d.clone(),
+    let vault = match site_dir_state.read() {
+        Ok(served) => served.folder.clone(),
         Err(_) => return dress(SourceAssetResponse::not_found()),
     };
-    let Some(vault) = crate::vault::paths::VaultRoot::find_containing(&site_dir) else {
-        return dress(SourceAssetResponse::not_found());
-    };
     dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
+}
+
+/// `/__moss/page/<source path>` redirects to the page that source file builds
+/// to, so a host that embeds the preview can follow the file its editor has
+/// open without knowing how moss names pages. A page's address is not secret
+/// (the page itself is served without a token), so this route takes none. A
+/// path that leaves the folder, a file with no page and a page not built yet
+/// all get the same bare 404.
+pub(super) async fn page_for_source_route(
+    site_dir_state: crate::moss_paths::ServedCell,
+    path: String,
+) -> Response {
+    let inside_folder = std::path::Path::new(&path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    let page = site_dir_state.read().ok().map(|s| s.clone()).filter(|_| inside_folder).and_then(|served| {
+        crate::editor::resolve::links::resolve_url_for_file_inner(&path, served.folder.path(), &served.dir).ok()?
+    });
+    use axum::response::IntoResponse;
+    match page {
+        Some(url) => axum::response::Redirect::temporary(&url).into_response(),
+        None => http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// A file under the search mount, from the bundle the last settle published.
@@ -65,10 +78,10 @@ pub(super) async fn source_asset_route(
 /// ends. A picture or video batch is not: the newest bundle answers at once and
 /// the settle runs behind it, so a search never waits on pictures. With no
 /// bundle yet there is nothing to answer with, and the settle is awaited.
-async fn search_bundle_file(current_dir: &std::path::Path, normalized: &str) -> Option<std::path::PathBuf> {
+async fn search_bundle_file(served: &crate::moss_paths::Served, normalized: &str) -> Option<std::path::PathBuf> {
     use crate::build::feeds::search_lane;
     let rel = normalized.strip_prefix(crate::build::served_path::ServedPath::search_mount_url().trim_start_matches('/'))?;
-    let vault = crate::vault::paths::VaultRoot::find_containing(current_dir)?;
+    let vault = &served.folder;
     let mp = crate::moss_paths::MossPaths::new(vault.path());
     if matches!(rel, "pagefind.js" | "pagefind-entry.json") && search_lane::enabled_for(&mp) {
         let session = crate::system::folder_session::registry().get(&vault.path().to_string_lossy());
@@ -95,13 +108,13 @@ const SEARCH_WAITS_FOR_A_BUILD: std::time::Duration = std::time::Duration::from_
 /// The file at `normalized`: the search mount from the newest bundle, the rest
 /// from the served tree.
 async fn serve_file(
-    current_dir: &std::path::Path,
+    served: &crate::moss_paths::Served,
     normalized: &str,
     request: Request<Body>,
 ) -> Result<Response<tower_http::services::fs::ServeFileSystemResponseBody>, std::convert::Infallible> {
-    match search_bundle_file(current_dir, normalized).await {
+    match search_bundle_file(served, normalized).await {
         Some(held) => ServeFile::new(held).oneshot(request).await,
-        None => ServeDir::new(current_dir).oneshot(request).await,
+        None => ServeDir::new(&served.dir).oneshot(request).await,
     }
 }
 
@@ -197,7 +210,7 @@ pub type EvictedProbe = fn(&std::path::Path) -> bool;
 pub struct ServeConfig {
     /// Shared live directory pointer. The build atomically switches it during
     /// rebuilds (zero-flicker), and every request re-reads it.
-    pub site_dir_cell: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    pub site_dir_cell: crate::moss_paths::ServedCell,
     /// When present, the server serves SVG placeholders (and source
     /// passthrough) for assets still being processed.
     pub asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
@@ -236,7 +249,7 @@ impl ServeConfig {
     /// port base *before* construction (tests pass a literal; the app passes
     /// [`super::port::env_port_base`]) so building a config never reads the
     /// environment.
-    pub fn new(site_dir_cell: Arc<std::sync::RwLock<std::path::PathBuf>>, start_port: u16) -> Self {
+    pub fn new(site_dir_cell: crate::moss_paths::ServedCell, start_port: u16) -> Self {
         Self {
             site_dir_cell,
             asset_registry: None,
@@ -263,12 +276,7 @@ pub async fn start_server(
     config: ServeConfig,
 ) -> Result<(u16, Option<u16>, tokio::sync::oneshot::Sender<()>), String> {
     if let Some(ui) = &config.ui {
-        ui.validate(
-            &config
-                .site_dir_cell
-                .read()
-                .map_err(|_| "serve directory lock poisoned")?,
-        )?;
+        ui.validate(&config.site_dir_cell.read().map_err(|_| "serve directory lock poisoned")?.dir)?;
     }
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
@@ -324,7 +332,7 @@ pub async fn start_server(
     // `.fallback(ServeDir)` so a user file at the same path cannot shadow
     // them. Add future moss-internal HTTP endpoints under this prefix,
     // following the same ordering rule.
-    let build_router = |state: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    let build_router = |state: crate::moss_paths::ServedCell,
                         registry: Option<Arc<crate::types::assets::AssetRegistry>>,
                         invoke: Option<super::invoke::InvokeCtx>,
                         is_evicted: EvictedProbe,
@@ -348,12 +356,14 @@ pub async fn start_server(
             )
             .route(
                 "/__moss/source/*path",
-                get(move |axum::extract::Path(p): axum::extract::Path<String>,
-                          axum::extract::RawQuery(query): axum::extract::RawQuery| {
-                    let site_dir = state_for_source.clone();
-                    async move { source_asset_route(site_dir, p, query).await }
+                get(move |axum::extract::Path(p): axum::extract::Path<String>, axum::extract::RawQuery(query): axum::extract::RawQuery| {
+                    source_asset_route(state_for_source.clone(), p, query)
                 }),
             )
+            .route("/__moss/page/*path", get({
+                let site_dir = state.clone();
+                move |axum::extract::Path(p): axum::extract::Path<String>| page_for_source_route(site_dir.clone(), p)
+            }))
             // Preview-only comment stub: receives the comment form POST and
             // returns an Artalk-shaped success without real-server traffic.
             // Registered before .fallback() so a user file cannot shadow it.
@@ -501,7 +511,8 @@ pub async fn start_server(
                 async move {
                     // Read current directory from shared state
                     // This is the key to zero-flicker: we resolve the path on each request
-                    let current_dir = state.read().unwrap().clone();
+                    let served = state.read().unwrap().clone();
+                    let current_dir = served.dir.clone();
                     let path = request.uri().path().to_string();
                     let encoded = path.trim_start_matches('/');
                     let normalized = urlencoding::decode(encoded)
@@ -515,11 +526,11 @@ pub async fn start_server(
                         .then(|| crate::build::served_path::ServedPath::from_source(&normalized).ok())
                         .flatten().filter(|served| served.as_str() == normalized);
                     let serves_current = valid_image.is_some()
-                        && image_original::serves_current(&current_dir);
+                        && image_original::serves_current(&served);
                     let image_output = valid_image.as_ref().map(|served| current_dir.join(served.as_str()));
                     if serves_current && image_output.as_ref().is_some_and(|output|
                         !output.exists() || crate::build::icloud::is_still_in_the_cloud(output)) {
-                        if let Some(original) = image_original::recorded_original(&current_dir, &normalized).await {
+                        if let Some(original) = image_original::recorded_original(&served, &normalized).await {
                             return original.serve(request, is_evicted)
                                 .await.unwrap_or_else(pending_image_response);
                         }
@@ -655,10 +666,10 @@ pub async fn start_server(
                     parts.headers.remove(http::header::IF_NONE_MATCH);
                     let request = Request::from_parts(parts, body);
 
-                    match serve_file(&current_dir, &normalized, request).await {
+                    match serve_file(&served, &normalized, request).await {
                         Ok(response) => {
                             if response.status() == http::StatusCode::NOT_FOUND {
-                                super::log_preview_404(&current_dir, &path);
+                                super::log_preview_404(&served, &path);
                                 // Return a proper HTML 404 page so the iframe-bridge
                                 // middleware can inject its script and keep navigation alive.
                                 // Without this, the iframe gets a bare 404 with no body,

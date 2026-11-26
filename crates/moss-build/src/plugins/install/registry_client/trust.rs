@@ -48,6 +48,31 @@ impl TrustRecord {
     }
 }
 
+/// Where `roots`' app keeps its answers: the non-roaming root, since whether
+/// this computer runs a folder's code is a fact about this computer. The
+/// per-plugin approvals a released moss kept in the roaming root are copied
+/// over the first time and left in place for that moss; no release kept a
+/// record there, so there is none to copy.
+pub fn root(roots: &crate::infra::app_data::AppRoots) -> PathBuf {
+    adopt_legacy(&roots.roaming, &roots.local);
+    roots.local.clone()
+}
+
+fn adopt_legacy(from: &Path, to: &Path) {
+    refuse_a_real_root_in_tests(from);
+    refuse_a_real_root_in_tests(to);
+    let old = from.join(LEGACY_FILE);
+    if from == to || to.join(LEGACY_FILE).exists() || to.join(FILE).exists() || !old.is_file() || fs::create_dir_all(to).is_err() {
+        return;
+    }
+    // Whole or not at all: a torn copy would read as no approvals.
+    let partial = to.join(format!(".{LEGACY_FILE}.{}.tmp", std::process::id()));
+    // allow:raw_write the temp this call just minted, renamed into place whole
+    if fs::copy(&old, &partial).is_err() || fs::rename(&partial, to.join(LEGACY_FILE)).is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+}
+
 /// The record under `root`, or empty. An unreadable file is empty too: the
 /// cost is a question asked again, not a plugin running without an answer.
 pub fn load(root: &Path) -> TrustRecord {
@@ -109,7 +134,7 @@ pub fn legacy_covers(legacy: &HashMap<PathBuf, String>, carried: &[(PathBuf, Opt
 /// temporary one; a shipped binary never runs from `deps`, so it is never
 /// stopped.
 fn refuse_a_real_root_in_tests(root: &Path) {
-    if !in_test_binary() {
+    if !crate::infra::app_data::in_test_binary() {
         return;
     }
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -123,26 +148,32 @@ fn refuse_a_real_root_in_tests(root: &Path) {
     );
 }
 
-fn in_test_binary() -> bool {
-    std::env::current_exe().is_ok_and(|exe| is_test_binary_path(&exe))
-}
-
-/// Cargo runs every test binary, unit and integration, from
-/// `<profile>/deps/`, or under its newer build-dir layout from
-/// `<profile>/build/<package>/<hash>/out/`. A binary a person runs is
-/// copied up to `<profile>/` or installed elsewhere, so it is neither.
-fn is_test_binary_path(exe: &Path) -> bool {
-    let mut dirs = exe.ancestors().skip(1).map(|dir| dir.file_name().unwrap_or_default());
-    match dirs.next() {
-        Some(parent) if parent == "deps" => true,
-        Some(parent) if parent == "out" => dirs.nth(2).is_some_and(|dir| dir == "build"),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_approvals_are_copied_to_the_local_root_once_and_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = crate::infra::app_data::AppRoots { roaming: tmp.path().join("roaming"), local: tmp.path().join("local") };
+        fs::create_dir_all(&roots.roaming).unwrap();
+        fs::write(roots.roaming.join(LEGACY_FILE), r#"{"approvals":[]}"#).unwrap();
+
+        assert_eq!(root(&roots), roots.local);
+        assert_eq!(fs::read_to_string(roots.local.join(LEGACY_FILE)).unwrap(), r#"{"approvals":[]}"#);
+        assert!(roots.roaming.join(LEGACY_FILE).exists(), "the old file stays for the moss that wrote it");
+        let names: Vec<_> = fs::read_dir(&roots.local).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "no partial copy and no record made up: {names:?}");
+
+        fs::write(roots.local.join(LEGACY_FILE), "{}").unwrap();
+        root(&roots);
+        assert_eq!(fs::read_to_string(roots.local.join(LEGACY_FILE)).unwrap(), "{}", "a copy already there is never overwritten");
+
+        fs::remove_file(roots.local.join(LEGACY_FILE)).unwrap();
+        save(&roots.local, &TrustRecord::default()).unwrap();
+        root(&roots);
+        assert!(!roots.local.join(LEGACY_FILE).exists(), "a root that already holds a record is done");
+    }
 
     #[test]
     fn an_answer_is_per_folder_and_survives_a_round_trip() {
@@ -164,15 +195,6 @@ mod tests {
 
         fs::write(tmp.path().join(FILE), "{not json").unwrap();
         assert_eq!(load(tmp.path()), TrustRecord::default(), "unreadable is empty, not an error");
-    }
-
-    #[test]
-    fn a_test_binary_is_known_in_both_cargo_layouts_and_a_shipped_one_is_not() {
-        assert!(is_test_binary_path(Path::new("/w/target/debug/deps/moss_build-0123abcd")));
-        assert!(is_test_binary_path(Path::new("/w/target/debug/build/moss-build/0123abcd/out/moss_build-0123abcd")));
-        assert!(!is_test_binary_path(Path::new("/w/target/debug/moss")));
-        assert!(!is_test_binary_path(Path::new("/Applications/moss.app/Contents/MacOS/moss")));
-        assert!(!is_test_binary_path(Path::new("/w/out/moss")));
     }
 
     #[test]

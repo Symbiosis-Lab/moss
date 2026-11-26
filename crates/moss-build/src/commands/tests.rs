@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -478,7 +479,7 @@ async fn a_page_whose_name_the_disk_spells_decomposed_finds_its_built_url() {
     let page = root.join("cafe\u{301}.md");
     // allow:raw_write test fixture page in a temp folder
     std::fs::write(&page, "# Menu").unwrap();
-    std::fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(&root).build_dir()).unwrap();
     let mut map = crate::build::scan::article_map::ArticleMap::new();
     map.pages.insert("menu/".into(), "caf\u{e9}.md".into());
     map.save(&root.join(".moss")).unwrap();

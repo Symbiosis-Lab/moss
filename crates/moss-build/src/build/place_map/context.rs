@@ -643,26 +643,51 @@ impl PlaceMapContext {
         super::embedded().map(Self::new)
     }
 
+    /// This build's pack: the installed one the site asks for, else moss's
+    /// own. A pack still in the cloud is asked for and holds the generation
+    /// until it arrives; one that is missing or fails its check is a counted
+    /// problem, so `--strict` fails (and `moss deploy` stops on the same text).
+    pub fn load(
+        paths: &crate::moss_paths::MossPaths,
+        wanted: Option<&str>,
+        evidence: &crate::build::cloud_ledger::InputEvidence,
+    ) -> Result<Self, super::DecodeError> {
+        use crate::build::cloud_ledger::InputRole;
+        match super::find_landscape(&paths.maps_dir(), wanted) {
+            super::Landscape::Embedded => {
+                crate::build::cli_output::log_note!("the place map will need its pack in .moss/maps/: run `moss migrate --apply`");
+                Self::embedded()
+            }
+            super::Landscape::Installed { path, stored, pack, passed_over } => {
+                evidence.require(&path, InputRole::SharedConfig);
+                evidence.read_bytes(&path, &stored);
+                for name in passed_over {
+                    crate::build::cli_output::log_note!("{name} is not drawn: {} sorts first", path.display());
+                }
+                Ok(Self::new(pack))
+            }
+            super::Landscape::InCloud(path) => {
+                evidence.require(&path, InputRole::SharedConfig);
+                evidence.pending(&path);
+                crate::build::cloud_readiness::request_download(&path);
+                crate::build::cli_output::log_note!("{} is still in the cloud: the place map waits for it", path.display());
+                Self::embedded()
+            }
+            super::Landscape::Missing(problem) => {
+                crate::build::cli_output::log_warn_problem!("{problem}; drawing moss's own map");
+                Self::embedded()
+            }
+        }
+    }
+
     pub fn pack(&self) -> &Pack {
         &self.pack
     }
 
-    /// The embedded pack's raw schema-4 label-payload bytes -- a stable
-    /// fingerprint of "the label set, or the generator that produced it,
-    /// changed" for a caller that needs one (`emit::place_map_assets::
-    /// assets_hash` folds this into the `_moss/map.<hash>/` directory name
-    /// so `labels.json`, served from that same directory, is named
-    /// correctly whenever either changes). Unlike [`Self::pack_fingerprint`],
-    /// this is NOT derived from the source manifest's digest: a generator
-    /// change that encodes different label bytes from the SAME pinned
-    /// sources would leave the manifest digest untouched, so these raw
-    /// bytes are hashed directly instead.
-    pub fn labels_bytes(&self) -> &[u8] {
-        &self.pack.labels_bytes
-    }
-
+    /// The key everything drawn from the pack is cached and served under
+    /// (see [`Pack::fingerprint`]).
     pub fn pack_fingerprint(&self) -> [u8; 32] {
-        self.pack.header.manifest_sha256
+        self.pack.fingerprint
     }
 
     /// Resolve declared `location:` values in declaration order. A missing

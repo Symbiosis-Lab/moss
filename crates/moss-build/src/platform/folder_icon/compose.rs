@@ -45,11 +45,11 @@ fn plist_string(plist: &str, key: &str) -> Option<String> {
     Some(value.trim().to_owned())
 }
 
-/// The icon for `tag`, from the per-OS cache or composed now.
-pub(super) fn folder_icns(tag: &str) -> Option<Vec<u8>> {
-    let dir = crate::infra::app_data::app_data_dir_early()?.join("folder-icon");
+/// The icon for `tag`, from the per-OS cache in `dir` or composed now.
+pub(super) fn folder_icns(dir: &Path, tag: &str) -> Option<Vec<u8>> {
     let cache = dir.join(format!("{tag}.icns"));
     if let Some(bytes) = std::fs::read(&cache).ok().filter(|b| is_icns(b)) {
+        collect_other_builds(dir, tag);
         return Some(bytes);
     }
     // Composing waits up to the dump's timeout; after a failure (no window
@@ -73,7 +73,17 @@ pub(super) fn folder_icns(tag: &str) -> Option<Vec<u8>> {
     if std::fs::write(&tmp, &icns).is_ok() && std::fs::rename(&tmp, &cache).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+    collect_other_builds(dir, tag);
     Some(icns)
+}
+
+/// Removes what earlier OS builds left: a Mac's build only moves forward, so
+/// their icons are never read again. Another moss on this OS build keeps its
+/// own recipe's icon.
+pub(super) fn collect_other_builds(dir: &Path, tag: &str) {
+    let Some((build, _)) = tag.split_once('-') else { return };
+    let ours = format!("{build}-");
+    crate::infra::disposable::collect_unused(dir, std::time::Duration::ZERO, |name| !name.starts_with(&ours), |_| Some(()));
 }
 
 /// Whole icns framing: the magic and a total length that matches.

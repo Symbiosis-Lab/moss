@@ -1,23 +1,25 @@
 //! A page that declares no cover shares the first body picture a platform can
 //! take as-is, not whatever picture happens to come first.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::Path;
 
 fn build(folder: &Path) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(folder),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger: moss_build::build::BuildTrigger::Full,
+        trigger: moss_build::build::BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -46,7 +48,7 @@ fn page(front: &str, body: &str) -> String {
 }
 
 fn share_image(root: &Path, slug: &str) -> String {
-    let html = fs::read_to_string(root.join(format!(".moss/build.nosync/staging/{slug}/index.html"))).unwrap();
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(format!("{slug}/index.html"))).unwrap();
     let doc = scraper::Html::parse_document(&html);
     doc.select(&scraper::Selector::parse(r#"meta[property="og:image"]"#).unwrap())
         .next()

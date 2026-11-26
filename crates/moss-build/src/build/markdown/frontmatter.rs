@@ -17,6 +17,7 @@ pub use crate::build::scan::slug::{
 pub use moss_core::frontmatter_typed::{
     AnalyticsConfig,
     FrontMatter,
+    SidebarAlias,
     apply_sidebar_alias,
     compute_url_path,
     deserialize_bool_lenient,
@@ -603,8 +604,7 @@ analytics: "https://analytics.mysite.com/script.js"
         assert_eq!(fm.children_source.as_deref(), Some("[[News]]"));
         assert_eq!(fm.children_in.as_deref(), Some("sidebar"));
         assert_eq!(fm._from_sidebar_alias, Some(true));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("deprecated"));
+        assert!(matches!(&warnings, Some(SidebarAlias::Applied(n)) if n.contains("children_in: sidebar")), "{warnings:?}");
     }
 
     #[test]
@@ -635,8 +635,7 @@ analytics: "https://analytics.mysite.com/script.js"
         assert_eq!(fm.children_source.as_deref(), Some("[[B]]"), "children_source untouched");
         assert_eq!(fm.children_in, None, "children_in not set on conflict");
         assert_eq!(fm._from_sidebar_alias, None);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("ignored"));
+        assert!(matches!(&warnings, Some(SidebarAlias::Ignored(p)) if p.contains("ignored")), "{warnings:?}");
     }
 
     #[test]
@@ -649,8 +648,7 @@ analytics: "https://analytics.mysite.com/script.js"
 
         assert_eq!(fm.children_in, None);
         assert_eq!(fm._from_sidebar_alias, None);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("ignored"));
+        assert!(matches!(&warnings, Some(SidebarAlias::Ignored(p)) if p.contains("ignored")), "{warnings:?}");
     }
 
     #[test]
@@ -661,7 +659,7 @@ analytics: "https://analytics.mysite.com/script.js"
 
         let warnings = apply_sidebar_alias(&mut fm);
 
-        assert_eq!(warnings.len(), 0);
+        assert_eq!(warnings, None);
         assert_eq!(fm.children_in, None);
         assert_eq!(fm._from_sidebar_alias, None);
     }

@@ -292,6 +292,39 @@ value — so a plugin may name one outside this list.
 
 ## Hooks
 
+### LoginResult
+
+```ts
+type LoginResult = 
+  | {
+  account: {
+     host?: string;
+     id: string;
+     name?: string;
+  };
+  status: "completed";
+}
+  | {
+  status: "cancelled";
+}
+  | {
+  message: string;
+  status: "failed";
+};
+```
+
+What a channel's `login` answers. moss records the folder as signed in to
+`account.id`, the provider's stable identifier for the account (a DID, a
+numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+`host` is the account's own server, for a channel whose accounts live on
+many servers: moss takes a `syndicated:` address on it as this channel's copy.
+Answer `cancelled` when the person stopped the sign-in, as when
+[BrowserSignIn.open](interfaces/BrowserSignIn.md#open) rejects with [SignInCancelled](classes/SignInCancelled.md). A `login`
+that returns nothing is read the older way, from its own config. Needs moss
+0.15.29; raise `min_moss_version` to it when `login` returns this.
+
+***
+
 ### SetupVerdict
 
 ```ts
@@ -945,6 +978,27 @@ Reason why the browser window was closed
 
 ***
 
+### EditorFillPart
+
+```ts
+type EditorFillPart = 
+  | {
+  html: string;
+}
+  | {
+  picture: {
+     base64: string;
+     name: string;
+     type: string;
+     url: string;
+  };
+};
+```
+
+A run of the article, or a picture given as its bytes, for [fillEditor](#filleditor).
+
+***
+
 ### closeBrowser()
 
 ```ts
@@ -956,6 +1010,39 @@ Close the action panel
 #### Returns
 
 `Promise`\<`void`\>
+
+***
+
+### fillEditor()
+
+```ts
+function fillEditor(fill): Promise<EditorFillAnswer>;
+```
+
+Put an article into the network's editor that this plugin opened in the
+panel, as the author would paste it: moss runs its own script there with
+this data, never the plugin's code, and only on a page of one of the
+plugin's declared domains.
+
+Only in the moss app; elsewhere it rejects.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `fill` | [`EditorFill`](interfaces/EditorFill.md) |
+
+#### Returns
+
+`Promise`\<[`EditorFillAnswer`](interfaces/EditorFillAnswer.md)\>
+
+#### Example
+
+```typescript
+await openBrowser("https://network.example/editor/new");
+const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+if (answer.result !== "filled") showCopyPage();
+```
 
 ***
 
@@ -1233,7 +1320,9 @@ function startBrowserSignIn(): Promise<BrowserSignIn>;
 Start a sign-in that finishes in the person's own browser, where they are
 usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
 moss listens on this computer for the provider's redirect, once; starting
-another sign-in ends this one.
+another sign-in ends this one. moss hands back whatever reached the
+redirect: the caller sends a fresh `state` and refuses a reply whose
+`state` differs, since only it knows which request it made.
 
 Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
 
@@ -1805,14 +1894,22 @@ Messages that plugins can send to moss
 
 ## Copies
 
-| Interface | Description |
-| ------ | ------ |
-| [AccountQuery](interfaces/AccountQuery.md) | What a channel's optional `copy_account` receives. It answers which account the channel is signed in to, in [CopyOutcome.account](interfaces/CopyOutcome.md#account); moss keeps it on each copy, and leaves a copy sent from another account alone. |
-| [CopyJob](interfaces/CopyJob.md) | The one copy a channel's `publish_copy`, `update_copy` or `find_copy` receives, already shaped to the limits its manifest declares under `contributes.channel.syndication`. |
-| [CopyOutcome](interfaces/CopyOutcome.md) | A copy hook's answer, in [HookResult.copy](interfaces/HookResult.md#copy): the copy's id and address; or, with `success: false`, why the network refused; or a hand-off, a copy the author posts by hand (`text` to paste at `open_url`) or a draft on the network for the author to publish (empty `text`, the draft's `id`). |
-| [CopyPart](interfaces/CopyPart.md) | One post of a copy, ready to post: plain text, with every address in it, in order, for networks that mark links up. |
-| [CopyPicture](interfaces/CopyPicture.md) | A picture for the channel to upload with a plain-text copy. |
-| [CopyRef](interfaces/CopyRef.md) | A copy's id and address on its network. |
+### ArticleBlock
+
+```ts
+type ArticleBlock = 
+  | {
+  html: string;
+}
+  | {
+  picture: {
+     alt: string;
+     url: string;
+  };
+};
+```
+
+One piece of a long article: a run of HTML, or a picture (absolute `url`) between runs.
 
 ## Keys
 

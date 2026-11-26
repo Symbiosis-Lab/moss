@@ -35,7 +35,7 @@ fn run_sync() -> i32 {
         eprintln!("error: not in a moss project (no .moss/ directory found at {})", project.display());
         return 1;
     }
-    match sync::sync_project(&project, &sync::bundled_cli_path()) {
+    match sync::sync_project(&project) {
         Ok(report) => {
             for path in &report.written {
                 println!("wrote {path}");
@@ -90,27 +90,26 @@ fn run_init(_args: &[String]) -> i32 {
 
         if new_content == existing {
             println!("{} is up to date", target.display());
-            return 0;
-        }
+        } else {
+            // Back up before write.
+            let backup = target.with_extension("md.bak");
+            // allow:raw_write the vault's root agent files are the user's documents, not build output
+            if let Err(e) = fs::write(&backup, &existing) {
+                eprintln!("error writing backup {}: {}", backup.display(), e);
+                return 1;
+            }
 
-        // Back up before write.
-        let backup = target.with_extension("md.bak");
-        // allow:raw_write the vault's root agent files are the user's documents, not build output
-        if let Err(e) = fs::write(&backup, &existing) {
-            eprintln!("error writing backup {}: {}", backup.display(), e);
-            return 1;
+            // allow:raw_write the vault's root agent files are the user's documents, not build output
+            if let Err(e) = fs::write(&target, &new_content) {
+                eprintln!("error writing {}: {}", target.display(), e);
+                return 1;
+            }
+            println!(
+                "{} updated (managed block refreshed; your-notes preserved; backup at {})",
+                target.display(),
+                backup.display()
+            );
         }
-
-        // allow:raw_write the vault's root agent files are the user's documents, not build output
-        if let Err(e) = fs::write(&target, &new_content) {
-            eprintln!("error writing {}: {}", target.display(), e);
-            return 1;
-        }
-        println!(
-            "{} updated (managed block refreshed; your-notes preserved; backup at {})",
-            target.display(),
-            backup.display()
-        );
     } else {
         // allow:raw_write the vault's root agent files are the user's documents, not build output
         if let Err(e) = fs::write(&target, TEMPLATE) {
@@ -120,10 +119,44 @@ fn run_init(_args: &[String]) -> i32 {
         println!("{} created", target.display());
     }
 
+    match write_root_pointer(&project) {
+        Ok(true) => println!("{} created", project.join(ROOT_POINTER).display()),
+        Ok(false) => println!("left {ROOT_POINTER} alone: it is yours. To point other agents at moss, add: {ROOT_POINTER_HINT}"),
+        Err(e) => {
+            eprintln!("error writing {}: {e}", project.join(ROOT_POINTER).display());
+            return 1;
+        }
+    }
+
     println!();
     println!("This file is for YOUR site's conventions. moss's own conventions are");
     println!("`moss guide`, and every build keeps the pointer files above current.");
     0
+}
+
+/// The root file Codex, Gemini CLI, Copilot and other tools read first.
+const ROOT_POINTER: &str = "AGENTS.md";
+
+const ROOT_POINTER_HINT: &str = "This folder is a moss site. Run `moss guide` before editing it.";
+
+const ROOT_POINTER_TEXT: &str = "# moss site
+
+This folder is a moss site. Run `moss guide` before editing it.
+`moss describe --json` lists under `paths` where you may write; `.moss/AGENTS.md` holds this site's own conventions.
+";
+
+/// Write the root `AGENTS.md` pointer when the folder has none. Only
+/// `moss agents init` calls this: a build or `moss agents sync` never does,
+/// so a person who deletes the file does not get it back. An existing file is
+/// the person's and is left as it is. Returns whether it wrote.
+fn write_root_pointer(project: &std::path::Path) -> std::io::Result<bool> {
+    let path = project.join(ROOT_POINTER);
+    if path.symlink_metadata().is_ok() {
+        return Ok(false);
+    }
+    // allow:raw_write the vault's root agent files are the user's documents, not build output
+    fs::write(path, ROOT_POINTER_TEXT)?;
+    Ok(true)
 }
 
 fn merge_template(existing: &str, new_template: &str) -> Result<String, String> {
@@ -164,3 +197,7 @@ fn replace_user_notes(template: &str, notes: &str) -> String {
     out.push_str(template.get(end_idx..).unwrap_or_default());
     out
 }
+
+#[cfg(test)]
+#[path = "agents_tests.rs"]
+mod tests;

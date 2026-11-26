@@ -15,6 +15,7 @@
 //! narrowing bug's symptom is exactly a page NOBODY thought to check staying
 //! stale.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 
 #[path = "it/copy_dir.rs"]
@@ -366,7 +367,7 @@ fn build_with_site_url(
         watch: false,
         start_server: false,
         host: cli_host_ports(folder_path),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: site_url_override.map(str::to_string),
         server_port: None,
@@ -377,7 +378,7 @@ fn build_with_site_url(
 }
 
 fn staging_dir(root: &Path) -> PathBuf {
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// Every file under `dir`, keyed by its path relative to `dir`.
@@ -972,7 +973,7 @@ fn build_deferred(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
         watch: false,
         start_server: false,
         host: cli_host_ports(folder_path),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: Some(1),
@@ -1160,7 +1161,7 @@ fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &
     let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Structural(moved));
     assert!(result.is_ok(), "[{name}] {result:?}");
     let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && !l.starts_with("parse cache: 0 of"));
+    let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && l.contains(" pages replayed,") && !l.starts_with("parse cache: 0 of"));
     assert_eq!(replayed, replays, "[{name}] parse cache replay, got: {lines:?}");
     let carried = lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0"));
     assert_eq!(carried, scoped, "[{name}] render carried pages, got: {lines:?}");
@@ -1655,3 +1656,124 @@ proptest::proptest! {
     }
 }
 
+
+// ---- threads: a page drawing the pages joined to it by in_reply_to ----------
+//
+// Only the later page names the earlier one, yet every page of a thread draws
+// all of it, so adding, removing or re-pointing a continuation must re-render
+// pages that no source edit touched.
+
+/// `notes/a` ← `notes/b` (b continues a), an essay `writing/essay` that no
+/// note continues yet, and an unrelated note.
+fn write_thread_vault(root: &Path) {
+    write(root, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(root, "index.md", "---\ntitle: Home\n---\n\nThe homepage.\n");
+    write(root, "notes/index.md", "---\ntitle: Notes\nchildren_style: stream\n---\n");
+    write(root, "notes/a.md", "---\ndate: 2026-01-01\n---\n\nThe first word of the thread.\n");
+    write(root, "notes/b.md", "---\ndate: 2026-01-02\nin_reply_to: \"[[a]]\"\n---\n\nThe second word.\n");
+    write(root, "notes/lone.md", "---\ndate: 2026-01-03\n---\n\nA note in no thread.\n");
+    write(root, "writing/essay.md", "---\ntitle: An Essay\ndate: 2025-12-01\n---\n\nThe essay's body.\n");
+}
+
+fn assert_draws(root: &Path, page: &str, words: &str, yes: bool) {
+    let html = std::fs::read_to_string(staging_dir(root).join(page)).unwrap();
+    let thread: String = html.split("<section class=\"moss-thread\"").skip(1).map(|s| s.split("</section>").next().unwrap_or("")).collect();
+    assert_eq!(thread.contains(words), yes, "{page} {} {words:?} in its thread", if yes { "must draw" } else { "must not draw" });
+}
+
+#[test]
+fn a_new_continuation_is_drawn_on_every_earlier_page_of_its_thread() {
+    membership_scenario(
+        "thread: add",
+        write_thread_vault,
+        |root| write(root, "notes/c.md", "---\ndate: 2026-01-04\nin_reply_to: \"[[b]]\"\n---\n\nThe third word.\n"),
+        &["notes/c.md"], true, true,
+    );
+}
+
+#[test]
+fn a_deleted_continuation_leaves_every_page_of_its_thread() {
+    membership_scenario(
+        "thread: delete",
+        |root| {
+            write_thread_vault(root);
+            write(root, "notes/c.md", "---\ndate: 2026-01-04\nin_reply_to: \"[[b]]\"\n---\n\nThe third word.\n");
+        },
+        |root| std::fs::remove_file(root.join("notes/c.md")).unwrap(),
+        &["notes/c.md"], true, true,
+    );
+}
+
+#[test]
+fn a_note_continuing_a_page_in_another_folder_is_drawn_under_it() {
+    membership_scenario(
+        "thread: across folders",
+        write_thread_vault,
+        |root| write(root, "notes/after.md", "---\ndate: 2026-01-05\nin_reply_to: \"[[essay]]\"\n---\n\nA note after the essay.\n"),
+        &["notes/after.md"], true, true,
+    );
+}
+
+/// `notes/b` stops continuing `a` and continues the essay: both threads change
+/// though only b's source did.
+#[test]
+fn re_pointing_in_reply_to_moves_the_page_between_threads() {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let logger = capture();
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+    write_thread_vault(&incremental_root);
+    let baseline = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(baseline.is_ok(), "{baseline:?}");
+    assert_draws(&incremental_root, "notes/a/index.html", "The second word.", true);
+    assert_draws(&incremental_root, "notes/b/index.html", "The first word of the thread.", true);
+    logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+
+    for root in [&incremental_root, &full_root] {
+        if root == &full_root {
+            write_thread_vault(root);
+        }
+        edit_frontmatter(root, "notes/b.md", "in_reply_to: \"[[a]]\"", "in_reply_to: \"[[essay]]\"");
+    }
+    let changed = incremental_root.join("notes/b.md");
+    let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::ContentOnly(vec![changed]));
+    assert!(result.is_ok(), "{result:?}");
+    let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0")), "the edit must take the incremental path, got: {lines:?}");
+    assert_draws(&incremental_root, "notes/a/index.html", "The second word.", false);
+    assert_draws(&incremental_root, "writing/essay/index.html", "The second word.", true);
+
+    let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(full.is_ok(), "{full:?}");
+    assert_trees_byte_identical("thread: re-point", &incremental_root, &full_root);
+}
+
+/// Only `notes/b`'s body changes; `notes/a` draws b whole, so it re-renders.
+#[test]
+fn a_continuations_edit_is_redrawn_on_the_page_it_continues() {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let logger = capture();
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+    write_thread_vault(&incremental_root);
+    let baseline = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(baseline.is_ok(), "{baseline:?}");
+    logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+
+    write_thread_vault(&full_root);
+    for root in [&incremental_root, &full_root] {
+        edit_frontmatter(root, "notes/b.md", "The second word.", "The second word, revised.");
+    }
+    let changed = incremental_root.join("notes/b.md");
+    let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::ContentOnly(vec![changed]));
+    assert!(result.is_ok(), "{result:?}");
+    let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0")), "the edit must take the incremental path, got: {lines:?}");
+    assert_draws(&incremental_root, "notes/a/index.html", "The second word, revised.", true);
+
+    let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(full.is_ok(), "{full:?}");
+    assert_trees_byte_identical("thread: member body", &incremental_root, &full_root);
+}

@@ -257,3 +257,139 @@ fn a_subscribe_form_a_stream_draws_carries_its_language_scope() {
     let s = stream(&html);
     assert!(s.contains(r#"<input type="hidden" name="scope" value="zh-hans""#), "{s}");
 }
+
+fn thread_posts(parts: usize) -> Vec<(String, String)> {
+    let mut files = vec![
+        ("index.md".to_string(), "---\ntitle: Home\n---\n\nWelcome.\n".to_string()),
+        ("posts/index.md".to_string(), "---\ntitle: Posts\nchildren_style: stream\n---\n".to_string()),
+        ("posts/2026-01-20 0900.md".to_string(), "A note in no thread.\n".to_string()),
+    ];
+    for n in 1..=parts {
+        let reply = if n == 1 { String::new() } else { format!("---\nin_reply_to: \"[[2026-01-0{} 0800]]\"\n---\n\n", n - 1) };
+        files.push((format!("posts/2026-01-0{n} 0800.md"), format!("{reply}Part {n} of the run.\n")));
+    }
+    files
+}
+
+fn site_of(files: &[(String, String)]) -> Site {
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    Site::new(&refs)
+}
+
+#[test]
+fn a_long_thread_is_one_unit_its_first_part_a_count_and_its_last_two() {
+    let html = site_of(&thread_posts(5)).html("posts/index.html");
+    let s = stream(&html);
+    assert_eq!(s.matches("class=\"moss-stream-thread\"").count(), 1, "{s}");
+    let unit = s.split("class=\"moss-stream-thread\"").nth(1).unwrap().split("</div></article></div>").next().unwrap_or("");
+    let at = |words: &str| s.find(words).unwrap_or_else(|| panic!("{words} missing: {s}"));
+    assert!(at("Part 1 of") < at("2 more") && at("2 more") < at("Part 4 of") && at("Part 4 of") < at("Part 5 of"), "oldest first inside the unit: {s}");
+    assert!(!s.contains("Part 2 of") && !s.contains("Part 3 of"), "the middle is folded: {s}");
+    assert!(s.contains(r#"class="moss-stream-thread-more" href="/posts/2026-01-05-0800/""#) || unit.contains("moss-stream-thread-more"), "{s}");
+    assert!(at("A note in no thread.") < at("Part 1 of"), "the unit stands where its newest part falls, newest first: {s}");
+}
+
+#[test]
+fn a_short_thread_shows_every_part() {
+    let html = site_of(&thread_posts(3)).html("posts/index.html");
+    let s = stream(&html);
+    assert!(s.contains("Part 1 of") && s.contains("Part 2 of") && s.contains("Part 3 of"), "{s}");
+    assert!(!s.contains("moss-stream-thread-more"), "{s}");
+}
+
+#[test]
+fn a_parts_page_draws_its_thread_above_and_below_it() {
+    let site = site_of(&thread_posts(3));
+    let page = site.html("posts/2026-01-02-0800/index.html");
+    let before = page.split("data-part=\"before\"").nth(1).expect("the earlier parts").split("</section>").next().unwrap();
+    let after = page.split("data-part=\"after\"").nth(1).expect("the later parts").split("</section>").next().unwrap();
+    assert!(before.contains("Part 1 of"), "{before}");
+    assert!(before.contains("class=\"u-in-reply-to\""), "{before}");
+    assert!(after.contains("Part 3 of") && !after.contains("Part 1 of"), "{after}");
+    let first = site.html("posts/2026-01-01-0800/index.html");
+    assert!(!first.contains("data-part=\"before\""), "the first part has nothing above it: {first}");
+    assert!(first.split("data-part=\"after\"").nth(1).is_some_and(|a| a.contains("Part 2 of") && a.contains("Part 3 of")), "{first}");
+}
+
+fn shipped_css(site: &Site) -> String {
+    let dir = site.output("_moss");
+    let name = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("style.") && n.ends_with(".css"))
+        .expect("the build ships a stylesheet");
+    std::fs::read_to_string(dir.join(name)).unwrap()
+}
+
+/// The thread's rules live in the stream partial, which a site with no stream
+/// listing ships only because it has a thread or a reply.
+#[test]
+fn a_thread_or_a_reply_outside_ships_the_thread_rules_without_a_stream_listing() {
+    let home = ("index.md", "---\ntitle: Home\n---\n\nWelcome.\n");
+    let thread = Site::new(&[home, ("notes/one.md", "First.\n"), ("notes/two.md", "---\nin_reply_to: \"[[one]]\"\n---\n\nSecond.\n")]);
+    assert!(shipped_css(&thread).contains(".moss-in-reply-to"), "a thread");
+    let outside = Site::new(&[home, ("notes/one.md", "---\nin_reply_to: https://example.social/@someone/1\n---\n\nAgreed.\n")]);
+    assert!(shipped_css(&outside).contains(".moss-in-reply-to"), "a reply to a page elsewhere");
+    let neither = Site::new(&[home, ("notes/one.md", "First.\n")]);
+    assert!(!shipped_css(&neither).contains(".moss-in-reply-to"), "neither");
+}
+
+#[test]
+fn the_earlier_parts_go_under_the_parent_label_and_above_the_title() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\nbreadcrumb: label\n---\n\nWelcome.\n"),
+        ("notes/index.md", "---\ntitle: Notes\n---\n"),
+        ("notes/one.md", "---\ntitle: One\n---\n\nFirst.\n"),
+        ("notes/two.md", "---\ntitle: Two\nin_reply_to: \"[[one]]\"\n---\n\nSecond.\n"),
+    ]);
+    let html = site.html("notes/two/index.html");
+    let at = |words: &str| html.find(words).unwrap_or_else(|| panic!("{words} missing: {html}"));
+    assert!(at("class=\"moss-parent-label\"") < at("data-part=\"before\""), "{html}");
+    assert!(at("data-part=\"before\"") < at("<h1 class=\"moss-article-title\""), "{html}");
+}
+
+#[test]
+fn a_site_with_no_config_file_still_draws_its_threads() {
+    let site = Site::new(&[("index.md", "---\ntitle: Home\n---\n\nWelcome.\n"), ("notes/one.md", "First.\n"), ("notes/two.md", "---\nin_reply_to: \"[[one]]\"\n---\n\nSecond.\n")]);
+    std::fs::remove_file(site.root.join(".moss/config.toml")).unwrap();
+    site.rebuild();
+    assert!(site.html("notes/two/index.html").contains("data-part=\"before\""));
+}
+
+#[test]
+fn a_page_takes_the_features_of_the_thread_it_draws() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nWelcome.\n"),
+        ("notes/one.md", "![[pic.png]]\n\nA picture.\n"),
+        ("notes/two.md", "---\nin_reply_to: \"[[one]]\"\n---\n\nNo picture here.\n"),
+        ("other.md", "Plain.\n"),
+    ]);
+    std::fs::write(site.root.join("notes/pic.png"), PNG).unwrap();
+    site.rebuild();
+    assert!(site.html("notes/two/index.html").contains("id=\"lightbox\""), "two draws one's picture above it, so it carries the viewer");
+    assert!(!site.html("other/index.html").contains("id=\"lightbox\""));
+}
+
+#[test]
+fn an_outside_address_in_an_end_field_draws_as_a_link() {
+    let site = Site::with_config(
+        "[fields.source]\ntype = \"page\"\nplace = \"end\"\n",
+        &[("index.md", "---\ntitle: Home\n---\n\nWelcome.\n"), ("notes/one.md", "---\nsource: https://example.org/b\n---\n\nQuoted.\n")],
+    );
+    let html = site.html("notes/one/index.html");
+    let end = html.split("class=\"moss-field-end-links\"").nth(1).expect("the outside link at the end").split("</ul>").next().unwrap();
+    assert!(end.contains(r#"href="https://example.org/b""#) && end.contains("example.org/b</a>"), "{end}");
+}
+
+#[test]
+fn a_reply_to_a_post_elsewhere_names_it_above_the_page() {
+    let html = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nWelcome.\n"),
+        ("posts/2026-01-01 0800.md", "---\nin_reply_to: https://example.social/@someone/113402\n---\n\nI agree.\n"),
+    ])
+    .html("posts/2026-01-01-0800/index.html");
+    assert!(
+        html.contains(r#"<a class="u-in-reply-to" href="https://example.social/@someone/113402">example.social/@someone/113402</a>"#),
+        "{html}"
+    );
+}

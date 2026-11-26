@@ -26,3 +26,8 @@ packages/moss-ui/dist-browser/
 # The pattern is the exact name: "Icon?" would also hide every icons/ folder
 # on a case-insensitive checkout.
 Icon
+
+# release assets, built or downloaded at the repo root
+/moss-linux-x86_64
+/moss-darwin-universal
+/moss-windows-x86_64.exe

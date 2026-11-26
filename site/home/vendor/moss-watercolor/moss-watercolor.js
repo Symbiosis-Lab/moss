@@ -24,12 +24,14 @@ var MossWatercolor = (() => {
   __export(index_exports, {
     DEFAULT_PHASE_BOUNDS: () => DEFAULT_PHASE_BOUNDS,
     DEFAULT_PRESET: () => DEFAULT_PRESET,
+    DEFAULT_SPHERE_BOUNDS: () => DEFAULT_SPHERE_BOUNDS,
     DIAG_VIEWS: () => DIAG_VIEWS,
     advance: () => advance,
     createPaper: () => createPaper,
     createSim: () => createSim,
     legAt: () => legAt,
     phaseOf: () => phaseOf,
+    sphereLegAt: () => sphereLegAt,
     turnAt: () => turnAt
   });
 
@@ -519,6 +521,15 @@ void main(){
     return { width, height, data: px };
   }
 
+  // packages/moss-watercolor/src/internal/context.ts
+  var contexts = /* @__PURE__ */ new WeakMap();
+  var registerSim = (sim, context) => {
+    contexts.set(sim, context);
+  };
+  var forgetSim = (sim) => {
+    contexts.delete(sim);
+  };
+
   // packages/moss-watercolor/src/engine/solver.ts
   function createSim(opts) {
     const { canvas, texW, texH, divisor, rect, diagMode = 0, ground = "paper" } = opts;
@@ -795,6 +806,7 @@ void main(){
     const api = {
       // lets the GPU have the context back: a discarded simulation must not count against the page's live ones
       dispose() {
+        forgetSim(api);
         gl.getExtension("WEBGL_lose_context")?.loseContext();
       },
       setPrints(src, tgt) {
@@ -945,6 +957,9 @@ void main(){
       sideRecorded(side) {
         return side.n >= REC_STEPS && fresh(side);
       },
+      pigmentAt(side, u) {
+        return frameAt(side, u);
+      },
       // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
       // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
       playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) {
@@ -1015,6 +1030,7 @@ void main(){
       draw();
       return true;
     };
+    registerSim(api, { gl, width: W, height: H, ground, page });
     return api;
   }
 
@@ -1036,6 +1052,28 @@ void main(){
       state.drawn = state.t;
     }
     return { caughtUp: state.t >= goal - preset.dt, count };
+  }
+
+  // packages/moss-watercolor/src/model/sphere.ts
+  var DEFAULT_SPHERE_BOUNDS = {
+    outEnd: 0.18,
+    holdStart: 0.34,
+    holdEnd: 0.66,
+    inStart: 0.82
+  };
+  function sphereLegAt(p, bounds = DEFAULT_SPHERE_BOUNDS) {
+    const { outEnd, holdStart, holdEnd, inStart } = bounds;
+    if (!Number.isFinite(p)) throw new RangeError("sphereLegAt: p must be finite");
+    if (!(0 < outEnd && outEnd < holdStart && holdStart < holdEnd && holdEnd < inStart && inStart < 1)) {
+      throw new RangeError("sphereLegAt: bounds must be ordered strictly inside (0, 1)");
+    }
+    p = clamp01(p);
+    const gather = (outEnd + holdStart) / 2, release = (holdEnd + inStart) / 2;
+    const up = smooth(gather, holdStart, p), down = smooth(holdEnd, release, p);
+    const grain = smooth(outEnd, gather, p) * (1 - smooth(release, inStart, p));
+    const ux = p <= outEnd ? p / outEnd : 1 - 0.45 * smooth(outEnd, gather, p) + 0.45 * smooth(holdEnd, inStart, p);
+    const uy = p >= inStart ? (1 - p) / (1 - inStart) : 1 - 0.45 * smooth(outEnd, holdStart, p) + 0.45 * smooth(release, inStart, p);
+    return { ux, uy, k: smooth(holdStart, holdEnd, p), lift: up * (1 - down), grain };
   }
 
   // packages/moss-watercolor/src/model/index.ts

@@ -60,7 +60,7 @@ pub(crate) fn moss_health_body(folder_id: Option<&str>, pid: u32) -> String {
     format!(
         "{{\"server\":{},\"version\":\"{}\",\"preview\":true,\"schema\":2,\"folder_id\":{},\"pid\":{}}}",
         MOSS_HEALTH_MARKER,
-        env!("CARGO_PKG_VERSION"),
+        crate::system::app_version(),
         folder_id_json,
         pid
     )
@@ -73,13 +73,12 @@ pub(crate) fn moss_health_body(folder_id: Option<&str>, pid: u32) -> String {
 /// `site_dir` on every request, not fixed at router-build time, so a future
 /// folder switch reports the folder served NOW.
 pub(crate) async fn moss_health_handler(
-    site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
 ) -> axum::response::Response<axum::body::Body> {
     let folder_id = site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir))
-        .map(|vault| crate::infra::folder_lock::folder_id(vault.path()));
+        .map(|served| crate::infra::folder_store::name_for(served.folder.path()));
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header("content-type", "application/json; charset=utf-8")
@@ -134,6 +133,17 @@ pub fn env_port_base() -> u16 {
     }
 }
 
+/// One bounded readiness GET; redirects are disabled for token safety.
+fn blocking_get_sync(url: &str, token: Option<&str>) -> Result<String, ureq::Error> {
+    let mut request = super::carrier_token::agent(std::time::Duration::from_secs(1)).get(url);
+    if let Some(token) = token {
+        request = request.set(super::carrier_token::TOKEN_HEADER, token);
+    }
+    request
+        .call()
+        .map(|resp| resp.into_string().unwrap_or_default())
+}
+
 /// Verifies that a moss preview server is ready and responding on the given port.
 ///
 /// Sends an HTTP GET to [`MOSS_HEALTH_PATH`] on `127.0.0.1` (literal — not
@@ -152,36 +162,6 @@ pub fn env_port_base() -> u16 {
 /// # Returns
 /// * `Ok(())` - A moss preview server is responding on this port
 /// * `Err(String)` - No moss server detected (foreign server, no server, or unreachable)
-/// One blocking GET, run off the async executor because `ureq` is a sync
-/// client. The sole piece [`verify_server_ready`]'s retry loop and
-/// [`super::ownership::find_live_owner`]'s one-shot discovery probe have in
-/// common — see [`blocking_get`] for why the retry policy around it is not
-/// shared too.
-fn blocking_get_sync(url: &str, token: Option<&str>) -> Result<String, ureq::Error> {
-    let mut request = super::carrier_token::agent(std::time::Duration::from_secs(1)).get(url);
-    if let Some(token) = token {
-        request = request.set(super::carrier_token::TOKEN_HEADER, token);
-    }
-    request
-        .call()
-        .map(|resp| resp.into_string().unwrap_or_default())
-}
-
-/// [`blocking_get_sync`] on `spawn_blocking`, collapsed to a single `Result`
-/// a one-shot caller can just `?` through. [`verify_server_ready`] does NOT
-/// use this: its retry loop must tell "connection refused, try again" apart
-/// from "a non-success status, a foreign server, stop now," a distinction
-/// this collapsed shape throws away. [`find_live_owner`] has no such
-/// distinction to make — any failure at all simply means "not a confirmed
-/// live owner" — so it reuses the plain GET without the retry wrapper.
-pub(crate) async fn blocking_get(url: String, token: Option<String>) -> Result<String, String> {
-    match tokio::task::spawn_blocking(move || blocking_get_sync(&url, token.as_deref())).await {
-        Ok(Ok(body)) => Ok(body),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(e) => Err(format!("probe task panicked: {e}")),
-    }
-}
-
 pub async fn verify_server_ready(port: u16) -> Result<(), String> {
     // Use the IPv4 literal explicitly. `localhost` would expose us to IPv6-first
     // DNS resolution on macOS, which can route the probe to a foreign IPv6

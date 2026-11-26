@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const PAGES: [(&str, &str); 1] = [("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n")];
 
@@ -24,7 +24,7 @@ fn sticky_and_hide_mark_the_body() {
 
 #[test]
 fn an_unknown_value_warns_and_stays_static() {
-    let site = Site::with_config("header_scroll = \"slide\"\n", &PAGES);
+    let site = LoggedSite::with_config("header_scroll = \"slide\"\n", &PAGES);
     assert!(!site.html("index.html").contains("data-header-scroll"));
     assert!(
         site.logged.iter().any(|l| l.contains("header_scroll") && l.contains("slide")),

@@ -15,12 +15,10 @@ fn describe_payload_serializes_with_versions() {
     assert_eq!(json["moss_html_version"], MOSS_HTML_VERSION);
     assert!(json["tokens"].is_object());
     assert!(json["components"].is_array());
-    // The payload carries exactly the public components.
-    let public_count = COMPONENTS.iter().filter(|c| c.is_public()).count();
     assert_eq!(
         json["components"].as_array().unwrap().len(),
-        public_count,
-        "payload must contain exactly the public components"
+        COMPONENTS.len(),
+        "payload must contain every component"
     );
 }
 
@@ -280,4 +278,35 @@ fn describe_publishes_the_language_allowlist() {
         !langs.iter().any(|l| l.as_str() == Some("english")),
         "the allowlist must not contain invented long names"
     );
+}
+
+#[test]
+fn describe_lists_each_retired_name_with_its_migration_or_null_when_gone() {
+    let tokens = load_tokens().expect("tokens");
+    let json = serde_json::to_value(DescribePayload::new(&tokens)).expect("serialize");
+    let retired = json["retired"].as_array().expect("retired");
+    assert_eq!(retired.len(), moss_core::contract::retired::RETIRED.len());
+    let row = |name: &str| retired.iter().find(|r| r["name"] == name).unwrap_or_else(|| panic!("{name}"));
+    assert_eq!(row("moss-cards-grid")["replaced_by"], ".moss-cards[data-layout=grid]");
+    assert_eq!(row("moss-cards-grid")["migration"], serde_json::json!({ "id": "class:moss-cards-grid", "keeps_look": false }));
+    assert_eq!(row("--moss-font-size")["migration"]["id"], "property:--moss-font-size");
+    assert_eq!(row("moss-visual")["migration"], serde_json::Value::Null);
+}
+
+#[test]
+fn describe_lists_every_shortcode_an_author_can_write_with_its_attributes() {
+    let tokens = load_tokens().expect("tokens");
+    let json = serde_json::to_value(DescribePayload::new(&tokens)).expect("serialize");
+    let shortcodes = json["shortcodes"].as_array().expect("shortcodes");
+    let names: Vec<&str> = shortcodes.iter().filter_map(|b| b["name"].as_str()).collect();
+    let kinds: Vec<&str> = moss_core::ast::shortcode::ShortcodeKind::all().map(|k| k.name()).collect();
+    assert_eq!(names, kinds);
+    for shortcode in shortcodes {
+        assert!(!shortcode["summary"].as_str().unwrap().is_empty(), "{shortcode}");
+        assert!(shortcode["template"].as_str().unwrap().starts_with(shortcode["name"].as_str().unwrap()), "{shortcode}");
+    }
+    let attrs = |name: &str| shortcodes.iter().find(|b| b["name"] == name).unwrap()["attrs"].as_array().unwrap().clone();
+    let image = attrs("hero").into_iter().find(|a| a["name"] == "image").expect("hero takes an image");
+    assert_eq!(image, serde_json::json!({"name": "image", "asset_kinds": ["Image", "Video"], "flag": false}));
+    assert!(attrs("gallery").contains(&serde_json::json!({"name": "wide", "asset_kinds": [], "flag": true})), "a bare keyword says it is one");
 }

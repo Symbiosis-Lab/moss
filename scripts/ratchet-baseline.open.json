@@ -62,7 +62,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src": 45,
-        "crates/moss-build/src/build": 80,
+        "crates/moss-build/src/build": 82,
         "crates/moss-build/src/build/media": 21,
         "crates/moss-build/src/deploy": 22,
         "crates/moss-build/src/js-src/bridge": 18,
@@ -85,7 +85,8 @@
         "packages/moss-ui/src/ui/editor/tree": 17,
         "packages/moss-ui/src/ui/preview": 29,
         "crates/moss-build/src/vault/import": 23,
-        "crates/moss-build/src/system": 16
+        "crates/moss-build/src/system": 16,
+        "packages/obsidian-moss/src": 16
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",
@@ -105,7 +106,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 91,
+        "crates/moss-build/Cargo.toml": 92,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 9,
         "crates/moss-bindings/Cargo.toml": 5
@@ -125,7 +126,7 @@
         "crates/moss-build/src/build/media/image.rs::dispatch_image_conversions_at": 250,
         "crates/moss-build/src/build/media/video.rs::convert_single_video": 250,
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
-        "crates/moss-build/src/build/parse_cache.rs::begin": 250,
+        "crates/moss-build/src/build/parse_cache.rs::begin": 300,
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
         "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1800,
@@ -149,7 +150,8 @@
         "packages/moss-ui/src/ui/editor/cm-editor.ts::constructor": 250,
         "packages/moss-ui/src/ui/editor/editor-main.ts::init": 550,
         "packages/moss-ui/src/ui/editor/editor-main.ts::loadFileBody": 250,
-        "packages/moss-ui/src/ui/editor/versions-surface.ts::renderVersionsSurface": 400
+        "packages/moss-ui/src/ui/editor/versions-surface.ts::renderVersionsSurface": 400,
+        "crates/moss-build/src/build/parse_cache/persist.rs::split": 250
       },
       "oversized": {
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": "One function runs the whole blocking build in sequence: source scan, page map, note IDs, content graph and folder languages, theme and assets, the authored page loop, generated term, place and index pages, feeds and sitemap, then the hand-off to the background context; the phases share mutable state (the pending manifest, warnings, source records) instead of passing results. Fix the state model first: give each phase an explicit result (source set, authored pages, generated pages, site files) that the next phase and the background context consume, then split along those results.",
@@ -178,7 +180,15 @@
       "letter": "j",
       "disposition": "permanent",
       "armed": true,
-      "value": 26
+      "value": 27
+    },
+    "artifact_bytes": {
+      "letter": "k",
+      "disposition": "permanent",
+      "armed": true,
+      "value": {
+        "moss-linux-x86_64": 66085760
+      }
     }
   }
 }

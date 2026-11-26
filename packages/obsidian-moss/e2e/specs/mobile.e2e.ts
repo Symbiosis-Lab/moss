@@ -42,5 +42,6 @@ describe("moss on mobile", () => {
     await browser.switchFrame(iframe);
     expect(await browser.$("body").getText()).toContain("Text from the current editor.");
     await browser.switchFrame(null);
+    if (process.env.MOSS_E2E_SHOTS) await browser.saveScreenshot(`${process.env.MOSS_E2E_SHOTS}/phone-page-preview.png`);
   });
 });

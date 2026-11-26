@@ -1,5 +1,6 @@
 //! A page that names no `cover:` is listed with its own first picture.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,7 @@ fn build(folder: &Path, trigger: moss_build::build::BuildTrigger) -> Result<Stri
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -90,7 +91,7 @@ fn site() -> Site {
 
 /// Each listed page's card picture, by the page's last URL segment.
 fn card_pictures(root: &Path, folder_slug: &str) -> Vec<(String, Option<String>)> {
-    let html = fs::read_to_string(root.join(format!(".moss/build.nosync/staging/{folder_slug}/index.html"))).unwrap();
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(format!("{folder_slug}/index.html"))).unwrap();
     let doc = scraper::Html::parse_document(&html);
     let card = scraper::Selector::parse("a.moss-card").unwrap();
     let img = scraper::Selector::parse(".moss-card-cover img").unwrap();
@@ -146,7 +147,7 @@ fn a_page_with_no_cover_is_listed_with_its_first_picture() {
 #[test]
 fn the_card_names_the_file_the_page_body_shows() {
     let s = built();
-    let page = fs::read_to_string(s.root().join(".moss/build.nosync/staging/harbor-notes/lighthouse/index.html")).unwrap();
+    let page = fs::read_to_string(MossPaths::new(s.root()).staging_dir().join("harbor-notes/lighthouse/index.html")).unwrap();
     let doc = scraper::Html::parse_document(&page);
     let body_src = doc
         .select(&scraper::Selector::parse("article img").unwrap())
@@ -155,7 +156,7 @@ fn the_card_names_the_file_the_page_body_shows() {
         .map(str::to_string);
     let card = picture_of(&card_pictures(s.root(), "harbor-notes"), "lighthouse");
     assert!(body_src.is_some() && card == body_src, "card {card:?} vs body {body_src:?}");
-    let served = s.root().join(".moss/build.nosync/staging").join(urlencoding::decode(card.unwrap().trim_start_matches('/')).unwrap().as_ref());
+    let served = MossPaths::new(s.root()).staging_dir().join(urlencoding::decode(card.unwrap().trim_start_matches('/')).unwrap().as_ref());
     assert!(served.exists(), "{} is not in the output", served.display());
 }
 
@@ -201,7 +202,7 @@ fn a_remote_inline_or_vector_picture_is_not_taken() {
 #[test]
 fn a_grid_card_shows_the_pages_first_picture_or_none() {
     let s = built();
-    let html = fs::read_to_string(s.root().join(".moss/build.nosync/staging/harbor-notes/contents/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(s.root()).staging_dir().join("harbor-notes/contents/index.html")).unwrap();
     let doc = scraper::Html::parse_document(&html);
     let img = scraper::Selector::parse("img").unwrap();
     let cards: Vec<(String, bool)> = doc
@@ -214,7 +215,7 @@ fn a_grid_card_shows_the_pages_first_picture_or_none() {
 }
 
 fn share_image(root: &Path, page: &str) -> Option<String> {
-    let html = fs::read_to_string(root.join(format!(".moss/build.nosync/staging/harbor-notes/{page}/index.html"))).unwrap();
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(format!("harbor-notes/{page}/index.html"))).unwrap();
     let doc = scraper::Html::parse_document(&html);
     doc.select(&scraper::Selector::parse(r#"meta[property="og:image"]"#).unwrap())
         .next()
@@ -243,7 +244,7 @@ fn a_page_with_no_picture_is_listed_as_before() {
 #[test]
 fn a_folder_page_does_not_draw_its_own_first_picture_twice() {
     let s = built();
-    let html = fs::read_to_string(s.root().join(".moss/build.nosync/staging/studio/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(s.root()).staging_dir().join("studio/index.html")).unwrap();
     assert_eq!(html.matches(r#"src="/studio/pics/floor.jpg""#).count(), 1, "{html}");
     assert!(!html.contains("moss-collection-cover"), "an inferred picture must not open the cover row");
 }

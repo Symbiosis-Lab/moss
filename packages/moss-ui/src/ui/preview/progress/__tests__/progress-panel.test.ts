@@ -116,7 +116,7 @@ describe("ProgressPanel", () => {
     // Use a narrated task to create panel DOM (only narrated tasks render as rows).
     function addNarratedTask(id = "narrated:1", label = "Building") {
       panel.handleJobUpdate({
-        id, window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id, window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: label, fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -237,7 +237,7 @@ describe("ProgressPanel", () => {
     it("hide() hides the panel", () => {
       // Narrated task creates panel DOM.
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -250,7 +250,7 @@ describe("ProgressPanel", () => {
 
     it("show() shows the panel", () => {
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -365,7 +365,7 @@ describe("ProgressPanel", () => {
     it("⌄ minimize transitions to 'minimized' (the panel body is gone)", () => {
       // Narrated task creates panel DOM.
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -606,7 +606,7 @@ describe("ProgressPanel", () => {
       });
       expect(panel.getActiveTasks()).toHaveLength(0);
 
-      // ...while deploy/syndicate still render here.
+      // ...while deploy still render here.
       panel.handlePluginProgress({
         plugin_name: "github",
         hook_name: "deploy",
@@ -622,10 +622,10 @@ describe("ProgressPanel", () => {
     it("completing one plugin's hook does not remove another plugin's progress", () => {
       vi.useFakeTimers();
       try {
-        // Add matters:syndicate task (publish hook — paints immediately).
+        // Add matters:deploy task (publish hook — paints immediately).
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "distributing",
           current: 3,
           total: 10,
@@ -649,7 +649,7 @@ describe("ProgressPanel", () => {
         // Complete matters
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "done",
           current: 0,
           total: 0,
@@ -772,10 +772,10 @@ describe("ProgressPanel", () => {
         // Let the deferred row paint.
         vi.advanceTimersByTime(250);
 
-        // Add matters:syndicate task (publish hook — paints immediately).
+        // Add matters:deploy task (publish hook — paints immediately).
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "distributing",
           current: 1,
           total: 4,
@@ -797,7 +797,7 @@ describe("ProgressPanel", () => {
         });
 
         expect(panel.getActiveTasks()).toHaveLength(1);
-        expect(panel.getActiveTasks()[0].id).toBe("plugin:matters:syndicate");
+        expect(panel.getActiveTasks()[0].id).toBe("plugin:matters:deploy");
       } finally {
         vi.useRealTimers();
       }
@@ -1071,7 +1071,7 @@ describe("ProgressPanel", () => {
     it("destroy removes panel from DOM", () => {
       // Narrated task creates panel DOM (only narrated tasks render as rows).
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -2022,6 +2022,27 @@ describe("ProgressPanel", () => {
       expect(tasks[0].label).toBe("Optimizing images (8/12)");
     });
 
+    it("a pending seal adds no row, and still logs its start and end", async () => {
+      const { info } = await import("../../../log");
+      vi.mocked(info).mockClear();
+
+      fireMossEvent({
+        kind: "BackgroundProgress",
+        payload: { task: "sealing", message: "Preparing...", current: 0, total: 1, completed: false },
+      });
+
+      expect(panel.getActiveTasks()).toHaveLength(0);
+      expect(document.body.textContent).not.toContain("Preparing");
+      expect(vi.mocked(info)).toHaveBeenCalledWith("[bg-job] start kind=sealing");
+
+      fireMossEvent({
+        kind: "BackgroundProgress",
+        payload: { task: "sealing", message: "Sealed", current: 1, total: 1, completed: true },
+      });
+      const ended = vi.mocked(info).mock.calls.map((c) => String(c[0]));
+      expect(ended.some((m) => /^\[bg-job\] end kind=sealing duration_ms=\d+$/.test(m))).toBe(true);
+    });
+
     // Background
     // job start/end with kind and duration, keyed on the raw task string
     // (not `bg:<task>`, since videos skip the row's own arrival tracking).
@@ -2177,12 +2198,8 @@ describe("ProgressPanel", () => {
       expect(panel.getActiveTasks()).toHaveLength(0);
     });
 
-    // The readout lasts while files remain in the cloud, whatever the stage:
-    // a site with 553 files still in
-    // the cloud must not read as finished. The readout lives as long as
-    // `remaining > 0` — see `stageContext.remaining`.
     // Driven through `cloudSync.ingest`, not the raw `icloud-sync` listener:
-    // the panel and the full-window screen now derive their state from the one
+    // the panel and the full-window screen derive their state from the one
     // store rather than each parsing the event, so the store IS the seam.
     const fireIcloudSync = (phase: string, downloaded: number, total: number) =>
       cloudSync.ingest({
@@ -2194,36 +2211,31 @@ describe("ProgressPanel", () => {
         downloaded,
       });
 
-    it("reports an outstanding download whatever stage the build has reached", () => {
-      panel.setStage("compiling");
-      fireIcloudSync("materializing", 412, 553);
-
+    it("a download the build is waiting on is the line; one that outlives it is background work", () => {
+      panel.setStage("opening");
+      fireIcloudSync("materializing", 12, 553);
       expect(panel.buildViewModel().status.text).toContain("Downloading from iCloud");
 
-      // `ready` resets the stage context — but not a download that is still
-      // running, because the supervisor keeps draining after the build settles.
-      panel.setStage("ready");
-      expect(panel.buildViewModel().status.text).toContain("Downloading from iCloud");
+      // Past the materializing stage the build is what the person is watching.
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "html_pages", message: "", current: 3, total: 40, completed: false, advisories: [] } });
+      fireIcloudSync("home_ready", 100, 553);
+      expect(panel.buildViewModel().status.text).toBe("Updating…");
+      panel.showUpdated();
+      expect(panel.buildViewModel().status).toMatchObject({ kind: "receipt", text: "Updated" });
     });
 
-    it("keeps the download on screen after home_ready, and clears it at zero", () => {
-      // `home_ready` only says the home page exists. The other 553 files are
-      // still coming, and that is exactly the state the incident rendered as
-      // finished.
-      fireIcloudSync("home_ready", 100, 553);
+    it("once the folder's site has been served, a download during a rebuild reads 'Updating…'", () => {
+      panel.setFolder("/sites/blog");
+      panel.noteSiteServed();
+      panel.setStage("opening"); // a same-folder rebuild starts over from opening
+      fireIcloudSync("materializing", 12, 553);
+      expect(panel.buildViewModel().status.text).toBe("Updating…");
+
+      // A different folder has never been shown: its download is the line.
+      panel.setFolder("/sites/other");
+      panel.setStage("opening");
+      fireIcloudSync("materializing", 12, 553);
       expect(panel.buildViewModel().status.text).toContain("Downloading from iCloud");
-
-      // A completed build must not claim the site is done while bytes land:
-      // "Built · N pages" is true about the build and false about the site.
-      fireMossEvent({ kind: "BuildComplete", payload: { total_time_ms: "1200" } });
-      const during = panel.buildViewModel().status;
-      expect(during.kind).toBe("running");
-      expect(during.text).toContain("Downloading from iCloud");
-
-      // Zero left: the episode is over and the readout goes with it, whatever
-      // phase carried the news.
-      fireIcloudSync("materializing", 553, 553);
-      expect(panel.buildViewModel().status.text).not.toContain("Downloading");
     });
 
     it("BackgroundProgress.advisories populate the advisory store, not the task row's label", () => {
@@ -2695,9 +2707,8 @@ describe("ProgressPanel", () => {
         payload: { task: "html_pages", message: "", current: 8, total: 12, completed: false },
       });
 
-      // Status line shows compile progress; no duplicate task bar.
-      expect(stageLabel()).toContain("8");
-      expect(stageLabel()).toContain("12");
+      // Status line says the preview is updating; no duplicate task bar.
+      expect(stageLabel()).toBe("Updating…");
       expect(taskLabels()).toEqual([]);
       // Stepper hidden — publish has not been engaged.
       expect(stepperVisible()).toBe(false);
@@ -2705,7 +2716,7 @@ describe("ProgressPanel", () => {
 
     // Test that the stage label still flips and
     // publish state advances, without asserting stepper DOM.
-    it("when publish waits on build, primary bar flips to 'Waiting for build…' (stepper removed)", () => {
+    it("when publish waits on build, primary bar flips to 'Preparing…' (stepper removed)", () => {
       panel.setStage("compiling");
       // A page-counting task (html_pages) so this test's own taskLabels()
       // assertion stays about the stepper/bar, not the separate bg:<task>
@@ -2717,10 +2728,51 @@ describe("ProgressPanel", () => {
       // Now publish queues:
       fireMossEvent({ kind: "DeployWaitingForBuild" });
 
-      expect(stageLabel()).toContain("Waiting for build");
+      expect(stageLabel()).toBe("Preparing…");
       expect(taskLabels()).toEqual([]);
       // No .moss-progress-stepper element.
       expect(stepperVisible()).toBe(false);
+    });
+
+    it("a publish through every stage reads only 'Preparing…' then 'Uploading…'", () => {
+      vi.useFakeTimers();
+      try {
+        panel.setStage("ready");
+        const cb = listenCallbacks.get("deploy-progress")![0];
+        const line = () => container.querySelector(".moss-status-line") as HTMLElement | null;
+        const verbs: string[] = [];
+        const record = () => {
+          const verb = container.querySelector(".moss-status-line__verb")?.textContent ?? "";
+          if (verb && verbs.at(-1) !== verb) verbs.push(verb);
+        };
+        const stage = (stage: string, extra: Record<string, unknown> = {}) => {
+          cb({ stage, current: 0, total: 0, message: "", ...extra });
+          record();
+        };
+
+        fireMossEvent({ kind: "DeployWaitingForBuild" });
+        record();
+        stage("preparing");
+        stage("rebuilding", { message: "Updating search" });
+        // The rebuild's message is a hover on the line, never the headline.
+        expect(line()!.getAttribute("data-tooltip")).toBe("Updating search");
+        stage("syncing");
+        expect(line()!.hasAttribute("data-tooltip")).toBe(false);
+        stage("uploading", { current: 3, total: 20, bytes_uploaded: 12e6, bytes_total: 58e6 });
+        stage("uploading", { current: 20, total: 20, bytes_uploaded: 58e6, bytes_total: 58e6 });
+        stage("committing");
+        stage("finalizing");
+        expect(verbs).toEqual(["Preparing…", "Uploading…"]);
+
+        stage("complete");
+        expect(verbs.at(-1)).toMatch(/^Published/);
+        // Not live until the verdict: back to "Uploading…".
+        stage("verifying");
+        expect(verbs.at(-1)).toBe("Uploading…");
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
     });
 
     it("when publish progresses, primary bar shows publish label (stepper removed)", () => {
@@ -2756,6 +2808,9 @@ describe("ProgressPanel", () => {
       }
     });
 
+    // The counts read on the first-open screen, which still shows them.
+    const screenLabel = () => panel.buildStageKnownLabel() ?? "";
+
     it("BackgroundProgress completion applies final counts (no off-by-one)", () => {
       // Bug: the user saw "Generating pages… (11 / 12)" stuck forever after
       // the build completed. Root cause was the completion event carrying
@@ -2772,7 +2827,7 @@ describe("ProgressPanel", () => {
           completed: false,
         },
       });
-      expect(stageLabel()).toContain("(11 / 12)");
+      expect(screenLabel()).toContain("(11 / 12)");
 
       fireMossEvent({
         kind: "BackgroundProgress",
@@ -2785,8 +2840,8 @@ describe("ProgressPanel", () => {
         },
       });
 
-      expect(stageLabel()).toContain("(12 / 12)");
-      expect(stageLabel()).not.toContain("(11 / 12)");
+      expect(screenLabel()).toContain("(12 / 12)");
+      expect(screenLabel()).not.toContain("(11 / 12)");
     });
 
     it("comment-sync completion does NOT clobber the compiling counter (buildTotal invariant)", () => {
@@ -2801,7 +2856,7 @@ describe("ProgressPanel", () => {
         kind: "BackgroundProgress",
         payload: { task: "html_pages", message: "", current: 47, total: 47, completed: false },
       });
-      expect(stageLabel()).toContain("(47 / 47)");
+      expect(screenLabel()).toContain("(47 / 47)");
 
       // A comment-sync completion (success or failure) carries current:1,total:1.
       fireMossEvent({
@@ -2813,8 +2868,8 @@ describe("ProgressPanel", () => {
       });
 
       // The compiling counter is untouched — still 47/47, never collapsed to 1/1.
-      expect(stageLabel()).toContain("(47 / 47)");
-      expect(stageLabel()).not.toContain("(1 / 1)");
+      expect(screenLabel()).toContain("(47 / 47)");
+      expect(screenLabel()).not.toContain("(1 / 1)");
       // And it never entered the advisory store (filtered at the top too).
       expect(panel.getAdvisories()).toHaveLength(0);
     });
@@ -2832,14 +2887,14 @@ describe("ProgressPanel", () => {
         kind: "BackgroundProgress",
         payload: { task: "html_pages", message: "", current: 11, total: 12, completed: false, advisories: [] },
       });
-      expect(stageLabel()).toContain("(11 / 12)");
+      expect(screenLabel()).toContain("(11 / 12)");
 
       // Simulate the normal build completion landing at 12/12
       fireMossEvent({
         kind: "BackgroundProgress",
         payload: { task: "html_pages", message: "", current: 12, total: 12, completed: true, advisories: [] },
       });
-      expect(stageLabel()).toContain("(12 / 12)");
+      expect(screenLabel()).toContain("(12 / 12)");
 
       // Now fire the advisory-only symlink-skip event
       fireMossEvent({
@@ -2855,8 +2910,8 @@ describe("ProgressPanel", () => {
       });
 
       // Counter must be untouched
-      expect(stageLabel()).toContain("(12 / 12)");
-      expect(stageLabel()).not.toContain("(0 / 0)");
+      expect(screenLabel()).toContain("(12 / 12)");
+      expect(screenLabel()).not.toContain("(0 / 0)");
     });
 
     it("late BackgroundProgress after ready does not regress the stage", () => {
@@ -2942,6 +2997,32 @@ describe("ProgressPanel", () => {
       expect(stageLabel()).toContain("Preview server failed");
     });
 
+    it("a failed rebuild ends the line on the failure, until the next rebuild updates", () => {
+      panel.setStage("compiling");
+      expect(panel.buildViewModel().status.text).toBe("Updating…");
+      fireMossEvent({ kind: "BuildFailed", payload: { message: "invalid TOML in .moss/config.toml" } });
+      expect(panel.buildViewModel().status).toMatchObject({ kind: "failed", text: "Couldn't update: invalid TOML in .moss/config.toml" });
+      expect(panel.isHidden).toBe(false);
+
+      // The fixing save's build is past "ready" already: its page ticks are what say Updating.
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "html_pages", message: "", current: 1, total: 2, completed: false, advisories: [] } });
+      expect(panel.buildViewModel().status.text).toBe("Updating…");
+      panel.buildSettled();
+      panel.showUpdated();
+      expect(panel.buildViewModel().status).toMatchObject({ kind: "receipt", text: "Updated" });
+    });
+
+    it("a failed first build leaves the full-window failure to say it", () => {
+      cloudSync.setPreviewBlank(true);
+      try {
+        panel.setStage("compiling");
+        fireMossEvent({ kind: "BuildFailed", payload: { message: "invalid TOML in .moss/config.toml" } });
+        expect(panel.buildViewModel().status.kind).not.toBe("failed");
+      } finally {
+        cloudSync.setPreviewBlank(false);
+      }
+    });
+
     it("VideoConversionProgress task is removed when BackgroundProgress completes", () => {
       // VideoConversionProgress enriches bg:videos with fine-grained encoding
       // detail once FFmpeg's callback starts. The only completion signal is
@@ -2965,46 +3046,6 @@ describe("ProgressPanel", () => {
         payload: { task: "videos", message: "", current: 2, total: 2, completed: true },
       });
       expect(panel.getActiveTasks().some((t) => t.id === "bg:videos")).toBe(false);
-    });
-
-    // mediaStatus stash (VideoConversionProgress feeds the status line)
-    it("VideoConversionProgress stashes mediaStatus {verb, subject, current, total}", () => {
-      fireMossEvent({
-        kind: "VideoConversionProgress",
-        payload: {
-          phase: "encoding",
-          current_video: 3,
-          total_videos: 12,
-          filename: "intro.mov",
-          overall_fraction: 0.25,
-        },
-      });
-      const ms = panel.getMediaStatus();
-      expect(ms).not.toBeNull();
-      expect(ms!.verb).toBe("Optimizing");
-      expect(ms!.subject).toBe("intro.mov");
-      expect(ms!.current).toBe(3);
-      expect(ms!.total).toBe(12);
-    });
-
-    it("mediaStatus is cleared when BackgroundProgress videos completed=true arrives", () => {
-      fireMossEvent({
-        kind: "VideoConversionProgress",
-        payload: {
-          phase: "encoding",
-          current_video: 2,
-          total_videos: 5,
-          filename: "clip.mp4",
-          overall_fraction: 0.4,
-        },
-      });
-      expect(panel.getMediaStatus()).not.toBeNull();
-
-      fireMossEvent({
-        kind: "BackgroundProgress",
-        payload: { task: "videos", message: "", current: 5, total: 5, completed: true },
-      });
-      expect(panel.getMediaStatus()).toBeNull();
     });
 
     it("setStage('initial') clears stale publish state from a prior session", () => {
@@ -3158,8 +3199,7 @@ describe("ProgressPanel", () => {
       // panel now reveals the up-to-date compile label, not a stale one.
       panel.show();
       const label = container.querySelector(".moss-status-line")?.textContent ?? "";
-      expect(label).toContain("8");
-      expect(label).toContain("12");
+      expect(label).toBe("Updating…");
     });
   });
 
@@ -3334,16 +3374,14 @@ describe("ProgressPanel", () => {
       await panel.init();
     });
 
-    it("running build → header is the job verb 'Building…' with NO amount (invariant #4)", () => {
-      // Status line shows the stage text (e.g. "Generating pages… (3 / 12)").
+    it("running build → header reads 'Updating…' with NO amount (invariant #4)", () => {
       panel.setStage("compiling");
       fireMossEvent({
         kind: "BackgroundProgress",
         payload: { task: "html_pages", message: "", current: 3, total: 12, completed: false, advisories: blocking },
       });
       expect(panel.isHidden).toBe(false);
-      // Status line contains the stage text (build stage label).
-      expect(headerTitle()).toContain("Generating pages");
+      expect(headerTitle()).toBe("Updating…");
     });
 
     it("engaged publish → header is the job verb 'Publishing…' with NO amount", () => {
@@ -3356,7 +3394,7 @@ describe("ProgressPanel", () => {
       expect(headerTitle()).toContain("12");
     });
 
-    it("on completion the header becomes the receipt 'Built · N pages · X.Xs' (amount iff Done)", () => {
+    it("on completion the header becomes the receipt 'Updated'", () => {
       vi.useFakeTimers();
       try {
         panel.setStage("compiling");
@@ -3365,13 +3403,9 @@ describe("ProgressPanel", () => {
           payload: { task: "html_pages", message: "", current: 12, total: 12, completed: true, advisories: blocking },
         });
         // Still building — status line shows stage label.
-        expect(headerTitle()).toContain("Generating pages");
-        fireMossEvent({
-          kind: "BuildComplete",
-          payload: { videos_converted: 0, total_time_ms: "2100", skipped_symlinks: 0 },
-        });
-        // Done: the receipt in the status line — amount present iff Done.
-        expect(headerTitle()).toBe("Built · 12 pages · 2.1s");
+        expect(headerTitle()).toBe("Updating…");
+        panel.showUpdated(); // the paint
+        expect(headerTitle()).toBe("Updated");
       } finally {
         vi.runOnlyPendingTimers();
         vi.useRealTimers();
@@ -3395,45 +3429,27 @@ describe("ProgressPanel", () => {
   });
 
   /**
-   * The `Built · N pages · X.Xs` completion header confirms a finished build.
-   * N = the `html_pages` task's total, recorded as receipt state when it
-   * arrives; elapsed = `Number(BuildComplete.total_time_ms)` formatted as
-   * a Duration at render. The receipt does NOT linger — it retracts after a hard
-   * maximum dwell time. The receipt renders only when the panel is
-   * already shown (a routine rebuild's completion resolves to the pill flash, not
-   * a grown header).
+   * The "Updated" completion header confirms a finished build. It does NOT
+   * linger — it retracts after a hard maximum dwell time — and it renders only
+   * when the panel is already shown (a routine rebuild's completion resolves to
+   * the pill flash, not a grown header).
    */
-  describe("Completion header reports Built · N pages · X.Xs", () => {
+  describe("Completion header reports Updated", () => {
     let listenCallbacks: Map<string, Array<(event: any) => void>>;
     const fireMossEvent = (payload: any) => {
       for (const cb of listenCallbacks.get("moss-event") ?? []) {
         cb(payload);
       }
     };
-    // `unknown`, not `string`: the producer can also hand us an unparseable
-    // string, an explicit null, or nothing at all — see the "span the producer
-    // could not report" case below.
-    const fireBuildComplete = (totalTimeMs: unknown) =>
-      fireMossEvent({
-        kind: "BuildComplete",
-        payload: { videos_converted: 0, total_time_ms: totalTimeMs, skipped_symlinks: 0 },
-      });
-    // The page count in the receipt comes ONLY from the `html_pages` task — feed
-    // it via that task so the count is the PAGE count, not whatever media phase
-    // last fired. A Blocking advisory rides on the same event to SURFACE the
-    // panel with a Blocking notice and keep it open so the receipt
-    // renders (while minimized the dwell still runs, but nothing is painted).
+    // The paint: PreviewManager's refresh for this build has applied.
+    const fireBuildComplete = (_totalTimeMs?: unknown) => panel.showUpdated();
+    // A Blocking advisory rides on the page tick to SURFACE the panel and keep
+    // it open so the receipt renders (while minimized the dwell still runs, but
+    // nothing is painted).
     const firePages = (total: number, advisories?: any[]) =>
       fireMossEvent({
         kind: "BackgroundProgress",
         payload: { task: "html_pages", message: "", current: total, total, completed: true, ...(advisories ? { advisories } : {}) },
-      });
-    // A later media phase (videos/images) that ALSO carries a total — its count
-    // must NOT become the receipt's "N pages".
-    const fireMedia = (task: string, total: number) =>
-      fireMossEvent({
-        kind: "BackgroundProgress",
-        payload: { task, message: "", current: total, total, completed: true },
       });
     const headerText = () =>
       container.querySelector(".moss-status-line")?.textContent ?? "";
@@ -3455,148 +3471,72 @@ describe("ProgressPanel", () => {
       vi.useRealTimers();
     });
 
-    it("reports the PAGE count, not the media count, when media phases run after html_pages", () => {
-      // BuildComplete fires AFTER the media phase, and every
-      // BackgroundProgress overwrites buildTotal — so a 47-page site with 3
-      // without this, videos would show "Built · 3 pages". The receipt must read the
-      // html_pages total (47), unaffected by the later videos/images totals.
-      firePages(47, [
-        { scope: "Environment", severity: "Blocking", item: null, what: "x", action: "None" },
-      ]);
-      fireMedia("videos", 3); // 3 videos convert AFTER the 47 pages
-      fireMedia("images", 9); // 9 images process AFTER that
-      fireBuildComplete("4200");
-      expect(headerText()).toBe("Built · 47 pages · 4.2s");
-    });
-
-    it("singularises the noun for a one-page build (Amount{count,noun})", () => {
-      firePages(1, [
-        { scope: "Environment", severity: "Blocking", item: null, what: "x", action: "None" },
-      ]);
-      fireBuildComplete("900");
-      expect(headerText()).toBe("Built · 1 page · 0.9s");
-    });
-
     // The Blocking advisory that surfaces the panel so a receipt can paint.
     const BLOCKING = [
       { scope: "Environment", severity: "Blocking", item: null, what: "x", action: "None" },
     ];
 
-    it("text still being read from documents outranks the build receipt", () => {
-      firePages(47, BLOCKING);
-      fireBuildComplete("4200");
-      fireMossEvent({
-        kind: "BackgroundProgress",
-        payload: { task: "derive", message: "Reading PDFs · 0 of 1", current: 0, total: 1, completed: false },
-      });
-      expect(headerText()).toBe("Reading PDFs · 0 of 1");
-      fireMossEvent({
-        kind: "BackgroundProgress",
-        payload: { task: "derive", message: "", current: 0, total: 0, completed: true },
-      });
-      expect(headerText()).not.toContain("Reading");
-    });
-
-    it("a span the producer could not report still reports the build, minus the duration", () => {
-      // "It finished, we don't know how long" is a fact about THIS build — not a
-      // reason to lie and not a reason to go silent. Keep the receipt, drop the
-      // `· X.Xs` segment. Before: an unparseable span rendered "Built · 47 pages
-      // · NaNs", and a null one the quieter fake measurement "· 0.0s".
-      for (const span of ["not-a-number", null, undefined]) {
-        // A fresh html_pages per build: the count is owned and consumed by the
-        // build that reported it, so it is never re-used across two of them.
-        firePages(47, BLOCKING);
-        fireBuildComplete(span);
-        expect(headerText()).toBe("Built · 47 pages");
-      }
-    });
-
-    it("an unknown span is never filled in from the PREVIOUS build", () => {
-      // The count is re-read live from html_pages, so merely LEAVING the old
-      // elapsed in place composes one receipt out of two builds — this build's
-      // page count beside the last one's span. That reads as a measurement and
-      // is a lie, which is worse than a visibly broken "NaNs".
-      firePages(47, BLOCKING);
-      fireBuildComplete("4200");
-      expect(headerText()).toBe("Built · 47 pages · 4.2s");
-      firePages(9, BLOCKING);
-      fireBuildComplete("garbage");
-      expect(headerText()).not.toContain("4.2s");
-      expect(headerText()).toBe("Built · 9 pages");
-    });
-
-    it("the Job-derived receipt drops an unusable span identically (the two sources agree)", () => {
-      // A media build's receipt comes from the parent Build Job, a media-less
-      // one from BuildComplete. One missing fact must produce one string, or the
-      // panel says two different things about the same condition.
+    it("the paint reads 'Updated'; the Build Job's success, which waits on media, does not", () => {
+      panel.setStage("ready");
       firePages(47, BLOCKING);
       const wire = (state: any) => ({
         id: "900", window_id: "main", scope: "preview", kind: "build", tone: "ambient",
         title: "Building", fade_after_ms: null, started_at_ms: "0", verb: "Built",
-        amount: { count: "47", noun: "pages" }, elapsed_ms: "not-a-number",
+        amount: { count: "47", noun: "pages" }, elapsed_ms: "4200",
         parent: null, state,
       });
       panel.handleJobUpdate(wire({ state: "running", fraction: null, message: null }) as any);
       panel.handleJobUpdate(wire({ state: "succeeded", receipt: null }) as any);
-      expect(headerText()).toBe("Built · 47 pages");
+      expect(headerText()).toBe("Updating…");
+      fireBuildComplete();
+      expect(headerText()).toBe("Updated");
+      vi.advanceTimersByTime(ProgressPanel.RECEIPT_DWELL_MS + 50);
+      firePages(9, BLOCKING);
+      expect(headerText()).toBe("Updating…");
+      fireBuildComplete("garbage");
+      expect(headerText()).toBe("Updated");
     });
 
-    // REPLACES an earlier max-dwell test that fired BuildComplete without ever
-    // reaching 'ready'. The backend never produces that order — the terminal
-    // progress event that drives ready is emitted at the end of the build fn,
-    // and BuildComplete comes later from the spawned seal task — so it exercised
-    // an unreachable path, which is exactly why the pageTotal wipe below went
-    // unnoticed. Same dwell assertion, real order.
-    it("a receipt minted after the stage settles still reads its page count — the stage reset must not dissolve a live receipt (R11)", () => {
+    // The backend's real order: the terminal progress event that drives ready
+    // is emitted at the end of the build fn, and BuildComplete comes later from
+    // the spawned seal task.
+    it("a receipt minted after the stage settles still forms, then retracts after the dwell (R11)", () => {
       panel.setStage("opening");
       firePages(8, BLOCKING);
-      panel.setStage("ready"); // wipes stageContext, where the count used to live
+      panel.setStage("ready");
       fireBuildComplete("1500");
       // The Blocking advisory legitimately holds the glass open, so the receipt
       // has somewhere to paint — and must actually form.
       expect(panel.isHidden).toBe(false);
-      expect(headerText()).toBe("Built · 8 pages · 1.5s");
-      // After the max-dwell window the header is gone (retracted to the pill).
+      expect(headerText()).toBe("Updated");
       vi.advanceTimersByTime(ProgressPanel.RECEIPT_DWELL_MS + 50);
       expect(headerText()).toBe("");
     });
 
     it("a rebuild inside the previous receipt's dwell still gets its own receipt", () => {
-      // The dwell timer expires RECEIPT state, so every field it clears must
-      // belong to the build it was armed for. The page count was the one field
-      // written mid-build (at html_pages) rather than at completion, so build
-      // N's timer reached forward and wiped build N+1's already-recorded total:
-      // on a panel legitimately held open, any rebuild starting inside the 2.5s
-      // window rendered NO receipt at all. Now the count is consumed into the
-      // completion snapshot, and the timer can only discard its own build.
+      // The dwell timer expires RECEIPT state; build N's timer must not reach
+      // forward and wipe build N+1's receipt.
       panel.setStage("opening");
       firePages(47, BLOCKING);
       panel.setStage("ready");
       fireBuildComplete("1500"); // build 1 completes, arming its dwell
-      expect(headerText()).toBe("Built · 47 pages · 1.5s");
+      expect(headerText()).toBe("Updated");
 
       vi.advanceTimersByTime(1000); // still inside build 1's dwell
-      firePages(9, BLOCKING); // build 2 records its count
-      vi.advanceTimersByTime(ProgressPanel.RECEIPT_DWELL_MS - 900); // build 1's timer fires
+      firePages(9, BLOCKING);
+      expect(headerText()).toBe("Updating…"); // a second save is updating, not updated
       fireBuildComplete("2000");
-      expect(headerText()).toBe("Built · 9 pages · 2.0s");
+      vi.advanceTimersByTime(ProgressPanel.RECEIPT_DWELL_MS - 900); // build 1's timer would fire
+      expect(headerText()).toBe("Updated");
     });
 
-    it("a build that reports no page count does not borrow the previous build's", () => {
-      // The other half of the same ownership rule: the count is CONSUMED at
-      // completion, so it cannot outlive its build. A site rendering zero pages
-      // emits no html_pages event at all (the emit is guarded on total > 0), and
-      // reporting "Built · 47 pages" for it is the plausible-looking lie that is
-      // worse than saying nothing.
-      panel.setStage("opening");
-      firePages(47, BLOCKING);
+    it("a failed edit rebuild does not end on 'Updating…'", () => {
       panel.setStage("ready");
-      fireBuildComplete("1500");
-      expect(headerText()).toBe("Built · 47 pages · 1.5s");
-
-      vi.advanceTimersByTime(500); // build 2 lands INSIDE build 1's dwell
-      fireBuildComplete("300"); // no intervening html_pages
-      expect(headerText()).toBe("");
+      firePages(3, BLOCKING);
+      expect(headerText()).toBe("Updating…");
+      panel.buildSettled(); // the build's terminal progress, no paint follows
+      expect(headerText()).not.toBe("Updating…");
+      expect(headerText()).not.toBe("Updated");
     });
 
     it("a build receipt does NOT hold the glass open the way a publish receipt does", () => {
@@ -3607,26 +3547,9 @@ describe("ProgressPanel", () => {
       panel.setStage("opening");
       firePages(12);
       fireBuildComplete("2100");
-      expect(headerText()).toBe("Built · 12 pages · 2.1s");
+      expect(headerText()).toBe("Updated");
       panel.setStage("ready");
       expect(panel.isHidden).toBe(true);
-    });
-
-    it("the elapsed is forgotten even when no page count ever arrived, so a later one cannot revive it", () => {
-      // Skipping the arm when no text can form yet looks like a free
-      // optimisation and is not: the page count arrives on the NEXT build,
-      // composes `Built · 227 pages · 1.2s` from a build long gone, and paints
-      // it MID-BUILD, since the receipt outranks the running build stage.
-      panel.setStage("ready");
-      panel.hide();
-      fireBuildComplete("1200"); // no html_pages yet → no receipt text can form
-      vi.advanceTimersByTime(ProgressPanel.RECEIPT_DWELL_MS + 50);
-      panel.show();
-      firePages(227);
-      // Assert the element is ABSENT, not that its text is empty — an empty
-      // `.moss-status-line` claiming data-kind="running" would pass the latter.
-      expect(panel.isHidden).toBe(false); // the guard only means anything open
-      expect(container.querySelector(".moss-status-line")).toBeNull();
     });
 
     it("a receipt minted while minimized still EXPIRES — a later peek does not replay a stale build (R11)", () => {
@@ -3639,7 +3562,7 @@ describe("ProgressPanel", () => {
       // wall-clock expiry on the state, not on the pixels. Before this, a quiet
       // rebuild (the common case) armed no timer at all, so the receipt lived
       // until the next build started — and the first thing to open the panel
-      // afterwards, however much later, headlined `Built · 227 pages · 3.1s`.
+      // afterwards, however much later, headlined a build long gone.
       panel.setStage("ready");
       panel.hide();
       firePages(227); // count recorded, no advisory → the panel stays minimized
@@ -3875,7 +3798,7 @@ describe("ProgressPanel", () => {
     it("the rendered panel element feeds pointerenter/leave into the union (renderer wiring)", () => {
       // Narrated task creates panel DOM — only narrated tasks render as rows.
       panel.handleJobUpdate({
-        id: "narrated:wire-1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:wire-1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -3979,7 +3902,7 @@ describe("Panel mounting and shape keep it attached to the nav pill", () => {
   function panelEl(): HTMLElement {
     // Narrated task creates panel DOM (only narrated tasks render as rows in the new model).
     panel.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4191,7 +4114,7 @@ describe("Panel mounting and shape keep it attached to the nav pill", () => {
     const p2 = new ProgressPanel(bare);
     // Narrated task creates panel DOM (only narrated tasks render as rows in the new model).
     p2.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "x", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4244,9 +4167,9 @@ describe("buildViewModel", () => {
   });
 
   // ── (a) Mixed build VM ────────────────────────────────────────────────────
-  // NeedsAction+File + ShippedDegraded + running stage + mediaStatus →
-  // correct PanelViewModel: broken-first notices, broken topSeverity, media in status.
-  it("(a) mixed build: NeedsAction+File + ShippedDegraded + compiling stage + mediaStatus → correct PanelViewModel", () => {
+  // NeedsAction+File + ShippedDegraded + running stage + video conversion →
+  // correct PanelViewModel: broken-first notices, broken topSeverity, the build in status.
+  it("(a) mixed build: NeedsAction+File + ShippedDegraded + compiling stage + video conversion → correct PanelViewModel", () => {
     // 1. Inject a NeedsAction File advisory (broken tier)
     fireMossEvent({
       kind: "BackgroundProgress",
@@ -4288,7 +4211,7 @@ describe("buildViewModel", () => {
     // 3. Set a compiling stage (running build)
     panel.setStage("compiling");
 
-    // 4. Fire VideoConversionProgress so mediaStatus is set
+    // 4. A video converting in the background
     fireMossEvent({
       kind: "VideoConversionProgress",
       payload: {
@@ -4302,10 +4225,10 @@ describe("buildViewModel", () => {
 
     const vm = panel.buildViewModel();
 
-    // Status: media encoding wins over build stage (mediaStatus ≠ null)
+    // Status: the build, never the background conversion
     expect(vm.status.kind).toBe("running");
-    // The media subject is used in the status
-    expect(vm.status.subject).toBe("intro.mp4");
+    expect(vm.status.text).toBe("Updating…");
+    expect(vm.status.subject).toBeUndefined();
 
     // Notices: broken before degraded
     expect(vm.notices.length).toBeGreaterThanOrEqual(2);
@@ -4350,7 +4273,7 @@ describe("buildViewModel", () => {
       id: "narr-1",
       window_id: "main",
       scope: "workspace",
-      kind: "syndicate",
+      kind: "deploy",
       tone: "awaiting",
       title: "Authorize publication",
       fade_after_ms: null,
@@ -4404,7 +4327,7 @@ describe("buildViewModel", () => {
     expect(panel.getRevealState()).toBe("minimized");
 
     panel.handleJobUpdate(
-      wire({ state: "awaiting", directive: "Sign in to GitHub", action: "None" })
+      wire({ state: "awaiting", directive: "Check your DNS records", action: "None" })
     );
 
     expect(panel.getRevealState()).toBe("surfaced");
@@ -4416,9 +4339,9 @@ describe("buildViewModel", () => {
       id: "narr-job-1",
       window_id: "main",
       scope: "workspace",
-      kind: "syndicate",
+      kind: "deploy",
       tone: "narrated",
-      title: "Syndicating to Mirror",
+      title: "Deploying site",
       fade_after_ms: null,
       started_at_ms: 0,
       verb: null,
@@ -4428,7 +4351,7 @@ describe("buildViewModel", () => {
       state: {
         state: "running",
         fraction: 0.5,
-        message: "Uploading post",
+        message: "Uploading site",
       },
     });
 
@@ -4508,15 +4431,15 @@ describe("buildViewModel", () => {
     expect(brokenAfter.length).toBe(0);
   });
 
-  // ── (f) Active syndicate plugin hook → status line ────────────────────────
-  it("(f) an active syndicate plugin hook task → appears in the status line (wiring iii)", () => {
+  // ── (f) Active deploy plugin hook → status line ────────────────────────
+  it("(f) an active site deploy plugin hook task → appears in the status line (wiring iii)", () => {
     // plugin:* tasks in the running tier feed the status line when no stage/publish/media.
     // handlePluginProgress is called directly (same as the event path) using the
     // correct PluginProgressEvent field names: plugin_name, hook_name, phase, current, total.
-    // "syndicate" is an IMMEDIATE_HOOK → no deferral, upserts directly.
+    // "deploy" is an IMMEDIATE_HOOK → no deferral, upserts directly.
     panel.handlePluginProgress({
       plugin_name: "Mirror",
-      hook_name: "syndicate",
+      hook_name: "deploy",
       phase: "running",
       current: 0,
       total: 0,
@@ -4557,18 +4480,67 @@ describe("buildViewModel", () => {
     expect(vm.status.text).toBe("Connecting example.test");
   });
 
-  // ── (g2) a bg:<task> row feeds the status line too, once nothing else claims it ──
-  it("(g2) a bg:images row reaches the status line — the panel body has content to show on hover", () => {
-    // The seam can un-hide onto a bg:<task> row; buildViewModel().status must carry it too.
-    panel.setStage("ready"); // no active build-stage label to compete
+  // ── (g2) background work keeps its row and never takes the status line ──
+  it("(g2) a bg:images row neither reaches the status line nor opens the seam", () => {
+    panel.setStage("ready");
+    const presence: boolean[] = [];
+    panel.onContentChange((present) => presence.push(present));
     fireMossEvent({
       kind: "BackgroundProgress",
       payload: { task: "images", message: "", current: 8, total: 12, completed: false },
     });
 
-    const vm = panel.buildViewModel();
-    expect(vm.status.kind).toBe("running");
-    expect(vm.status.text).toBe("Optimizing images (8/12)");
+    expect(panel.getActiveTasks().some((t) => t.id === "bg:images")).toBe(true);
+    expect(panel.buildViewModel().status.kind).toBe("none");
+    expect(presence.at(-1)).toBe(false);
+  });
+
+  // ── A preview edit, start to idle, with background work after the paint ──
+  it("a preview edit reads only 'Updating…' then 'Updated', whatever background work follows", () => {
+    panel.setStage("ready"); // the site is served; an edit starts from here
+    const lines: string[] = [];
+    // Empty text is kept: a blank between the two words is a flicker.
+    const record = () => {
+      const { text } = panel.buildViewModel().status;
+      if (lines.length === 0 && !text) return;
+      if (lines.at(-1) !== text) lines.push(text);
+    };
+    const bg = (task: string, current: number, total: number, completed: boolean, message = "") => {
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task, message, current, total, completed, advisories: [] } });
+      record();
+    };
+    const job = (state: any) => {
+      fireTaskUpdate({
+        id: "300", window_id: "main", scope: "preview", kind: "build", tone: "ambient",
+        title: "Building", fade_after_ms: null, started_at_ms: "0", verb: "Built",
+        amount: { count: 3, noun: "pages" }, elapsed_ms: 900, parent: null, state,
+      } as any);
+      record();
+    };
+
+    job({ state: "running", fraction: null, message: null });
+    bg("markdown", 1, 3, false);
+    bg("html_pages", 2, 3, false);
+    bg("html_pages", 3, 3, true);
+    panel.showUpdated(); // the paint
+    record();
+
+    // Background work after the paint. The backend's order: media workers
+    // run, then the Build Job succeeds once every one has joined.
+    bg("search", 0, 3, false, "Updating search");
+    bg("derive", 0, 1, false, "Reading PDFs · 0 of 1");
+    bg("images", 2, 8, false);
+    fireMossEvent({
+      kind: "VideoConversionProgress",
+      payload: { phase: "encoding", current_video: 1, total_videos: 2, filename: "intro.mp4", overall_fraction: 0.3 },
+    });
+    record();
+    bg("images", 8, 8, true);
+    bg("derive", 1, 1, true);
+    bg("search", 3, 3, true);
+    job({ state: "succeeded", receipt: null, advisories: [] });
+
+    expect(lines).toEqual(["Updating…", "Updated"]);
   });
 
   // ── (h) No id:'build' task + quiet rebuild doesn't force-surface ──────────
@@ -4708,7 +4680,7 @@ describe("AdvisoryEntry carries scope", () => {
     fireMossEvent({
       kind: "PanelTaskUpdate",
       payload: {
-        id: "task-1", window_id: "main", scope: "workspace", kind: "syndicate",
+        id: "task-1", window_id: "main", scope: "workspace", kind: "deploy",
         tone: "awaiting", title: "Authorize", started_at_ms: "0",
         verb: null, amount: null, elapsed_ms: null, parent: null,
         state: { state: "awaiting", directive: "Authorize to continue", action: "None" },
@@ -4745,16 +4717,16 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
   it("PUSH_NOTICE is stored in the advisory map keyed by task", async () => {
     const { eventBus, Events } = await import("../../../context/event-bus");
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate",
+      task: "publish-verify",
       item: null,
-      reason: "Publish your site first — deploy to your website, then syndicate.",
+      reason: "Checking your site is live.",
       severity: "NeedsAction",
       scope: "Remote",
     });
     const advs = panel.getAdvisories();
-    const notice = advs.find((a) => a.task === "deploy:site-live-gate");
+    const notice = advs.find((a) => a.task === "publish-verify");
     expect(notice).toBeDefined();
-    expect(notice!.reason).toBe("Publish your site first — deploy to your website, then syndicate.");
+    expect(notice!.reason).toBe("Checking your site is live.");
     expect(notice!.item).toBeNull();
   });
 
@@ -4762,7 +4734,7 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
     const { eventBus, Events } = await import("../../../context/event-bus");
     // Add a narrated task first to get the panel DOM mounted
     panel.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4770,9 +4742,9 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
     // resting default is collapsed); its row only renders when the body is shown.
     panel.show();
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate",
+      task: "publish-verify",
       item: null,
-      reason: "Publish your site first — deploy to your website, then syndicate.",
+      reason: "Checking your site is live.",
       severity: "NeedsAction",
       scope: "Remote",
     });
@@ -4913,11 +4885,10 @@ describe("Publish verification — sticky advisories, CLEAR_NOTICE, verifying re
         container.querySelector(".moss-status-line__verb")?.textContent ?? "";
       expect(verb()).toContain("Published");
 
-      // Complete precedes Verifying on this channel: the arrival swaps the
-      // just-minted receipt for the honest rung-1 sentence…
+      // Complete precedes Verifying on this channel: the site is not live
+      // yet, so the just-minted receipt goes back to "Uploading…"…
       cb({ stage: "verifying", current: 0, total: 0, message: "" });
-      expect(verb()).toContain("Uploaded");
-      expect(verb()).not.toContain("Published");
+      expect(verb()).toBe("Uploading…");
       // …and the stage machine stays resolved — a resident stage would pin
       // shouldSurface() true for a minutes-to-hours window.
       expect(panel.getPublishStage()).toBe("idle");
@@ -4925,7 +4896,7 @@ describe("Publish verification — sticky advisories, CLEAR_NOTICE, verifying re
       // It is a receipt like any other: it retracts on the normal dwell and
       // the settled panel lets go.
       vi.advanceTimersByTime(3_000);
-      expect(verb()).not.toContain("Uploaded");
+      expect(verb()).not.toContain("Uploading");
       expect(panel.isHidden).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -5122,7 +5093,7 @@ describe("Closing the panel acknowledges the Blocking advisory shown at that mom
     // A NeedsAction row never surfaces the panel on its own; open it by hand
     // (as a hover/click would) to exercise dismiss() over a mixed advisory set.
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate", item: null,
+      task: "publish-verify", item: null,
       reason: "Publish your site first", severity: "NeedsAction", scope: "Remote",
     });
     panel.pin();

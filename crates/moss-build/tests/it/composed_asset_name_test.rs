@@ -2,6 +2,7 @@
 //! accent) is published under the composed name, so every machine serves it
 //! at one address.
 
+use moss_build::moss_paths::MossPaths;
 use crate::site;
 
 use site::Site;
@@ -14,7 +15,7 @@ fn a_decomposed_file_name_is_published_composed() {
     ]);
     // The published folder, and its listing rather than a lookup: a Mac disk
     // finds either spelling. A folder of files alone gets no page.
-    let published = site.root.join(".moss/build.nosync/current/files");
+    let published = MossPaths::new(&site.root).current_ptr().join("files");
     let mut names: Vec<String> = std::fs::read_dir(&published)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -37,7 +38,7 @@ fn hall(form: fn(&str) -> String) -> Site {
 
 /// Every published file by the name its folder lists, with its bytes.
 fn published(site: &Site) -> Vec<(String, String)> {
-    let current = site.root.join(".moss/build.nosync/current");
+    let current = MossPaths::new(&site.root).current_ptr();
     let mut files: Vec<(String, String)> = walkdir::WalkDir::new(&current)
         .follow_links(true)
         .into_iter()
@@ -86,7 +87,7 @@ fn a_folder_written_decomposed_builds_publishes_and_edits_as_the_composed_folder
     // A page a cloud folder has not downloaded keeps its last build.
     #[cfg(target_os = "macos")]
     {
-        let html = || std::fs::read(decomposed.root.join(".moss/build.nosync/current").join(url.trim_matches('/')).join("index.html")).unwrap();
+        let html = || std::fs::read(MossPaths::new(&decomposed.root).current_ptr().join(url.trim_matches('/')).join("index.html")).unwrap();
         let before = html();
         let folder = decomposed.root.join("cafe\u{301}");
         std::fs::remove_file(folder.join("cre\u{300}me.md")).unwrap();

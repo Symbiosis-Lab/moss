@@ -172,19 +172,16 @@ impl From<PushResult> for DeployReport {
 /// environment's own subdomain or "View site" silently shows prod content.
 ///
 /// Reads state.toml fresh at the moment of use so a domain the orchestrator
-/// verified during THIS deploy is already reflected. Never use this for
-/// `record_publish` — the saved `last_deployment_url` must stay
-/// the subdomain URL (caption invariant, see `build_deployment_status`).
+/// verified during THIS deploy, and the address this publish just stored, are
+/// already reflected. Never use this for `record_publish` — the saved
+/// `last_deployment_url` must stay the subdomain URL (caption invariant, see
+/// `build_deployment_status`).
 pub fn view_site_url(
     folder_path: &str,
     site_id: &str,
     env: crate::config::environment::HostingEnvironment,
 ) -> String {
-    let config = if env == crate::config::environment::HostingEnvironment::Production {
-        crate::build::site_config::get_domain_config(folder_path).unwrap_or_default()
-    } else {
-        Default::default()
-    };
+    let config = crate::build::site_config::get_domain_config(folder_path).unwrap_or_default();
     view_site_url_for(&config, site_id, env)
 }
 
@@ -197,7 +194,26 @@ pub fn view_site_url_for(
     let custom = (env == crate::config::environment::HostingEnvironment::Production)
         .then(|| crate::config::deployment::live_custom_domain_url(config))
         .flatten();
-    custom.unwrap_or_else(|| format!("https://{}{}", site_id, env.site_suffix()))
+    custom
+        .or_else(|| config.site_url.clone().filter(|url| env.serves(site_id, url)))
+        .unwrap_or_else(|| env.assumed_site_url(site_id))
+}
+
+/// The address moss hosting answered a publish with, if it is this site's on
+/// this environment's hosting. It is another machine's word and is baked into
+/// every page's canonical link, so anything else is dropped and the caller
+/// falls back to the suffix rule.
+pub(crate) fn hosted_address(
+    env: &crate::config::environment::HostingEnvironment,
+    site_id: &str,
+    answered: &str,
+) -> Option<String> {
+    let url = answered.trim().trim_end_matches('/');
+    if env.serves(site_id, url) {
+        return Some(url.to_string());
+    }
+    log::warn!(target: "deploy", "hosting answered an address that is not this site's ({answered}); keeping the default");
+    None
 }
 
 #[cfg(test)]
@@ -279,6 +295,26 @@ mod view_site_url_tests {
             ),
             "https://her-blog.staging.mosspub.com"
         );
+    }
+
+    /// Without a verified custom domain the site is where hosting last said
+    /// it is, for the site and environment that publish was to.
+    #[test]
+    fn prefers_the_address_hosting_gave_over_the_assumed_one() {
+        let dir = folder_with(None, false);
+        let path = dir.path().to_str().unwrap();
+        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.page".to_string())).unwrap();
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog.staging.mosspub.com");
+        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog-test.mosspub.page".to_string())).unwrap();
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog-test.mosspub.page");
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.com");
+        assert_eq!(view_site_url(path, "other-site", HostingEnvironment::Production), "https://other-site.mosspub.com");
+
+        let dir = folder_with(Some("example.com"), true);
+        let path = dir.path().to_str().unwrap();
+        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.page".to_string())).unwrap();
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://example.com");
     }
 
     #[test]
@@ -529,7 +565,24 @@ pub(crate) fn refuse_before_upload(folder: &std::path::Path, sealed: &crate::bui
     refuse_publish(&folder.to_string_lossy())?;
     let _checks = crate::build::phase::PhaseTrace::start("local_checks");
     gate("foreign_inputs", refuse_foreign_inputs(sealed, folder))?;
-    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))
+    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))?;
+    gate("place_map_pack", refuse_unusable_landscape(folder, sealed))
+}
+
+/// A site that asks for the installed place-map pack publishes only a
+/// generation drawn with it; otherwise that build drew moss's own map. Judged
+/// from the seal, so a pack repaired after the build still needs a rebuild. A
+/// pack still in the cloud is refused earlier, as an unresolved input.
+pub fn refuse_unusable_landscape(folder: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    let paths = crate::moss_paths::MossPaths::new(folder);
+    let Ok(Some(text)) = crate::build::site_config::read_managed_toml_no_wait(&paths.config()) else { return Ok(()) };
+    let Ok(cfg) = crate::config::ConfigFile::parse(&text) else { return Ok(()) };
+    if crate::build::place_map::wanted_landscape(&cfg).is_none()
+        || sealed.input_evidence().is_some_and(crate::build::place_map::drew_installed_pack)
+    {
+        return Ok(());
+    }
+    Err("Nothing published — this build drew moss's own place map, not the pack in .moss/maps/ the site asks for. Install the pack with `moss migrate --apply`, build again, then publish.".to_string())
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with
@@ -883,7 +936,7 @@ pub(crate) fn sign_in_host(folder_str: &str, site_id: Option<&str>) -> String {
             let url = view_site_url(folder_str, id, env);
             url.split_once("://").map_or(url.clone(), |(_, host)| host.to_string())
         }
-        None => env.site_suffix().trim_start_matches('.').to_string(),
+        None => env.host().to_string(),
     }
 }
 

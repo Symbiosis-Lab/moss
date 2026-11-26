@@ -127,6 +127,31 @@ fn a_build_does_not_start_while_a_home_the_election_cannot_see_is_in_the_cloud()
     assert!(err.contains("start.md"), "{err}");
 }
 
+/// No provider lets moss keep a folder's files on disk, so a build that had to
+/// download its sources tells the person the one thing that does.
+#[test]
+fn a_build_that_downloaded_its_sources_asks_for_the_folder_offline() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("index.md"), "# Home").unwrap();
+    let _in_cloud = icloud::pretend::evicted_until_requested(&tmp.path().join("index.md"));
+    let delivers = || {
+        let pool = Prefetcher::with_materializer(
+            3,
+            Arc::new(|path: &Path| {
+                icloud::pretend::requested(path);
+                Ok(())
+            }),
+            false,
+        );
+        Wait::with(pool, icloud::is_still_in_the_cloud, Duration::from_millis(200), Duration::from_millis(10))
+    };
+    let mut said = Vec::new();
+
+    require_sources_local(tmp.path(), &delivers, &mut |line| said.push(line.to_string())).unwrap();
+
+    assert_eq!(said.last().map(String::as_str), Some(format!("Make {} available offline", tmp.path().display()).as_str()), "{said:?}");
+}
+
 #[test]
 fn a_build_of_a_local_folder_asks_for_no_pool() {
     let tmp = tempfile::tempdir().unwrap();

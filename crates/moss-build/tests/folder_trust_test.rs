@@ -115,7 +115,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     assert_eq!(refusal(&y), Some(Refusal::Untrusted));
 
     // A headless build reads the app's answers and writes none.
-    install_headless(Some(&legacy_root), false);
+    install_headless(None, Some(&legacy_root), false);
     assert!(is_trusted(&covered) && !is_trusted(&partly));
     assert!(set_folder_trust(&partly, true).is_err());
     assert_eq!(trust::load(&legacy_root).answer(&partly), None);

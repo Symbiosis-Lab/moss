@@ -1,2 +1,3 @@
-import { a as BakedSide, c as Rect, d as StepOptions, f as WatercolorSim, h as WatercolorPreset, i as advance, l as SceneSide, m as DEFAULT_PRESET, n as AdvanceResult, o as CreateSimOptions, p as createSim, r as ClockState, s as PrintSource, t as DIAG_VIEWS, u as SideLook } from "../index-ZYXkCQs7.mjs";
-export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PRESET, DIAG_VIEWS, PrintSource, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createSim };
+import { a as PrintSource, c as SideLook, d as createSim, f as DEFAULT_PRESET, i as PigmentSample, l as StepOptions, n as CreateSimOptions, o as Rect, p as WatercolorPreset, r as PigmentFrame, s as SceneSide, t as BakedSide, u as WatercolorSim } from "../solver-BT7K3Dxe.mjs";
+import { i as advance, n as AdvanceResult, r as ClockState, t as DIAG_VIEWS } from "../index-Bz4XkZxt.mjs";
+export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PRESET, DIAG_VIEWS, PigmentFrame, PigmentSample, PrintSource, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createSim };

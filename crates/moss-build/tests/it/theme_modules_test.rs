@@ -2,6 +2,7 @@
 //! served from a content-hashed URL named in an import map in `<head>`. A theme
 //! without a `script.mjs` is untouched. Built through the real pipeline.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,30 +10,6 @@ fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, body).unwrap();
-}
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
 }
 
 struct Site(PathBuf);
@@ -50,12 +27,12 @@ impl Site {
     }
 
     fn build(&self) -> String {
-        build_sync(&self.0.to_string_lossy()).expect("build failed");
-        fs::read_to_string(self.0.join(".moss/build.nosync/staging/index.html")).unwrap()
+        crate::site::build_full(&self.0.to_string_lossy()).expect("build failed");
+        fs::read_to_string(MossPaths::new(&self.0).staging_dir().join("index.html")).unwrap()
     }
 
     fn staged(&self, rel: &str) -> PathBuf {
-        self.0.join(".moss/build.nosync/staging").join(rel)
+        MossPaths::new(&self.0).staging_dir().join(rel)
     }
 
     fn hashed(&self, dir: &str, stem: &str) -> Vec<String> {

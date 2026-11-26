@@ -5,13 +5,14 @@
 //! files on a Linux disk and one on the default macOS volume, where saving the
 //! second silently replaces the first. A site synced through a Linux machine
 //! can carry both, and then a Mac and a server would publish different sites
-//! from the same folder. So the build refuses the folder on every machine.
-//! Detecting the pair is a comparison of the paths themselves, so it does not
-//! depend on the disk the scan happens to run on.
+//! from the same folder. So on every machine the build keeps one file of each
+//! pair, the same one, and records a problem naming both, which refuses
+//! publish. Detecting the pair is a comparison of the paths themselves, so it
+//! does not depend on the disk the scan happens to run on.
 //!
-//! Two pictures or videos the build would publish under one name are refused
+//! Two pictures or videos the build would publish under one name are handled
 //! the same way: `photo.jpg` and `photo.png` both become `photo.webp`, and
-//! which one a reader gets would depend on which encode finished last.
+//! which one a reader got would depend on which encode finished last.
 //!
 //! Two markdown pages are left to the passes that already name them: a clash
 //! of page addresses is reported by `slug::resolve_duplicate_slugs_with_lang`
@@ -19,7 +20,7 @@
 //! here too would print one problem twice.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
@@ -48,29 +49,41 @@ pub(crate) fn logical_path(rel: impl AsRef<Path>) -> String {
     moss_core::slug::normalize_separators(&rel.as_ref().to_string_lossy()).nfc().collect()
 }
 
-/// The walk's record of every file's name as the disk stores it. Two
-/// spellings of one accented name get one [`logical_path`], so after the
-/// walk nothing can tell the two files apart; this keeps both names.
+/// Two spellings of one accented name get one [`logical_path`], so the walk
+/// must pick one before it measures either. Decided before the walk: the
+/// spelling [`on_disk`] reads is kept, so its size, date and picture
+/// dimensions are the bytes the build renders.
 #[derive(Default)]
 pub(crate) struct Spellings {
-    stored: HashMap<String, String>,
+    left_out: HashSet<PathBuf>,
+    /// `(kept, left out)`, as the disk stores each name.
     pairs: Vec<(String, String)>,
 }
 
 impl Spellings {
-    /// The logical path of `rel`, noting the pair when another file already
-    /// took it under a different stored name.
-    pub(crate) fn logical(&mut self, rel: &Path) -> String {
-        let stored = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-        let logical: String = stored.nfc().collect();
-        match self.stored.get(&logical) {
-            Some(first) if *first != stored => self.pairs.push((first.clone(), stored)),
-            Some(_) => {}
-            None => {
-                self.stored.insert(logical.clone(), stored);
+    pub(crate) fn of<'a>(root: &Path, files: impl IntoIterator<Item = &'a Path>) -> Self {
+        let mut by_logical: HashMap<String, Vec<&Path>> = HashMap::new();
+        for file in files {
+            by_logical.entry(logical_path(file.strip_prefix(root).unwrap_or(file))).or_default().push(file);
+        }
+        let mut found = Self::default();
+        let stored = |p: &Path| moss_core::slug::normalize_separators(&p.strip_prefix(root).unwrap_or(p).to_string_lossy());
+        let mut groups: Vec<_> = by_logical.into_iter().filter(|(_, files)| files.len() > 1).collect();
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+        for (logical, files) in groups {
+            let read = on_disk(root, &logical);
+            let kept = files.iter().copied().find(|f| *f == read).unwrap_or(files[0]);
+            for other in files.into_iter().filter(|f| *f != kept) {
+                found.pairs.push((stored(kept), stored(other)));
+                found.left_out.insert(other.to_path_buf());
             }
         }
-        logical
+        found
+    }
+
+    /// The logical path of `rel`, or `None` for a spelling left out.
+    pub(crate) fn logical(&self, abs: &Path, rel: &Path) -> Option<String> {
+        (!self.left_out.contains(abs)).then(|| logical_path(rel))
     }
 }
 
@@ -78,9 +91,9 @@ impl Spellings {
 /// finds a file under either spelling of its name; Linux matches names byte
 /// for byte, so a name a sync client wrote decomposed is found by composing
 /// the names in each folder. Two folders whose names compose alike are both
-/// searched and the first match wins: a folder holding both spellings of one
-/// name resolves to whichever its listing returns first (a site holding such a
-/// pair does not build). A path nothing matches comes back as
+/// searched and the first match wins, the composed spelling before the
+/// decomposed one and then by bytes, whatever order the disk lists them in.
+/// A path nothing matches comes back as
 /// `root.join(logical)`, so the read fails as it would have.
 pub(crate) fn on_disk(root: &Path, logical: &str) -> PathBuf {
     let direct = root.join(logical);
@@ -91,9 +104,10 @@ pub(crate) fn on_disk(root: &Path, logical: &str) -> PathBuf {
     for segment in logical.split('/').filter(|s| !s.is_empty()) {
         let mut next = Vec::new();
         for dir in &found {
-            let names: Vec<OsString> = std::fs::read_dir(dir)
+            let mut names: Vec<OsString> = std::fs::read_dir(dir)
                 .map(|entries| entries.flatten().map(|e| e.file_name()).collect())
                 .unwrap_or_default();
+            names.sort_by_key(|name| (!name.to_str().is_some_and(unicode_normalization::is_nfc), name.clone()));
             next.extend(spellings_of(segment, &names).map(|name| dir.join(name)));
         }
         found = next;
@@ -158,21 +172,29 @@ fn rename_advice(a: &str, b: &str) -> String {
     }
 }
 
-/// The refusal for a folder holding a colliding pair among every file the
-/// scan found, or among the names `spellings` saw on the disk, saying which
-/// file of each pair to rename.
-pub(crate) fn refuse_colliding_files(found: &ProjectStructure, spellings: &Spellings) -> Result<(), String> {
+/// Leaves the second file of each colliding pair, the decomposed spelling or
+/// else the later in [`nfc_order`], out of
+/// `found`, so the folder builds alike on every machine, and returns the
+/// problems naming both files of each pair. A recorded problem refuses
+/// publish. The accent pairs `spellings` saw were left out by the walk.
+pub(crate) fn leave_out_colliding_files(found: &mut ProjectStructure, spellings: &Spellings) -> Vec<String> {
     let files = [&found.markdown_files, &found.html_files, &found.notebook_files, &found.other_files];
     let others = files.into_iter().flatten().map(|f| (f.path.as_str(), false));
     let media = found.image_files.iter().chain(&found.video_files).map(|f| (f.path.as_str(), true));
+    // The composed spelling is kept, as `rename_advice` names the other.
+    let order = |a: &str, b: &str| unicode_normalization::is_nfc(b).cmp(&unicode_normalization::is_nfc(a)).then_with(|| nfc_order(a, b));
+    let kept_first = |(a, b, name): (String, String, String)| if order(&a, &b).is_gt() { (b, a, name) } else { (a, b, name) };
     let (mut same_name, shared): (Vec<_>, Vec<_>) =
-        colliding_pairs(others.chain(media)).into_iter().partition(|(a, b, _)| fold(a) == fold(b));
+        colliding_pairs(others.chain(media)).into_iter().map(kept_first).partition(|(a, b, _)| fold(a) == fold(b));
+    let left_out: HashMap<String, String> = same_name.iter().chain(&shared).map(|(kept, out, _)| (out.clone(), kept.clone())).collect();
     same_name.extend(spellings.pairs.iter().map(|(a, b)| (a.clone(), b.clone(), String::new())));
+    let outs = |pairs: &[(String, String, String)]| pairs.iter().map(|(_, out, _)| format!("`{out}`")).collect::<Vec<_>>().join(", ");
     let mut problems = Vec::new();
     if !same_name.is_empty() {
         let fixes: Vec<String> = same_name.iter().map(|(a, b, _)| rename_advice(a, b)).collect();
         problems.push(format!(
-            "Some files differ only by letter case or by how an accented letter is encoded, so a Mac or Windows disk keeps only one of each pair and the site would build differently there. To build, {}.",
+            "Some files differ only by letter case or by how an accented letter is encoded, so a Mac or Windows disk keeps only one of each pair. This build leaves out {}. To publish, {}.",
+            outs(&same_name),
             fixes.join("; ")
         ));
     }
@@ -180,11 +202,23 @@ pub(crate) fn refuse_colliding_files(found: &ProjectStructure, spellings: &Spell
         let fixes: Vec<String> =
             shared.iter().map(|(a, b, name)| format!("rename `{a}` or `{b}`, which are both published as `{name}`")).collect();
         problems.push(format!(
-            "Some pictures or videos would be published under one name, so which one a reader gets would depend on which the build finished writing last. To build, {}.",
+            "Some pictures or videos would be published under one name. This build leaves out {}. To publish, {}.",
+            outs(&shared),
             fixes.join("; ")
         ));
     }
-    if problems.is_empty() { Ok(()) } else { Err(problems.join(" ")) }
+    let keep = |path: &str| !left_out.contains_key(path);
+    for list in [&mut found.markdown_files, &mut found.html_files, &mut found.notebook_files, &mut found.other_files] {
+        list.retain(|f| keep(&f.path));
+    }
+    found.image_files.retain(|f| keep(&f.path));
+    found.video_files.retain(|f| keep(&f.path));
+    found.passthrough_media.retain(|p| keep(p));
+    found.total_files -= left_out.len();
+    if let Some(kept) = found.homepage_file.as_ref().and_then(|home| left_out.get(home)) {
+        found.homepage_file = Some(kept.clone());
+    }
+    problems
 }
 
 #[cfg(test)]
@@ -244,32 +278,39 @@ mod tests {
         assert_eq!(case_colliding_paths(["images/Cafe\u{301}.PNG", composed]).len(), 1);
     }
 
-    /// A colliding pair refuses the folder, naming both files; any other
-    /// folder passes.
+    /// Of a colliding pair the build keeps the file the advice does not name
+    /// and records a problem naming both; any other folder is left whole.
     #[test]
-    fn a_folder_with_a_colliding_pair_is_refused() {
+    fn a_colliding_pair_builds_with_one_file_and_a_problem() {
         let image = |path: &str| crate::types::content::MediaMetadata { path: path.into(), ..Default::default() };
-        let mut found = ProjectStructure { image_files: vec![image("images/caf\u{e9}.png"), image("images/plain.png")], ..Default::default() };
-        assert!(refuse_colliding_files(&found, &Spellings::default()).is_ok());
-        found.image_files.push(image("images/Cafe\u{301}.png"));
-        let refusal = refuse_colliding_files(&found, &Spellings::default()).unwrap_err();
-        assert!(refusal.contains("rename `images/Cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{refusal}");
+        let paths = |found: &ProjectStructure| found.image_files.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
+        let mut found = ProjectStructure { image_files: vec![image("images/caf\u{e9}.png"), image("images/plain.png")], total_files: 2, ..Default::default() };
+        assert!(leave_out_colliding_files(&mut found, &Spellings::default()).is_empty());
+        assert_eq!(paths(&found).len(), 2);
+        found.image_files.insert(0, image("images/Cafe\u{301}.png"));
+        found.total_files = 3;
+        let problems = leave_out_colliding_files(&mut found, &Spellings::default()).join(" ");
+        assert!(problems.contains("leaves out `images/Cafe\u{301}.png`"), "{problems}");
+        assert!(problems.contains("rename `images/Cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{problems}");
+        assert_eq!(paths(&found), ["images/caf\u{e9}.png", "images/plain.png"]);
+        assert_eq!(found.total_files, 2);
     }
 
-    /// Two stored spellings of one name share a logical path, so only the
-    /// walk's record of the stored names can refuse them. A Mac volume cannot
-    /// hold the pair, so this is the check a Mac runs.
+    /// Two stored spellings of one name share a logical path, so the walk
+    /// keeps the one `on_disk` reads, whichever it lists first, and the
+    /// problem names both. A Mac volume cannot hold the pair.
     #[test]
-    fn two_stored_spellings_of_one_name_are_refused() {
-        let mut spellings = Spellings::default();
-        for name in ["index.md", "images/cafe\u{301}.png", "images/caf\u{e9}.png", "index.md"] {
-            spellings.logical(Path::new(name));
-        }
-        assert_eq!(spellings.logical(Path::new("images/cafe\u{301}.png")), "images/caf\u{e9}.png");
-        let found = ProjectStructure::default();
-        let refusal = refuse_colliding_files(&found, &spellings).unwrap_err();
-        assert!(refusal.contains("rename `images/cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{refusal}");
-        assert_eq!(refusal.matches("rename").count(), 1, "{refusal}");
+    fn of_two_stored_spellings_the_walk_keeps_the_one_it_reads() {
+        let root = Path::new("/no-such-site");
+        let [index, decomposed, composed] = ["index.md", "images/cafe\u{301}.png", "images/caf\u{e9}.png"].map(|n| root.join(n));
+        let spellings = Spellings::of(root, [&index, &decomposed, &composed].map(PathBuf::as_path));
+        assert_eq!(spellings.logical(&decomposed, Path::new("images/cafe\u{301}.png")), None);
+        assert_eq!(spellings.logical(&composed, Path::new("images/caf\u{e9}.png")).as_deref(), Some("images/caf\u{e9}.png"));
+        assert_eq!(spellings.logical(&index, Path::new("index.md")).as_deref(), Some("index.md"));
+        let problems = leave_out_colliding_files(&mut ProjectStructure::default(), &spellings).join(" ");
+        assert!(problems.contains("leaves out `images/cafe\u{301}.png`"), "{problems}");
+        assert!(problems.contains("rename `images/cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{problems}");
+        assert_eq!(problems.matches("rename").count(), 1, "{problems}");
     }
 
     /// The advice names the decomposed spelling when there is one, and
@@ -334,15 +375,17 @@ mod tests {
         assert_eq!(shared(&["clip.Mov", "clip.mov"]).len(), 1, "a video's own name counts, not only what it is published as");
     }
 
-    /// A case pair and two sources for one name are named in one refusal, so
+    /// A case pair and two sources for one name are named in one pass, so
     /// one rename pass fixes the folder. The scan test cannot make the case
     /// pair on a Mac disk.
     #[test]
-    fn both_kinds_of_pair_are_named_in_one_refusal() {
+    fn both_kinds_of_pair_are_named_at_once() {
         let image = |path: &str| crate::types::content::MediaMetadata { path: path.into(), ..Default::default() };
         let names = ["photo.jpg", "photo.png", "logo.gif", "Logo.gif"];
-        let found = ProjectStructure { image_files: names.map(image).to_vec(), ..Default::default() };
-        let refusal = refuse_colliding_files(&found, &Spellings::default()).unwrap_err();
-        assert!(refusal.contains("rename `logo.gif` or `Logo.gif`") && refusal.contains("which are both published as `photo.webp`"), "{refusal}");
+        let mut found = ProjectStructure { image_files: names.map(image).to_vec(), total_files: 4, ..Default::default() };
+        let problems = leave_out_colliding_files(&mut found, &Spellings::default()).join(" ");
+        assert!(problems.contains("rename `Logo.gif` or `logo.gif`") && problems.contains("which are both published as `photo.webp`"), "{problems}");
+        let kept: Vec<_> = found.image_files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(kept, ["photo.jpg", "Logo.gif"]);
     }
 }

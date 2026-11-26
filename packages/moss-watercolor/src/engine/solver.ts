@@ -16,6 +16,7 @@ import { V, WATER, PIG, MEAN, GROW, PACK, PLAY, buildShowShader } from './shader
 import { clamp01, smooth, endpointPresence, drain, isDarkPage, parseColour, type Colour } from './math.js';
 import { DEFAULT_PRESET, recordingSteps, recordingFrameCount, type WatercolorPreset } from './preset.js';
 import { createPaper, type Paper } from '../paper/default.js';
+import { registerSim, forgetSim } from '../internal/context.js';
 
 export interface Rect { x: number; y: number; w: number; h: number; }
 export type PrintSource = HTMLImageElement | HTMLCanvasElement | HTMLVideoElement | ImageBitmap;
@@ -76,6 +77,10 @@ export interface SceneSide { readonly print: PrintSource; readonly foot: PrintSo
 /** `print` is the plain print the frame showed when it was baked, and `at` where its envelope stood, folded below the middle: a leg continuing from it holds that envelope until it catches up. */
 export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; at: number; }
 
+/** Read-only views of the two recorded frames around a dissolve; owned by the sim. */
+export interface PigmentFrame { readonly s: WebGLTexture; readonly d: WebGLTexture; }
+export interface PigmentSample { readonly k0: PigmentFrame; readonly k1: PigmentFrame; readonly f: number; }
+
 export interface WatercolorSim {
   dispose(): void;
   setPrints(src: PrintSource, tgt: PrintSource): void;
@@ -93,6 +98,10 @@ export interface WatercolorSim {
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
   recordSide(side: SceneSide, budget: number): void;
   sideRecorded(side: SceneSide): boolean;
+  /** Uses playback's exact frame lookup, including partial recordings and tint invalidation.
+   * Valid until freeSide, re-recording, tint change or dispose; do not mutate the textures.
+   */
+  pigmentAt(side: SceneSide, u: number): PigmentSample | null;
   /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. A `y` with nothing recorded yet adds nothing to the mix, but the leg still ends on its print. `toNothing`, on a transparent ground, drains the canvas clear from the middle of the leg on, so the host shows its own incoming page; ignored on a paper ground. */
   playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number, options?: { toNothing?: boolean }): boolean;
   /** The mix `playSides(x, ux, y, uy, k, p)` draws, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. Played as `x` from at most `at` (`turnAt` resumes there), the frame is unchanged. */
@@ -262,7 +271,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
 
   const api: WatercolorSim = {
     // lets the GPU have the context back: a discarded simulation must not count against the page's live ones
-    dispose() { gl.getExtension('WEBGL_lose_context')?.loseContext(); },
+    dispose() { forgetSim(api); gl.getExtension('WEBGL_lose_context')?.loseContext(); },
     setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); },
     reset() {
       owner = null;
@@ -353,6 +362,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       recording = false;
     },
     sideRecorded(side) { return (side as any).n >= REC_STEPS && fresh(side as any); },
+    pigmentAt(side, u) { return frameAt(side, u); },
     // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
     // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
     playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) { return drawSides(x, ux, y, uy, k, p, null, toNothing); },
@@ -396,5 +406,6 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     draw();
     return true;
   };
+  registerSim(api, { gl, width: W, height: H, ground, page });
   return api;
 }

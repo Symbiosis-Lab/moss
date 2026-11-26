@@ -4,6 +4,7 @@
 //! the build before it left. Run through the real CLI.
 #![cfg(unix)]
 
+use moss_build::moss_paths::MossPaths;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -48,7 +49,7 @@ impl Unwritable {
 
         let (first, stderr) = moss(&["build", "--no-plugins"], &site, home.path());
         assert!(first.status.success(), "the first build must succeed:\n{stderr}");
-        let generations = site.join(".moss/build.nosync/generations");
+        let generations = MossPaths::new(&site).generations_dir();
         let made = Self { _tmp: tmp, home, site, generations };
         assert!(made.served().contains("First words."));
 
@@ -61,7 +62,7 @@ impl Unwritable {
     }
 
     fn served(&self) -> String {
-        std::fs::read_to_string(self.site.join(".moss/build.nosync/current/index.html")).unwrap()
+        std::fs::read_to_string(MossPaths::new(&self.site).current_ptr().join("index.html")).unwrap()
     }
 
     /// Run `args` on the folder; its build leaves the first build's site in place.

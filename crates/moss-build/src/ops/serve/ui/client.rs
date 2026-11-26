@@ -13,14 +13,13 @@ pub fn link_for_owner(folder: &Path) -> Result<Option<OwnerLink>, String> {
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    let Some(owner) = runtime.block_on(ownership::find_live_owner(folder)) else {
+    let Some(owner) = runtime.block_on(ownership::discover_owner(folder))? else {
         return Ok(None);
     };
-    let local = owner
-        .ui_url
+    let local = owner.record.ui_url.as_ref()
         .ok_or("this folder's live owner does not serve the editor")?;
-    let token = carrier_token::read(folder).ok_or("cannot read the live owner's token file")?;
-    let endpoint = format!("{}/__moss/sign-in/new", owner.url);
+    let token = owner.token().ok_or("cannot authenticate the live owner")?;
+    let endpoint = format!("{}/__moss/sign-in/new", owner.record.url);
     let value: serde_json::Value = carrier_token::agent(std::time::Duration::from_secs(5))
         .post(&endpoint)
         .set(carrier_token::TOKEN_HEADER, &token)

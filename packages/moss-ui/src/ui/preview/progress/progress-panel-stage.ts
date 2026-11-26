@@ -32,9 +32,9 @@ export interface ProgressTask {
   /**
    * Routine background sub-jobs (`bg:videos`, `bg:images`, `bg:rss`,
    * save/template-apply) set `ambient: true`. An ambient task is recorded in
-   * the store but does NOT pop the panel open on its own — it lives and dies at
-   * the hairline, keeping successful routine work quiet. It un-hides the panel
-   * ONLY when the build is already consequential (`shouldSurface()` true).
+   * the store but takes no headline, opens no seam and does NOT pop the panel
+   * open on its own, keeping routine work quiet. It un-hides the panel ONLY
+   * when the build is already consequential (`shouldSurface()` true).
    *
    * Consequential tasks (`preview-server-error`, `dns:check`, deploy/syndicate/
    * enhance hooks) leave this unset and keep un-hiding unconditionally —
@@ -237,7 +237,9 @@ export function nextPageProgress(
 
 /** The compiling readout. No page task has reported yet → the verb with no
  *  parenthetical, never "(0 / 0)"; `computeStageLabel` drops it on total 0. */
-export function compilingLabelInput(pages: PageProgress | undefined): StageLabelInput {
+export function compilingLabelInput(
+  pages: PageProgress | undefined,
+): Extract<StageLabelInput, { stage: 'compiling' }> {
   return {
     stage: 'compiling',
     phase: pages?.phase ?? 'markdown',
@@ -249,7 +251,9 @@ export function compilingLabelInput(pages: PageProgress | undefined): StageLabel
 /**
  * Decide the `bg:<task>` row (if any) for a `BackgroundProgress` tick the
  * primary bar does not already count — `null` when `PAGE_PHASE_BY_TASK`
- * covers it (markdown/html_pages) or the tick is advisory-only. A listed
+ * covers it (markdown/html_pages), the tick is advisory-only, or the task is
+ * `sealing`, which stays open through the materialize debounce while the
+ * preview is already current. A listed
  * task gets a plain-language phrase; an unlisted one falls back to the
  * wire's own formatted `message` (Rust `format_progress_message`), so a
  * future emitter needs no frontend change to get *a* row.
@@ -271,7 +275,7 @@ export function bgTaskRowDecision(p: {
   isAdvisoryOnly: boolean;
   parentId: string | undefined;
 }): { task: ProgressTask; skipArrival: boolean } | null {
-  if (p.isAdvisoryOnly || PAGE_PHASE_BY_TASK[p.task]) return null;
+  if (p.isAdvisoryOnly || PAGE_PHASE_BY_TASK[p.task] || p.task === 'sealing') return null;
   const base = { source: 'moss' as const, ambient: true, parentId: p.parentId };
   if (p.task === 'videos') {
     return {
@@ -293,22 +297,24 @@ export interface StageLabel {
   text: string;
   /** null = indeterminate bar; 0–100 = determinate. */
   percent: number | null;
+  /** What the work under the headline is, for a hover; never the headline. */
+  detail?: string;
 }
 
+/**
+ * The preview's headline. Scanning and compiling are one thing to the person
+ * watching — the preview is updating — so they share one word; the counts
+ * stay in `percent` and in the full-window screen's `stageCountText`.
+ */
 export function computeStageLabel(input: StageLabelInput): StageLabel {
   switch (input.stage) {
     case 'initial':
+    case 'ready':
       return { text: '', percent: null };
     case 'opening':
       return { text: t('pstage.opening'), percent: null };
     case 'scanning':
-      return {
-        text:
-          input.found != null
-            ? t('pstage.scanning_found', { n: input.found })
-            : t('pstage.scanning'),
-        percent: null,
-      };
+      return { text: t('pstage.updating'), percent: null };
     case 'materializing': {
       const pct = input.total > 0 ? (input.downloaded / input.total) * 100 : null;
       return {
@@ -320,33 +326,32 @@ export function computeStageLabel(input: StageLabelInput): StageLabel {
         percent: pct,
       };
     }
-    case 'compiling': {
-      const pct = input.total > 0 ? (input.current / input.total) * 100 : null;
-      // No denominator yet — say the verb, not "(0 / 0)".
-      //
-      // Both callers (`buildStageLabelInput`, `buildStageKnownLabel`) fall back
-      // to a zero count, and it is unset for the whole stretch between the
-      // first build-progress tick — which advances the stage to `compiling` —
-      // and the first page-task `BackgroundProgress`. Interpolating zeros there
-      // pinned a counter at 0 / 0 in front of the user, which reads as a build
-      // that has stopped — the opposite of what rank 7 exists to say.
-      //
-      // Same discipline, same shape as `pstage.scanning` / `scanning_found`
-      // and `pstage.uploading_plain` / `uploading`: the count is an
-      // enrichment, and its absence drops the parenthetical rather than
-      // rendering it empty.
-      const verb = input.phase === 'markdown' ? 'formatting' : 'generating';
+    case 'compiling':
       return {
-        text:
-          input.total > 0
-            ? t(`pstage.${verb}`, { n: input.current, total: input.total })
-            : t(`pstage.${verb}_plain`),
-        percent: pct,
+        text: t('pstage.updating'),
+        percent: input.total > 0 ? (input.current / input.total) * 100 : null,
       };
-    }
-    case 'ready':
-      return { text: '', percent: null };
   }
+}
+
+/**
+ * The first-open screen's sentence for a build in flight, with its count: on
+ * a site that has never been shown, how far the build has got is the only
+ * thing the window can say. With no denominator yet it says the verb alone,
+ * never "(0 / 0)", which reads as a build that has stopped.
+ */
+export function stageCountText(
+  input: Extract<StageLabelInput, { stage: 'scanning' | 'compiling' }>,
+): string {
+  if (input.stage === 'scanning') {
+    return input.found != null
+      ? t('pstage.scanning_found', { n: input.found })
+      : t('pstage.scanning');
+  }
+  const verb = input.phase === 'markdown' ? 'formatting' : 'generating';
+  return input.total > 0
+    ? t(`pstage.${verb}`, { n: input.current, total: input.total })
+    : t(`pstage.${verb}_plain`);
 }
 
 export type StageEvent =
@@ -453,30 +458,26 @@ export type PublishLabelInput =
   | { stage: 'complete' }
   | { stage: 'failed' };
 
+/**
+ * The publish headline has two words. Everything before the first byte leaves
+ * — waiting on background work, the pre-publish rebuild, the comparison with
+ * the server — is "Preparing…"; everything after is "Uploading…". The
+ * rebuild's own message ("Updating search") rides as `detail`, for a hover.
+ */
 export function computePublishLabel(input: PublishLabelInput): StageLabel {
   switch (input.stage) {
     case 'waiting':
-      return { text: t('pstage.waiting'), percent: null };
     case 'preparing':
+    case 'syncing':
       return { text: t('pstage.preparing'), percent: null };
     case 'rebuilding':
-      return { text: input.message?.trim() || t('pstage.rebuilding'), percent: null };
-    case 'syncing':
-      return { text: t('pstage.syncing'), percent: null };
+      return { text: t('pstage.preparing'), percent: null, detail: input.message?.trim() || undefined };
     case 'uploading': {
       const pct = input.total > 0 ? (input.current / input.total) * 100 : null;
-      // On the bytes path the verb drops the file count: the numbers move to
-      // the count slot as `12.4/58.0 MB · 2.1 MB/s`.
-      // File-count progress is the least informative of the four available
-      // numbers — it reaches ~97% before the videos start.
-      //
-      // `percent` is deliberately left on the file-count basis. A grep of the
-      // publish path found no consumer of StageLabel.percent; switching it to
-      // a byte basis would be dead code plus a test asserting a value nobody
-      // reads. If a future primary bar consumes it, that is a two-line edit
-      // with a real consumer to test against.
-      // A tiny total is NOT the bytes path: `0/0 kB` says less than the file
-      // count, so the verb keeps its `(n / total)` — see `hasSizeReadout`.
+      // On the bytes path the numbers move to the count slot as
+      // `12.4/58.0 MB · 2.1 MB/s`, so the verb drops the file count. A tiny
+      // total is not the bytes path: `0/0 kB` says less than the file count
+      // (`hasSizeReadout`).
       const haveBytes = hasSizeReadout(input.bytesTotal);
       return {
         text: haveBytes
@@ -486,9 +487,8 @@ export function computePublishLabel(input: PublishLabelInput): StageLabel {
       };
     }
     case 'committing':
-      return { text: t('pstage.committing'), percent: null };
     case 'finalizing':
-      return { text: t('pstage.finalizing'), percent: null };
+      return { text: t('pstage.uploading_plain'), percent: null };
     case 'complete':
     case 'failed':
       return { text: '', percent: null };
@@ -549,8 +549,8 @@ export function nextPublishStage(
 // ─── Status line ──────────────────────────────────────────────────
 //
 // `formatStatus` produces the single-line status text for the status-line zone.
-// The STATUS priority (failed → publish stage → media → build stage → receipt →
-// none) is resolved by the caller (buildViewModel / renderPanel); this function
+// The STATUS priority (failed → publish stage → publish receipt → build stage
+// → receipt → job → none) is resolved by the caller (buildViewModel / renderPanel); this function
 // only formats one input into the output shape.
 
 export type StatusInput =
@@ -586,6 +586,8 @@ export type StatusInput =
        * row, so it ellipsized to nothing every time.
        */
       condition?: string;
+      /** The work under the headline, shown on hover (`StageLabel.detail`). */
+      tooltip?: string;
     }
   | { kind: 'receipt'; text: string }
   | { kind: 'failed'; text: string }
@@ -608,6 +610,7 @@ export interface StatusResult {
   count?: string;
   detail?: StatusDetail;
   condition?: string;
+  tooltip?: string;
   kind: 'running' | 'receipt' | 'failed' | 'none';
   /** Live-region milestone text; only meaningful when kind === "running". */
   announce?: string;
@@ -624,7 +627,7 @@ export interface StatusResult {
  * StatusResult shape consumed by the renderer.
  *
  *   • running  — verb text + optional subject (filename) + optional count ("3 / 12")
- *   • receipt  — pre-formatted "Built · N pages · X.Xs" (no transformation)
+ *   • receipt  — pre-formatted "Updated" / "Published · 58.0 MB · 12.4s"
  *   • failed   — pre-formatted failure text; rendered in danger color
  *   • none     — empty; status line is hidden
  */
@@ -646,6 +649,7 @@ export function formatStatus(input: StatusInput): StatusResult {
         count,
         detail,
         condition: input.condition,
+        tooltip: input.tooltip,
         announce: input.announce,
         kind: 'running',
       };

@@ -127,29 +127,13 @@ fn still_named(_file: &std::fs::File, _path: &Path) -> bool {
     true
 }
 
-/// A stable id for `folder`, the same for every spelling that names the same
-/// directory. Canonicalizes first — collapsing `.`, a trailing separator, or
-/// a `..` component onto one path — then sha256-hexes the result.
-///
-/// Falls back to the path as given, lexically, when the folder cannot be
-/// canonicalized (`std::fs::canonicalize` requires the path to already
-/// exist on disk): the lock still needs something to name, and every real
-/// build call site canonicalizes a folder that is already there.
-///
-/// `pub(crate)` rather than private: `ops::serve::ownership` names the same
-/// folder for its owner record and lock, and must agree with this one on
-/// what a folder is called.
-pub(crate) fn folder_id(folder: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()))
-}
+use crate::infra::folder_store::name_for;
 
 /// `<moss_home>/locks/<folder-id>.<name>` — one lock file per (folder, name),
 /// so a different job on the same folder can hold its own lock without waiting
 /// on the build's.
 pub fn lock_path_named(folder: &Path, name: &str) -> Result<PathBuf, String> {
-    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.{name}", folder_id(folder))))
+    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.{name}", name_for(folder))))
 }
 
 /// Acquire the exclusive build lock for `folder`, creating
@@ -240,8 +224,9 @@ fn hold(path: &Path, mut contended: impl FnMut(&std::fs::File) -> Result<bool, S
     }
 }
 
-/// Remove, on a background thread, every file in `<moss_home>/locks` that no
-/// process holds. Since a released lock unlinks itself, an unheld file there
+/// Remove, on a background thread, unheld job locks in `<moss_home>/locks`.
+/// Owner locks are left for the next owner, so collection cannot contend with
+/// nonblocking admission. Since a released lock unlinks itself, an unheld file there
 /// is one a moss that predates that left behind, or an old `.epoch` record:
 /// litter, however many there are. A held lock fails the `flock` and stays.
 /// The directory is its own progress record, so a sweep cut off by the
@@ -284,6 +269,12 @@ fn sweep_litter(dir: &Path, batch: usize, pause: std::time::Duration) -> usize {
             continue;
         }
         let path = entry.path();
+        // Ownership admission is nonblocking: even the sweep's brief lock
+        // would look like another server. A crashed owner's file is reclaimed
+        // when that folder is next claimed, then unlinked by its guard.
+        if path.extension().is_some_and(|ext| ext == "owner") {
+            continue;
+        }
         // allow:raw_write opens an existing lock file under ~/.moss/locks to lock it, never creates one
         let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else { continue };
         if file.try_lock().is_err() || !still_named(&file, &path) {
@@ -343,19 +334,24 @@ pub async fn acquire_async(folder: &Path) -> Option<Held> {
     }
 }
 
-/// `<folder>/.moss/build.nosync/promoted.epoch` — where [`last_promoted_epoch`]
-/// and [`record_promoted_epoch`] keep the last cross-process-visible promotion
-/// time for `folder`. It must outlive the lock, so it sits beside the `current`
-/// it describes and goes when the folder or its build output does, which is
-/// also when there is nothing left for it to protect.
-pub fn epoch_path_for(folder: &Path) -> PathBuf {
-    crate::moss_paths::MossPaths::new(folder).build_dir().join("promoted.epoch")
+/// Where generation `id`'s promotion record is kept, beside it: the
+/// `locked_at` stamp of the build that last promoted it. Written before the
+/// flip of `current`, so the flip carries its epoch with it. A crash between
+/// the write and the flip leaves a record on a generation `current` does not
+/// name, which nothing reads.
+pub fn promotion_record_path(generations: &Path, id: &str) -> PathBuf {
+    generations.join(format!(".{id}.promoted.json"))
 }
 
-/// The last promotion time recorded for `folder`, or `0` if none has been —
-/// a missing file and a corrupt one both read as "nothing promoted yet",
-/// the same "unreadable is never a promise" posture `.moss/deploy/` already
-/// takes for the analogous local record.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PromotionRecord {
+    locked_at: u64,
+}
+
+/// The `locked_at` of the build that promoted the generation `current` names,
+/// or `0` when nothing is promoted, or that generation has no readable record
+/// (it was promoted by a moss that kept none, or its record was purged). A
+/// build compared against `0` promotes over it.
 ///
 /// **Precondition, not enforced here:** the caller must hold [`acquire`]'s
 /// lock for this SAME `folder` for the whole read-compare-write span around
@@ -363,13 +359,19 @@ pub fn epoch_path_for(folder: &Path) -> PathBuf {
 /// concurrent write is exactly the cross-process ordering bug it exists to
 /// close, so the exclusion has to come from outside.
 pub fn last_promoted_epoch(folder: &Path) -> u64 {
-    std::fs::read_to_string(epoch_path_for(folder)).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    let mp = crate::moss_paths::MossPaths::new(folder);
+    let Ok(id) = mp.current_generation_id() else { return 0 };
+    std::fs::read(promotion_record_path(&mp.generations_dir(), &id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PromotionRecord>(&bytes).ok())
+        .map_or(0, |record| record.locked_at)
 }
 
-/// Record `epoch` as the last promotion time for `folder`. Same locking
-/// precondition as [`last_promoted_epoch`] — see that function's doc.
-pub fn record_promoted_epoch(folder: &Path, epoch: u64) -> Result<(), String> {
-    crate::infra::atomic_write::write_atomic(&epoch_path_for(folder), &epoch.to_string())
+/// Record that the build stamped `locked_at` is promoting generation `id`.
+/// Same locking precondition as [`last_promoted_epoch`].
+pub fn record_promotion(generations: &Path, id: &str, locked_at: u64) -> Result<(), String> {
+    let json = serde_json::to_string(&PromotionRecord { locked_at }).map_err(|e| e.to_string())?;
+    crate::infra::atomic_write::write_atomic(&promotion_record_path(generations, id), &json)
 }
 
 #[cfg(test)]

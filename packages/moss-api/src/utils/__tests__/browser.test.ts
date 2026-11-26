@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   openBrowser,
   closeBrowser,
+  fillEditor,
   openBrowserWithHtml,
   showBrowserForm,
   startBrowserSignIn,
+  SignInCancelled,
   BrowserHandle,
 } from "../browser.js";
 
@@ -112,6 +114,22 @@ describe("Browser Utilities", () => {
       await expect(openBrowser("https://example.com")).rejects.toThrow(
         "Tauri core not available"
       );
+    });
+  });
+
+  describe("fillEditor", () => {
+    it("hands the fill to moss as data and answers what the editor took", async () => {
+      const answer = { result: "filled", placed: 1, missing: [], url: "https://network.example/edit/1" };
+      mockInvoke.mockResolvedValueOnce(answer);
+      const fill = { editor: { body: ".editor", title: "#title" }, title: "Autumn", parts: [{ html: "<p>a</p>" }], rules: { headings: "two-levels" as const } };
+      (window as unknown as { __MOSS_INTERNAL_CONTEXT__: unknown }).__MOSS_INTERNAL_CONTEXT__ = { plugin_name: "substack", project_path: "/site", moss_dir: "/site/.moss" };
+      await expect(fillEditor(fill)).resolves.toEqual(answer);
+      expect(mockInvoke).toHaveBeenCalledWith("fill_browser_panel", { pluginName: "substack", fill });
+    });
+
+    it("refuses outside a plugin hook, where moss cannot tell whose domains to check", async () => {
+      await expect(fillEditor({ editor: { body: ".editor" }, parts: [] })).rejects.toThrow("plugin hook");
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 
@@ -693,6 +711,24 @@ describe("Browser Utilities", () => {
       expect(mockInvoke).toHaveBeenLastCalledWith("browser_sign_in_wait", { url: "https://example.com/authorize" });
       expect(reply.get("code")).toBe("c1");
       expect(reply.get("state")).toBe("s 1");
+    });
+
+    it("tells a cancelled sign-in from a failed one", async () => {
+      const waitFails = (reason: unknown) =>
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "browser_sign_in_start") return { redirectUri: "http://127.0.0.1:5000/callback" };
+          throw reason;
+        });
+      waitFails(new Error("sign-in cancelled"));
+      const cancelled = await (await startBrowserSignIn()).open("https://example.com/authorize").catch((e) => e);
+      expect(cancelled).toBeInstanceOf(SignInCancelled);
+      expect(cancelled.name).toBe("SignInCancelled");
+      waitFails("sign-in cancelled");
+      await expect((await startBrowserSignIn()).open("https://example.com/authorize")).rejects.toBeInstanceOf(SignInCancelled);
+      waitFails(new Error("the sign-in took longer than ten minutes"));
+      const late = await (await startBrowserSignIn()).open("https://example.com/authorize").catch((e) => e);
+      expect(late).not.toBeInstanceOf(SignInCancelled);
+      expect(late.message).toBe("the sign-in took longer than ten minutes");
     });
   });
 });

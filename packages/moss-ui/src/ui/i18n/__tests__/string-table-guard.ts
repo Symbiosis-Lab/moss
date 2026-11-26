@@ -71,6 +71,7 @@ const GERMAN_IDENTICAL = [
   'publish_receipt.row_newsletter',
   'deployment.label.host',
   'channels.hosts',
+  'channels.views',
   'deployment.label.domain',
   'deployment.label.repository',
   'domain.label_name',

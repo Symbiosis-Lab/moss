@@ -472,10 +472,18 @@ fn safe_answers(netloc: &str, answers: Vec<std::net::SocketAddr>) -> std::io::Re
     Ok(kept)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Calls to `get_checked` on this thread, so a test can tell a refusal from a failed connection.
+    static GET_CHECKED_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// GET `url` through the system proxy, re-checking every redirect target with
 /// [`is_unsafe_fetch_target`] before it is requested. A refused hop is an
 /// `Err`, which every caller already degrades to "no card this build".
 fn get_checked(url: &str, timeout: std::time::Duration) -> Result<ureq::Response, ureq::Error> {
+    #[cfg(test)]
+    GET_CHECKED_CALLS.with(|n| n.set(n.get() + 1));
     let validate = |next: &str| {
         if is_unsafe_fetch_target(next) {
             Err(UNSAFE_ADDRESS.to_string())
@@ -1644,10 +1652,11 @@ mod tests {
 
     #[test]
     fn a_short_total_budget_leaves_the_slow_remainder_cold() {
-        // More URLs than `FETCH_CONCURRENCY` (8), so the budget bounds wall
-        // time, not just each request: unbudgeted this takes two 300ms rounds.
-        // 450ms fits one round with each worker saving its card to disk, and
-        // not two. A budget shorter than one response is
+        // More URLs than `FETCH_CONCURRENCY` (8): unbudgeted, the second
+        // 300ms round completes too. 450ms fits one round with each worker
+        // saving its card to disk, and not two. The count is the check; a
+        // wall clock here reads scheduler stalls on a loaded machine. A budget
+        // shorter than one response is
         // `the_orchestrator_never_waits_on_a_stuck_worker`.
         let html = "<html><head><title>Slow</title></head></html>";
         let url_count = 16;
@@ -1656,7 +1665,6 @@ mod tests {
         let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
         let tmp = fresh_tmp("short_budget");
 
-        let start = std::time::Instant::now();
         let fetched = fetch_all_link_meta_parallel_bounded(
             &url_refs,
             &tmp,
@@ -1664,17 +1672,12 @@ mod tests {
             std::time::Duration::from_secs(5),
             |_| {},
         );
-        let elapsed = start.elapsed();
 
         assert!(
             fetched < url_count,
-            "a 450ms budget must not let a second 300ms round start: fetched {fetched} of {url_count}"
+            "a 450ms budget must not wait for a second 300ms round: fetched {fetched} of {url_count}"
         );
         assert!(fetched > 0, "a budget comfortably above one round's response time should still see it complete");
-        assert!(
-            elapsed < std::time::Duration::from_millis(800),
-            "must not run anywhere near the un-budgeted 2-round time: {elapsed:?}"
-        );
 
         // Deliberately not joined: the whole point of this test is that the
         // budget stops the client short of `url_count` connections, so the
@@ -1687,34 +1690,42 @@ mod tests {
 
     #[test]
     fn the_orchestrator_never_waits_on_in_flight_work_past_the_deadline() {
-        // A budget SHORTER than a single response: the old `thread::scope`
-        // implementation joined every worker before returning, so it would
-        // have waited out the in-flight 150ms request regardless of the
-        // 20ms budget. The fix returns AT the deadline — zero completions
-        // is the correct answer here, not a flake.
-        let html = "<html><head><title>Slow</title></head></html>";
-        let (base, server) = spawn_slow_test_server(html, 150, 1);
-        let url = format!("{base}/only");
+        // The server answers only when the test lets it, or after 30 s. A call
+        // that waited on the in-flight request would come back after the answer;
+        // one that returns at its 20 ms deadline comes back before it, however
+        // loaded the machine is.
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let url = format!("http://127.0.0.1:{}/only", listener.local_addr().unwrap().port());
+        let answered = std::sync::Arc::new(AtomicBool::new(false));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = {
+            let answered = answered.clone();
+            std::thread::spawn(move || {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let _ = stream.read(&mut [0u8; 1024]);
+                let _ = held.recv_timeout(std::time::Duration::from_secs(30));
+                let html = "<html><head><title>Slow</title></head></html>";
+                let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{html}", html.len()).as_bytes());
+                answered.store(true, Ordering::SeqCst);
+            })
+        };
         let urls = [url.as_str()];
         let tmp = fresh_tmp("never_waits");
 
-        let start = std::time::Instant::now();
         let fetched = fetch_all_link_meta_parallel_bounded(
             &urls,
             &tmp,
             std::time::Duration::from_millis(20),
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(60),
             |_| {},
         );
-        let elapsed = start.elapsed();
 
-        assert_eq!(fetched, 0, "the in-flight request had not finished by the 20ms deadline");
-        assert!(
-            elapsed < std::time::Duration::from_millis(100),
-            "must return at the deadline, not wait for the 150ms response: {elapsed:?}"
-        );
-
-        drop(server); // straggler left running deliberately — see the test above
+        assert!(!answered.load(Ordering::SeqCst), "the call waited for the in-flight response instead of returning at its deadline");
+        assert_eq!(fetched, 0);
+        let _ = release.send(());
+        let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2011,27 +2022,18 @@ mod tests {
 
     #[test]
     fn fetch_link_meta_with_timeout_refuses_a_private_target_without_a_cache_entry() {
-        // Elapsed time, not just the `None` result, is the decisive proof:
-        // 169.254.169.254 is unreachable from this machine either way, so a
-        // guard that quietly did nothing would still return `None` here —
-        // just after actually attempting (and timing out on) the connection.
-        // The guard's whole point is to skip that attempt, so a real network
-        // round trip taking any meaningful fraction of the 5s timeout would
-        // mean it didn't fire.
+        // 169.254.169.254 is unreachable from here either way, so `None` alone
+        // cannot tell a refusal from a connection that failed: count requests.
         let tmp = fresh_tmp("unsafe_target_no_cache");
-        let start = std::time::Instant::now();
+        let before = GET_CHECKED_CALLS.with(|n| n.get());
         let meta = fetch_link_meta_with_timeout(
             "http://169.254.169.254/latest/meta-data/",
             &tmp,
             std::time::Duration::from_secs(5),
         );
-        let elapsed = start.elapsed();
         assert_eq!(meta.title, None, "an unsafe target must never be fetched");
         assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/", None).is_none());
-        assert!(
-            elapsed < std::time::Duration::from_millis(200),
-            "must reject before attempting any connection, not after timing one out: {elapsed:?}"
-        );
+        assert_eq!(GET_CHECKED_CALLS.with(|n| n.get()), before, "must reject before calling get_checked");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

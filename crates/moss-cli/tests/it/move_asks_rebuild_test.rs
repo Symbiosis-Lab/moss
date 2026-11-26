@@ -61,7 +61,7 @@ impl Served {
     }
 
     fn asks_and_is_served_within(&self, command: &str, args: serde_json::Value, address: &str, within: Duration) {
-        let token = std::fs::read_to_string(self.site.join(".moss/build.nosync/http-token")).expect("the carrier token is published");
+        let token = std::fs::read_to_string(moss_build::ops::serve::carrier_token::token_path(&self.site)).expect("the carrier token is published");
         let from = self.child.stderr_len();
         ureq::post(&format!("http://localhost:{}/__moss/mutate/{command}", self.port))
             .set("Content-Type", "application/json")
@@ -69,7 +69,7 @@ impl Served {
             .send_string(&args.to_string())
             .unwrap_or_else(|e| panic!("{command} was refused: {e}"));
         let deadline = Instant::now() + within;
-        while status(self.port, address) != 200 {
+        while self.child.status(self.port, address) != 200 {
             assert!(Instant::now() < deadline, "{address} was not served within {within:?}; stderr:\n{}", joined(&self.child.stderr));
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -84,7 +84,7 @@ const HOME: (&str, &str) = ("index.md", "---\ntitle: Home\n---\n\nA sentence.\n"
 #[test]
 fn a_new_page_given_its_title_is_served_with_the_watcher_blind() {
     let served = Served::start(&[HOME, ("untitled.md", "")]);
-    assert_eq!(status(served.port, "/untitled/"), 200, "premise: the empty page is served");
+    assert_eq!(served.child.status(served.port, "/untitled/"), 200, "premise: the empty page is served");
     served.asks_and_is_served("rename_entry_with_refs", serde_json::json!({ "oldPath": "untitled.md", "newPath": "quiet-harbour.md" }), "/quiet-harbour/");
     assert!(served.site.join("quiet-harbour.md").exists());
 }
@@ -93,7 +93,7 @@ fn a_new_page_given_its_title_is_served_with_the_watcher_blind() {
 #[test]
 fn a_new_page_is_served_with_the_watcher_blind() {
     let served = Served::start(&[HOME]);
-    assert_eq!(status(served.port, "/untitled/"), 404, "premise: no such page yet");
+    assert_eq!(served.child.status(served.port, "/untitled/"), 404, "premise: no such page yet");
     served.asks_and_is_served("create_files", serde_json::json!({ "files": [{ "dir": served.site.to_string_lossy(), "name": "untitled", "frontmatter": {} }] }), "/untitled/");
 }
 
@@ -123,6 +123,6 @@ fn a_rename_made_during_the_first_build_is_built_once_by_its_own_request() {
     let asked = at("Rebuild asked by move");
     let first_built = at("build.summary");
     assert!(asked < first_built, "premise: the rename was made during the first build:\n{}", lines.join("\n"));
-    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("build.root phase=start")).map(|(i, _)| i).collect();
+    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("build.root ")).map(|(i, _)| i).collect();
     assert_eq!(starts.len(), 2, "the first build and the rename's:\n{}", lines.join("\n"));
 }

@@ -4,7 +4,7 @@ use crate::infra::home::with_moss_home;
 
 /// Two spellings of the same folder — its canonical absolute form and a
 /// relative path through `..` — must name the same lock file. This is the
-/// whole reason [`folder_id`] canonicalizes before hashing rather than
+/// whole reason [`name_for`](crate::infra::folder_store::name_for) canonicalizes before hashing rather than
 /// hashing whatever string a caller happened to pass.
 #[test]
 fn the_lock_path_is_derived_from_the_canonical_folder_path() {
@@ -104,42 +104,40 @@ fn last_promoted_epoch_is_zero_before_anything_is_recorded() {
     });
 }
 
-/// A corrupt `.epoch` file reads as 0 too, never as a parse error that
-/// panics or poisons the caller's read-compare-write — unreadable is never
-/// a promise about what promoted.
-#[test]
-fn a_corrupt_epoch_file_reads_as_zero() {
-    with_moss_home(|_home| {
-        let tmp = tempfile::tempdir().unwrap();
-        let folder = tmp.path().join("site");
-        std::fs::create_dir_all(&folder).unwrap();
-
-        let path = epoch_path_for(&folder);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "not-a-number").unwrap();
-
-        assert_eq!(last_promoted_epoch(&folder), 0);
-    });
+/// Point `folder`'s `current` marker at `id`, as a promotion does.
+fn name_current(folder: &Path, id: &str) {
+    let mp = crate::moss_paths::MossPaths::new(folder);
+    std::fs::create_dir_all(mp.generations_dir()).unwrap();
+    std::fs::write(mp.current_generation_marker(), id).unwrap();
 }
 
-/// The round trip [`record_promoted_epoch`] exists for: what is written is
-/// what the next read (from a DIFFERENT in-memory call, i.e. a different
-/// process in practice) sees.
+/// A corrupt record reads as 0 too, never as a parse error that panics or
+/// poisons the caller's read-compare-write — unreadable is never a promise
+/// about what promoted.
 #[test]
-fn record_promoted_epoch_round_trips() {
-    with_moss_home(|_home| {
-        let tmp = tempfile::tempdir().unwrap();
-        let folder = tmp.path().join("site");
-        std::fs::create_dir_all(&folder).unwrap();
+fn a_corrupt_promotion_record_reads_as_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    name_current(tmp.path(), "aaaa");
+    let generations = crate::moss_paths::MossPaths::new(tmp.path()).generations_dir();
+    std::fs::write(promotion_record_path(&generations, "aaaa"), "not-json").unwrap();
+    assert_eq!(last_promoted_epoch(tmp.path()), 0);
+}
 
-        record_promoted_epoch(&folder, 42).unwrap();
-        assert_eq!(last_promoted_epoch(&folder), 42);
-
-        // A later, larger epoch overwrites — the only direction a real
-        // promotion ever moves this value.
-        record_promoted_epoch(&folder, 100).unwrap();
-        assert_eq!(last_promoted_epoch(&folder), 100);
-    });
+/// The epoch is the record of the generation `current` names: a record on any
+/// other generation (a build that wrote it and then did not flip) is not read,
+/// and flipping `current` brings its own record's epoch with it.
+#[test]
+fn the_epoch_follows_current() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generations = crate::moss_paths::MossPaths::new(tmp.path()).generations_dir();
+    name_current(tmp.path(), "aaaa");
+    record_promotion(&generations, "aaaa", 42).unwrap();
+    record_promotion(&generations, "bbbb", 100).unwrap();
+    assert_eq!(last_promoted_epoch(tmp.path()), 42);
+    name_current(tmp.path(), "bbbb");
+    assert_eq!(last_promoted_epoch(tmp.path()), 100);
+    name_current(tmp.path(), "cccc");
+    assert_eq!(last_promoted_epoch(tmp.path()), 0, "a generation with no record reads as never promoted");
 }
 
 /// A released lock leaves no file behind: names are per folder, and test runs
@@ -220,20 +218,6 @@ fn a_waiter_outlasts_any_number_of_replaced_lock_files() {
     });
 }
 
-/// The promotion epoch lives in the folder's build output, so a folder that
-/// is gone leaves nothing under `~/.moss`.
-#[test]
-fn the_promotion_epoch_lives_in_the_folder() {
-    with_moss_home(|home| {
-        let tmp = tempfile::tempdir().unwrap();
-        record_promoted_epoch(tmp.path(), 7).unwrap();
-
-        assert!(epoch_path_for(tmp.path()).starts_with(tmp.path()));
-        assert!(!home.join("locks").join(format!("{}.epoch", folder_id(tmp.path()))).exists());
-        assert_eq!(last_promoted_epoch(tmp.path()), 7);
-    });
-}
-
 /// A whole build of a folder leaves nothing for it in `~/.moss/locks`. It
 /// runs under the default home: an override held for a whole build would move
 /// the lock path under a parallel test that took its lock before.
@@ -250,11 +234,11 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
             progress: crate::build::null_sink(), plugins: PluginMode::Skip,
             watch: false, start_server: false,
             host: crate::build::ports::host::test_host_ports(),
-            trigger: BuildTrigger::Full, exits_after_build: true,
+            trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         })).expect("fixture builds");
         assert!(last_promoted_epoch(site.path()) > 0, "the build never recorded a promotion");
-        let id = folder_id(site.path());
+        let id = crate::infra::folder_store::name_for(site.path());
         let left: Vec<_> = std::fs::read_dir(home.join("locks")).into_iter().flatten().flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(&id)).map(|e| e.file_name()).collect();
         if cfg!(unix) {
@@ -264,6 +248,30 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
 }
 
 const HOLD_ENV: &str = "MOSS_TEST_HOLD_LOCK_FILE";
+
+/// An owner acquirer has opened its file but has not locked it yet. The
+/// background build-lock collector must not compete for that file: its
+/// temporary lock would make this process refuse its own next build.
+#[cfg(unix)]
+#[test]
+fn the_litter_sweep_never_competes_with_owner_admission() {
+    with_moss_home(|home| {
+        let folder = tempfile::tempdir().unwrap();
+        let path = lock_path_named(folder.path(), "owner").unwrap();
+        let opening = open_lock_file(&path).unwrap();
+        assert_eq!(sweep_litter(&home.join("locks"), 1, std::time::Duration::ZERO), 0);
+        assert!(still_named(&opening, &path), "the sweep must leave the owner's open file alone");
+
+        use crate::ops::serve::ownership::{acquire, HostKind};
+        let first = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        let second = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        drop(first);
+        assert!(try_acquire_named(folder.path(), "owner").unwrap().is_none());
+        drop(second);
+        assert!(try_acquire_named(folder.path(), "owner").unwrap().is_some());
+    });
+}
+
 const CHILD_TEST: &str = "infra::folder_lock::folder_lock_tests::child_lock_holder";
 
 /// Not a test of its own: [`the_sweep_leaves_a_lock_another_process_holds`]

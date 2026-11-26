@@ -13,7 +13,7 @@ pub enum Form {
     Thread,
     /// The whole article, where the network has an article format.
     Long,
-    /// The article's description or opening, with a link to the original.
+    /// A link post: the title, the author's description and the link.
     /// `handoff` reads as a teaser.
     #[serde(alias = "handoff")]
     Teaser,
@@ -48,6 +48,9 @@ pub struct ImageLimits {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelSpec {
+    /// What the person calls the network, filled from the manifest when the spec is read; it names the channel in a refusal.
+    #[serde(skip)]
+    pub name: Option<String>,
     #[serde(default)]
     pub forms: Vec<Form>,
     #[serde(default)]
@@ -72,6 +75,11 @@ pub struct ChannelSpec {
     /// for a network whose article format only some accounts have.
     #[serde(default)]
     pub long_setting: Option<String>,
+    /// The longest article the network's article form holds, its HTML as
+    /// plain text counted as `counting` counts; a longer page goes in the
+    /// next form declared.
+    #[serde(default)]
+    pub max_article_chars: Option<u32>,
 }
 
 impl ChannelSpec {
@@ -117,6 +125,10 @@ impl ChannelSpec {
 
     pub fn fits(&self, text: &str) -> bool {
         self.max_chars.is_none_or(|max| self.length(text) <= max as usize)
+    }
+
+    pub fn article_fits(&self, text: &str) -> bool {
+        self.max_article_chars.is_none_or(|max| self.length(text) <= max as usize)
     }
 }
 

@@ -128,9 +128,10 @@ pub struct ResolveInputs<'a> {
     /// lives in the git-tracked file; the build never consults server state
     /// for it.
     pub url: Option<String>,
-    /// `.moss/state.toml [deployment].site_url` — a plugin deployment's own
-    /// canonical URL (e.g. an OnionPress `http://<addr>.onion`). Consulted after
-    /// `url` (a bought custom domain still wins → the onion is an
+    /// `.moss/state.toml [deployment].site_url` — where the last publish said
+    /// the site lives: a plugin deployment's own address (e.g. an OnionPress
+    /// `http://<addr>.onion`) or the one moss hosting serves it at. Consulted
+    /// after `url` (a custom domain still wins → the onion is an
     /// Onion-Location alternate) and before `site_id`. Its scheme is preserved,
     /// so an http onion address stays http.
     pub site_url: Option<String>,
@@ -179,9 +180,11 @@ impl<'a> Default for ResolveInputs<'a> {
 ///   2. `MOSS_SITE_URL=<url>` env var (`env_var`)
 ///   3. the authored address, `[site].url` (with the `www.` policy when its
 ///      CDN hostname is active and it has no path)
-///   4. `.moss/state.toml [deployment].site_url` (a plugin deploy's canonical
-///      URL, e.g. an onion address — scheme preserved)
-///   5. `.moss/state.toml [deployment].site_id` → `https://{id}.mosspub.com`
+///   4. `.moss/state.toml [deployment].site_url` (the address the last publish
+///      reported: a plugin's, e.g. an onion address, or moss hosting's —
+///      scheme preserved)
+///   5. `.moss/state.toml [deployment].site_id` → `https://{id}.mosspub.com`,
+///      for a folder no publish has reported an address for
 ///   6. Preview default: `http://localhost:<port>` when `preview_port` is set
 ///   7. Build default: `http://localhost`
 ///
@@ -206,9 +209,9 @@ pub fn resolve_site_url(inputs: &ResolveInputs) -> Result<SiteUrl, SiteUrlError>
         }
         return Ok(url);
     }
-    // A plugin deployment's own canonical URL (e.g. an OnionPress onion
-    // address). Ranked after `domain` and before `site_id`, and parsed as-is so
-    // an http:// onion scheme is preserved. A malformed persisted value falls
+    // The address the last publish reported (an OnionPress onion address, or
+    // moss hosting's). Ranked after `url` and before `site_id`, and parsed as-is
+    // so an http:// onion scheme is preserved. A malformed persisted value falls
     // through to `site_id` rather than hard-failing the build — matching the
     // never-error contract of the state-derived branches.
     if let Some(url) = inputs.site_url.as_deref().and_then(|raw| SiteUrl::parse(raw).ok()) {
@@ -258,11 +261,9 @@ pub fn resolve_for_project(
     let preview_port = crate::build::inputs::env("VITE_PORT")
         .and_then(|s| s.parse::<u16>().ok());
     let cli_flag = cli_override.filter(|s| !s.trim().is_empty());
-    let site_suffix = crate::build::site_config::resolve_environment(project_path)
-        .site_suffix()
-        .to_string();
-    // Read apart from `domain_cfg`, whose read errors are survivable: a folder
-    // whose `url` and `domain` disagree must refuse the build, not fall back.
+    let env = crate::build::site_config::resolve_environment(project_path);
+    // Read apart from `domain_cfg`, whose read errors are survivable: a `url`
+    // that does not parse must refuse the build, not fall back.
     let url = match crate::build::site_config::read_project_config(project_path) {
         Ok(config) => config.site_address().map_err(|e| format!("site URL: {}", e))?,
         Err(e) => {
@@ -274,15 +275,15 @@ pub fn resolve_for_project(
         cli_flag,
         env_var,
         url,
-        // A plugin deploy's own canonical URL (e.g. an OnionPress .onion) —
-        // ranked after `url`, before `site_id` (see resolve_site_url).
-        // Resolution is shared with the deploy guard, so an onion build and
-        // the publish that ships it can never disagree about this URL.
-        site_url: domain_cfg.site_url,
+        // Read from the record, never asked of a server: a build runs offline
+        // and on every preview keystroke. Resolution is shared with the deploy
+        // guard, so a build and the publish that ships it can never disagree
+        // about this URL.
+        site_url: domain_cfg.site_url_in(&env).map(str::to_string),
         site_id: domain_cfg.site_id,
         cdn_active,
         preview_port,
-        site_suffix,
+        site_suffix: env.site_suffix().to_string(),
     };
     resolve_site_url(&inputs).map_err(|e| format!("site URL: {}", e))
 }
@@ -531,7 +532,7 @@ mod tests {
         assert_eq!(url.host(), "her-blog.staging.mosspub.com");
     }
 
-    // ── [deployment].site_url — plugin/onion canonical URL ──────────────
+    // ── [deployment].site_url — the address a publish reported ──────────
 
     #[test]
     fn is_deployed_true_for_http_onion() {
@@ -602,6 +603,58 @@ mod tests {
         assert_eq!(resolved.as_str(), "https://her-blog.mosspub.com");
     }
 
+    // ── resolve_for_project — the address a publish stored ──
+
+    use crate::config::environment::HostingEnvironment;
+
+    fn folder_recording(site_url: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::deployment::DomainDeploymentConfig {
+            site_id: Some("her-blog".to_string()),
+            site_url: Some(site_url.to_string()),
+            ..Default::default()
+        };
+        crate::vault::deployment_state::save_domain_config(dir.path().to_str().unwrap(), &config).unwrap();
+        dir
+    }
+
+    fn built_for(dir: &tempfile::TempDir, environment: HostingEnvironment) -> String {
+        let _env = crate::PinnedEnvironment::pin(environment);
+        resolve_for_project(dir.path().to_str().unwrap(), None).unwrap().as_str().to_string()
+    }
+
+    /// A folder published to one environment and built for another must not
+    /// bake the first one's address. Ablated by passing `domain_cfg.site_url`
+    /// straight through in `resolve_for_project`.
+    #[test]
+    fn a_hosted_address_holds_only_in_the_environment_that_gave_it() {
+        let dir = folder_recording("https://her-blog.mosspub.page");
+        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        assert_eq!(built_for(&dir, HostingEnvironment::Staging), "https://her-blog.staging.mosspub.com");
+
+        let dir = folder_recording("https://her-blog-test.mosspub.page");
+        assert_eq!(built_for(&dir, HostingEnvironment::Staging), "https://her-blog-test.mosspub.page");
+        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.com");
+    }
+
+    /// A folder with a site id that publishes through a deploy plugin: the
+    /// address is the plugin's, whatever the hosting environment.
+    #[test]
+    fn a_plugin_address_holds_in_every_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "schema_version = 6\n\n[hooks]\ndeploy = \"onionpress\"\n").unwrap();
+        let config = crate::config::deployment::DomainDeploymentConfig {
+            site_id: Some("her-blog".to_string()),
+            deploy_method: Some("onionpress".to_string()),
+            site_url: Some("http://abcdefghijklmnop.onion".to_string()),
+            ..Default::default()
+        };
+        crate::vault::deployment_state::save_domain_config(dir.path().to_str().unwrap(), &config).unwrap();
+        assert_eq!(built_for(&dir, HostingEnvironment::Production), "http://abcdefghijklmnop.onion");
+        assert_eq!(built_for(&dir, HostingEnvironment::Staging), "http://abcdefghijklmnop.onion");
+    }
+
     // ── resolve_for_project — cdn_active derives from the recorded observation ──
 
     #[test]
@@ -651,12 +704,15 @@ mod tests {
     }
 
     #[test]
-    fn url_and_domain_with_different_hosts_refuse_the_build() {
+    fn url_and_domain_with_different_hosts_build_with_url_and_name_both() {
         let tmp = folder_with_site("url = \"https://example.edu/~alice/\"\ndomain = \"example.org\"\n");
-        let err = resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap_err();
-        assert!(err.contains("[site] url") && err.contains("[site] domain"), "{err}");
+        let path = tmp.path().to_str().unwrap();
+        assert_eq!(resolve_for_project(path, None).unwrap().as_str(), "https://example.edu/~alice");
+        let problem = crate::build::site_config::read_project_config(path).unwrap().site_address_conflict().unwrap();
+        assert!(problem.contains("[site] url") && problem.contains("[site] domain"), "{problem}");
         // The same host twice is one address, not a contradiction.
         let tmp = folder_with_site("url = \"https://example.org/notes/\"\ndomain = \"example.org\"\n");
         assert_eq!(resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap().as_str(), "https://example.org/notes");
+        assert!(crate::build::site_config::read_project_config(tmp.path().to_str().unwrap()).unwrap().site_address_conflict().is_none());
     }
 }

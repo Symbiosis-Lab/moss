@@ -1,8 +1,9 @@
 //! A nav entry whose page declares `external_url:` links there: a `mailto:`
 //! address or a section anchor, beside ordinary page links. Built through the
 //! real pipeline, and one test only because `log::set_logger` is
-//! process-global and one-shot (same reasoning as `root_identity_log_test.rs`).
+//! process-global and one-shot.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -41,7 +42,7 @@ fn build_sync(folder_path: &str) -> Result<String, String> {
         watch: false,
         start_server: false,
         host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -82,7 +83,7 @@ fn nav_entry_with_external_url_links_there_without_an_ignored_warning() {
 
     let result = build_sync(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let html = fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html")).unwrap();
 
     // Attributes after `href` (source markers) are the build's business, not this test's.
     let link = |href: &str, label: &str| {

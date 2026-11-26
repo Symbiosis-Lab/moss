@@ -56,7 +56,7 @@ fn outcome_to_response(cmd: &str, outcome: Option<CommandResult>) -> Response {
 /// every public read with [`NO_PROJECT_OPEN`].
 ///
 /// [`NO_PROJECT_OPEN`]: crate::vault::paths::NO_PROJECT_OPEN
-pub async fn handle_invoke(ctx: InvokeCtx, site_dir: Arc<RwLock<PathBuf>>, cmd: String, args: Value) -> Response {
+pub async fn handle_invoke(ctx: InvokeCtx, site_dir: crate::moss_paths::ServedCell, cmd: String, args: Value) -> Response {
     let outcome = match ctx.bind(&site_dir) {
         Some(session) => commands::public_read::dispatch(&*session, &cmd, args).await,
         None if commands::public_read::COMMANDS.contains(&cmd.as_str()) => {
@@ -86,6 +86,7 @@ pub async fn handle_authed_read(
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
     use crate::commands::{CommandHost, VaultPath};
 
@@ -95,7 +96,7 @@ mod tests {
     fn scratch() -> (tempfile::TempDir, Arc<Session>) {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join(".moss")).expect("mark the vault");
-        let cell = Arc::new(RwLock::new(dir.path().to_path_buf()));
+        let cell = crate::moss_paths::Served::test_cell(dir.path().to_path_buf());
         let session = InvokeCtx::standalone().bind(&cell).expect("a vault binds");
         (dir, session)
     }
@@ -254,7 +255,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn list_vault_terms_groups_the_article_map_terms() {
         let (dir, ctx) = scratch();
-        std::fs::create_dir_all(dir.path().join(".moss").join("build.nosync")).expect("build.nosync");
+        std::fs::create_dir_all(MossPaths::new(dir.path()).build_dir()).expect("build.nosync");
 
         let mut map = crate::build::scan::article_map::ArticleMap::new();
         map.kinds = vec![crate::build::terms::TermKind {

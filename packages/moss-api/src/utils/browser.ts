@@ -4,6 +4,7 @@
  */
 
 import { getTauriCore } from "./tauri.js";
+import { getInternalContext, hasContext } from "./context.js";
 
 // ============================================================================
 // Types
@@ -205,18 +206,46 @@ export interface BrowserSignIn {
   /**
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
-   * included; check `state` yourself. Rejects with "sign-in cancelled" when the
-   * person closes the sign-in panel or another sign-in starts, and with "the
-   * sign-in took longer than ten minutes" at that limit.
+   * included; check `state` yourself. Rejects with {@link SignInCancelled}
+   * when the person closes the sign-in panel or another sign-in starts. Any
+   * other rejection is a failure, such as "the sign-in took longer than ten
+   * minutes" or "the sign-in stopped listening".
    */
   open(authorizeUrl: string): Promise<URLSearchParams>;
+}
+
+/** The text moss ends a cancelled sign-in with. */
+const CANCELLED = "sign-in cancelled";
+
+/**
+ * The person stopped the sign-in: they closed it, or another sign-in started.
+ * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   reply = await signIn.open(authorizeUrl);
+ * } catch (e) {
+ *   if (e instanceof SignInCancelled) return { status: "cancelled" };
+ *   throw e;
+ * }
+ * ```
+ * @category Browser
+ */
+export class SignInCancelled extends Error {
+  constructor() {
+    super(CANCELLED);
+    this.name = "SignInCancelled";
+  }
 }
 
 /**
  * Start a sign-in that finishes in the person's own browser, where they are
  * usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
  * moss listens on this computer for the provider's redirect, once; starting
- * another sign-in ends this one.
+ * another sign-in ends this one. moss hands back whatever reached the
+ * redirect: the caller sends a fresh `state` and refuses a reply whose
+ * `state` differs, since only it knows which request it made.
  *
  * Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
  *
@@ -235,8 +264,12 @@ export async function startBrowserSignIn(): Promise<BrowserSignIn> {
   return {
     redirectUri,
     async open(authorizeUrl: string) {
-      const { params } = await core.invoke<{ params: [string, string][] }>("browser_sign_in_wait", { url: authorizeUrl });
-      return new URLSearchParams(params);
+      try {
+        const { params } = await core.invoke<{ params: [string, string][] }>("browser_sign_in_wait", { url: authorizeUrl });
+        return new URLSearchParams(params);
+      } catch (e) {
+        throw (e instanceof Error ? e.message : String(e)) === CANCELLED ? new SignInCancelled() : e;
+      }
     },
   };
 }
@@ -422,4 +455,84 @@ export async function showBrowserForm<T>(
   }
 
   return resultPromise;
+}
+
+/**
+ * A run of the article, or a picture given as its bytes, for {@link fillEditor}.
+ * @category Browser
+ */
+export type EditorFillPart = { html: string } | { picture: { url: string; name: string; type: string; base64: string } };
+
+/**
+ * What {@link fillEditor} puts where: the editor's elements on the network's
+ * page, the article in parts, and which of moss's reshapings the editor needs.
+ * @category Browser
+ */
+export interface EditorFill {
+  editor: {
+    /** The editable body. */
+    body: string;
+    /** The title field, an input, a textarea or an editable element. */
+    title?: string;
+    /** Present once the editor has loaded; `body` when absent. */
+    ready?: string;
+    /**
+     * A file field (`input[type=file]`) for a network whose post starts from
+     * pictures: they are given to it first, as many as it allows and of the
+     * kinds it accepts, then the editor is filled once it appears. Picture parts go
+     * to the field, not the editor. No such field answers `no-editor`; a field
+     * that takes none of them, or an editor that never appears after them,
+     * `refused`.
+     */
+    upload?: string;
+  };
+  title?: string;
+  parts: EditorFillPart[];
+  rules?: {
+    /** The article's top heading level becomes h1, every deeper one h2. */
+    headings?: "two-levels";
+    /** One paragraph per table row, cells joined by " · ". */
+    tables?: "rows";
+    /** One paragraph per line of code. */
+    code?: "paragraphs";
+  };
+  /** How long to wait for the editor. Default 20 s. */
+  timeout_ms?: number;
+  /** How long each picture may take to appear. Default 15 s. */
+  picture_ms?: number;
+}
+
+/**
+ * How a fill went. `refused`: the editor's content did not change after the
+ * first paste. `no-editor`: the editor did not appear in time (its page
+ * changed, or the panel shows a sign-in). `missing` names each picture, and
+ * the title, that the editor did not take; `url` is where the panel is now.
+ * @category Browser
+ */
+export interface EditorFillAnswer {
+  result: "filled" | "no-editor" | "refused";
+  placed: number;
+  missing: string[];
+  url: string;
+}
+
+/**
+ * Put an article into the network's editor that this plugin opened in the
+ * panel, as the author would paste it: moss runs its own script there with
+ * this data, never the plugin's code, and only on a page of one of the
+ * plugin's declared domains.
+ *
+ * Only in the moss app; elsewhere it rejects.
+ *
+ * @example
+ * ```typescript
+ * await openBrowser("https://network.example/editor/new");
+ * const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+ * if (answer.result !== "filled") showCopyPage();
+ * ```
+ * @category Browser
+ */
+export async function fillEditor(fill: EditorFill): Promise<EditorFillAnswer> {
+  if (!hasContext()) throw new Error("fillEditor runs only inside a plugin hook");
+  return getTauriCore().invoke<EditorFillAnswer>("fill_browser_panel", { pluginName: getInternalContext().plugin_name, fill });
 }

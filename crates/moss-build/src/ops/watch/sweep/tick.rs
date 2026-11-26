@@ -190,7 +190,7 @@ pub(crate) async fn run(
                 Ok(targets) => {
                     let desired: Vec<PathBuf> = targets.into_iter().map(|(p, _)| p).collect();
                     if let Some(prev) = &prev_targets {
-                        if scope::watch_set_content_change(prev, &desired, root_readable, &social) {
+                        if scope::sweep_rebuilds_for(&folder_str, prev, &desired, root_readable, &social) {
                             log::info!(
                                 target: "moss::build::watch",
                                 "Sweep: top-level entry set changed — rebuilding"

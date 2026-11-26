@@ -71,14 +71,22 @@
 //! Meant to be replaced when `ports.rs` draws the real build-outcome seam.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Why a build stopped, and whether waiting would help.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BuildStopped {
     message: String,
-    deferred: bool,
-    discarded: bool,
+    kind: Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    Fatal,
+    Deferred,
+    Discarded,
+    /// A failure the shells were already told about in its own words.
+    Told,
 }
 
 impl BuildStopped {
@@ -89,7 +97,7 @@ impl BuildStopped {
     /// asserts; use this only where the deferral is known without an
     /// `io::Error` in hand.
     pub fn deferred(message: impl Into<String>) -> Self {
-        Self { message: message.into(), deferred: true, discarded: false }
+        Self { message: message.into(), kind: Stop::Deferred }
     }
 
     /// The build stopped on a file it has just unlinked from the stage.
@@ -100,18 +108,29 @@ impl BuildStopped {
     /// [`io_stop`]'s `Discard` arm, and only when the removal succeeded —
     /// re-running against a file that is still there would fail identically.
     pub fn discarded(message: impl Into<String>) -> Self {
-        Self { message: message.into(), deferred: false, discarded: true }
+        Self { message: message.into(), kind: Stop::Discarded }
+    }
+
+    /// A failure already reported to the shells by its own event (the preview
+    /// server's), so the build's generic failure report would repeat it.
+    pub fn told(message: impl Into<String>) -> Self {
+        Self { message: message.into(), kind: Stop::Told }
     }
 
     /// Would waiting help? Drives the cloud gate on the failure path.
     pub fn is_deferred(&self) -> bool {
-        self.deferred
+        self.kind == Stop::Deferred
     }
 
     /// Was the cause removed on the way out? Drives the single rebuild in
     /// `build::run_pipeline` — see [`BuildStopped::discarded`].
     pub fn is_discarded(&self) -> bool {
-        self.discarded
+        self.kind == Stop::Discarded
+    }
+
+    /// The shells already know: a deferral shows as the cloud wait, a told failure as its own event.
+    pub fn shells_know(&self) -> bool {
+        matches!(self.kind, Stop::Deferred | Stop::Told)
     }
 
     pub fn message(&self) -> &str {
@@ -142,12 +161,7 @@ impl BuildStopped {
 /// log line actually wants here.
 impl fmt::Debug for BuildStopped {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match (self.deferred, self.discarded) {
-            (true, _) => "Deferred",
-            (_, true) => "Discarded",
-            _ => "Fatal",
-        };
-        write!(f, "BuildStopped::{kind}({:?})", self.message)
+        write!(f, "BuildStopped::{:?}({:?})", self.kind, self.message)
     }
 }
 
@@ -155,7 +169,7 @@ impl fmt::Debug for BuildStopped {
 /// means `Fatal`, exactly as it does today. See the module doc.
 impl From<String> for BuildStopped {
     fn from(message: String) -> Self {
-        Self { message, deferred: false, discarded: false }
+        Self { message, kind: Stop::Fatal }
     }
 }
 
@@ -337,21 +351,28 @@ enum Disposition {
 /// a list that has already drifted once; delegating means a new watched
 /// extension is picked up for free.
 ///
-/// The staging check splits on the `.moss` *component* rather than a substring,
-/// so a vault whose own directory name contains `.moss` cannot be misread. It
+/// Staging and the build cache are wherever [`MossPaths`] puts them. The shared
+/// store's check splits on the `.moss` *component* rather than a substring, so
+/// a vault whose own directory name contains `.moss` cannot be misread. It
 /// takes the last such component, matching what `path_is_watchable` does with
 /// the vault-relative path.
+///
+/// [`MossPaths`]: crate::moss_paths::MossPaths
 fn disposition(root: &Path, path: &Path) -> Disposition {
-    let regenerable = moss_relative_tail(path).is_some_and(|rel| {
-        rel.starts_with("build.nosync/staging/")
-            || rel.starts_with("build.nosync/cache/")
-            || rel.starts_with("cache/")
-    });
+    let mp = crate::moss_paths::MossPaths::new(root);
+    // Both spellings: the build writes through the joined path, an error can
+    // carry the resolved one (`/var` against `/private/var`).
+    let resolved = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let under = |dir: PathBuf| path.starts_with(&dir) || path.starts_with(resolved(&dir));
+    let regenerable = under(mp.staging_dir())
+        || under(mp.cache_dir())
+        || moss_relative_tail(path).is_some_and(|rel| rel.starts_with("cache/"));
     if regenerable {
         return Disposition::Discard;
     }
     use crate::build::watch::scope::{path_is_watchable, path_passes_filter};
-    if path_is_watchable(root, path) && path_passes_filter(root, path) {
+    // Only an arrival inside the folder reaches its watcher.
+    if under(root.to_path_buf()) && path_is_watchable(root, path) && path_passes_filter(root, path) {
         return Disposition::Wait;
     }
     Disposition::Report
@@ -378,12 +399,12 @@ fn disposition(root: &Path, path: &Path) -> Disposition {
 ///
 /// Exactly once: a second consecutive discard means the removal did not settle
 /// anything, so it stops the build like any other failure.
-pub(crate) async fn retry_once_after_discard<T, A, F>(mut attempt: A) -> Result<T, String>
+pub(crate) async fn retry_once_after_discard<T, A, F>(mut attempt: A) -> Result<T, BuildStopped>
 where
     A: FnMut() -> F,
     F: std::future::Future<Output = Result<T, BuildStopped>>,
 {
-    let outcome = match attempt().await {
+    match attempt().await {
         Err(stopped) if stopped.is_discarded() => {
             log::info!(
                 "build stopped on a file it discarded from the stage ({}) — building again",
@@ -392,9 +413,7 @@ where
             attempt().await
         }
         first => first,
-    };
-    // The rest of moss speaks `String`; both verdicts have been read by here.
-    outcome.map_err(BuildStopped::into_message)
+    }
 }
 
 /// The path's tail after its last `.moss` component, `/`-separated.

@@ -110,7 +110,7 @@ async fn fresh_cookie_admits_and_sign_out_revokes() {
     assert_eq!(URL_SAFE_NO_PAD.decode(secret).unwrap().len(), 32);
     assert_ne!(secret, link.code);
     assert_eq!(f.probe(&cookie).await, StatusCode::NOT_FOUND);
-    let carrier = std::fs::read_to_string(f.site.join(".moss/build.nosync/http-token")).unwrap();
+    let carrier = std::fs::read_to_string(crate::ops::serve::carrier_token::token_path(&f.site)).unwrap();
     assert_ne!(secret, carrier.trim());
     assert_eq!(
         f.auth.list_sessions().unwrap()[0].user_agent,
@@ -157,7 +157,7 @@ async fn sessions_survive_new_server_and_revoke_all() {
         62001,
         62000,
         Some(super::super::super::InvokeCtx::standalone()),
-        Arc::new(std::sync::RwLock::new(f.site.clone())),
+        crate::moss_paths::Served::test_cell(f.site.clone()),
         super::super::super::HostKind::Cli,
         Arc::default(),
     )

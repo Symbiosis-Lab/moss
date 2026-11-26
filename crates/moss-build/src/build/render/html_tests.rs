@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::tab_title;
 
 fn pending_for_render(
@@ -35,7 +36,7 @@ fn render_with_evidence(
     instant: jiff::Timestamp,
     evidence: crate::build::cloud_ledger::InputEvidence,
 ) -> std::path::PathBuf {
-    let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+    let output_dir = MossPaths::new(test_dir).build_dir().join("site");
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -239,6 +240,7 @@ mod homepage_og_tests {
 /// The bug: Converted .mp4 files are deleted by stale cleanup because
 /// only site_hashes.files is checked, not video_outputs.
 mod stale_cleanup_tests {
+    use crate::moss_paths::MossPaths;
     use crate::types::content::SiteHashes;
     use std::collections::HashSet;
 
@@ -354,7 +356,7 @@ mod stale_cleanup_tests {
 
         // Simulate a previous build that registered video_outputs in hashes.json
         let moss_dir = test_dir.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
         let hashes_json = serde_json::json!({
             "files": {},
             "sources": {},
@@ -364,14 +366,14 @@ mod stale_cleanup_tests {
             ]
         });
         fs::write(
-            moss_dir.join("build.nosync").join("hashes.json"),
+            MossPaths::from_moss_dir(moss_dir.to_path_buf()).hashes(),
             hashes_json.to_string(),
         )
         .unwrap();
 
         // Create the output directory with video files that would have been
         // placed there by a previous background video conversion
-        let output_dir = moss_dir.join("build.nosync").join("site");
+        let output_dir = MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir().join("site");
         let videos_dir = output_dir.join("videos");
         fs::create_dir_all(&videos_dir).unwrap();
         fs::write(videos_dir.join("aimeili.mp4"), "fake mp4").unwrap();
@@ -573,6 +575,7 @@ mod stale_dir_cleanup_tests {
 /// The fix: Extract video items from generate_blocking_content() and return
 /// them in BackgroundContext for async processing after preview opens.
 mod non_blocking_video_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -610,7 +613,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_returns_background_context_with_videos() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
 
         // Create content with a markdown file referencing a video
         fs::write(test_dir.join("index.md"), "# Test\nVideo content").unwrap();
@@ -686,7 +689,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_does_not_block_on_video_conversion() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
 
         // Create content
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
@@ -749,6 +752,7 @@ mod non_blocking_video_tests {
 ///
 /// The background walk copies everything that isn't markdown or .mov.
 mod deferred_asset_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -781,7 +785,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
         fs::write(test_dir.join("robots.txt"), "User-agent: *").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -830,7 +834,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Simulate previous build's hashes for these asset files
@@ -846,7 +850,7 @@ mod deferred_asset_tests {
         let moss_dir = test_dir.join(".moss");
         fs::create_dir_all(&moss_dir).unwrap();
         let hashes_json = serde_json::to_string(&previous_hashes).unwrap();
-        fs::write(moss_dir.join("build.nosync").join("hashes.json"), hashes_json).unwrap();
+        fs::write(MossPaths::from_moss_dir(moss_dir.to_path_buf()).hashes(), hashes_json).unwrap();
 
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -888,7 +892,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -918,6 +922,7 @@ mod deferred_asset_tests {
 /// the folder's children. This implements Principle 2: "Folders and .md
 /// files correspond to HTML pages."
 mod auto_folder_index_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -966,7 +971,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1013,7 +1018,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1075,7 +1080,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1142,7 +1147,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1194,7 +1199,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1238,7 +1243,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1287,7 +1292,7 @@ mod auto_folder_index_tests {
             )
             .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1343,7 +1348,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1408,7 +1413,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1470,7 +1475,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1528,7 +1533,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1598,7 +1603,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1648,7 +1653,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -1784,6 +1789,7 @@ mod cover_resolution_tests {
 /// Integration test: wikilink cover with bare filename should resolve
 /// to the full path in generated HTML.
 mod cover_wikilink_integration {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -1828,7 +1834,7 @@ mod cover_wikilink_integration {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1865,6 +1871,7 @@ mod cover_wikilink_integration {
 /// Folder index pages with covers should NOT render description in page body.
 /// Description is only for card display when the page is referenced elsewhere.
 mod folder_cover_no_description {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -1908,7 +1915,7 @@ mod folder_cover_no_description {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1965,6 +1972,7 @@ mod folder_cover_no_description {
 /// beside it — the real-content repro was `Illuminated Books.md`
 /// (`cover:` + a `:::grid 2:::` of sibling wikilinks).
 mod folder_cover_grid_escapes_narrow_column {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -2010,7 +2018,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2101,7 +2109,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2176,7 +2184,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2243,6 +2251,7 @@ mod folder_cover_grid_escapes_narrow_column {
 /// (`body_plan::lede_end`), so both tests drive a real scan +
 /// `generate_blocking_content` and assert on the emitted markup.
 mod folder_cover_lede_release {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -2281,7 +2290,7 @@ mod folder_cover_lede_release {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -2383,6 +2392,7 @@ mod folder_cover_lede_release {
 /// All tests drive a real scan + `generate_blocking_content` and assert on
 /// the emitted markup, exercising the full render path end to end.
 mod children_listing_and_grid_independence {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -2398,7 +2408,7 @@ mod children_listing_and_grid_independence {
     }
 
     fn build_site(test_dir: &std::path::Path) -> std::path::PathBuf {
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -6782,6 +6792,7 @@ mod home_file_demotion_tests {
 // Unit tests for resolve_path_with_overrides have been moved to page_map.rs.
 // The full build integration test stays here since it tests generate_blocking_content.
 mod video_path_mapping_integration_tests {
+    use crate::moss_paths::MossPaths;
     /// End-to-end test: build a site with Chinese directory names and
     /// url overrides, verify that dir_overrides is captured on BackgroundContext.
     /// Also asserts that no .placeholder.svg files are produced (Pattern E removed).
@@ -6815,7 +6826,7 @@ mod video_path_mapping_integration_tests {
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
 
         // Create output directory
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Run the blocking phase
@@ -6890,7 +6901,7 @@ mod video_path_mapping_integration_tests {
         let _cleanup = Cleanup(test_dir.clone());
 
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         let mut project_structure =
@@ -8807,6 +8818,7 @@ mod folder_index_meta_tests {
 /// file should be treated as a translation of the homepage (linked via language
 /// toggle), NOT as a separate page at /index/.
 mod homepage_translation_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::manifest::PendingManifest;
     use crate::build::render::generate_blocking_content;
     use crate::build::render::SiteConfig;
@@ -8834,7 +8846,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_does_not_create_index_directory() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Create both homepage files
@@ -8903,7 +8915,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_page_content() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -8964,7 +8976,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_no_article_title() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -9029,7 +9041,7 @@ mod homepage_translation_tests {
     fn test_home_marker_promoted_no_folder_title_h1() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
         fs::create_dir_all(test_dir.join("en")).unwrap();
 
@@ -9083,7 +9095,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_not_in_nav() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -9156,7 +9168,7 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Mirror a bilingual vault layout: language-neutral assets/ + a per-language
@@ -9227,7 +9239,7 @@ mod homepage_translation_tests {
     fn test_og_site_name_uses_default_lang_homepage() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // Mirror the user's layout: Chinese-default site with a self-named
@@ -9345,7 +9357,7 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_html_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         fs::create_dir_all(test_dir.join("assets")).unwrap();
@@ -9401,7 +9413,7 @@ mod homepage_translation_tests {
     fn test_html_lang_attribute_is_per_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build.nosync/staging");
+        let output_dir = MossPaths::new(&test_dir).staging_dir();
         fs::create_dir_all(&output_dir).unwrap();
 
         // English homepage and Chinese translation, lang pinned for determinism.
@@ -9758,6 +9770,7 @@ mod sequence_siblings_tests {
 /// sit inside `if !items.is_empty()`, which meant a site with no videos — the
 /// common case — never reset anything (c184b7161).
 mod registry_clear_tests {
+    use crate::moss_paths::MossPaths;
     #[test]
     fn a_videoless_build_still_clears_a_stale_failed_entry() {
         use crate::build::manifest::PendingManifest;
@@ -9783,7 +9796,7 @@ mod registry_clear_tests {
 
         // A site with NO videos — the case the old placement never reached.
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
-        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        let output_dir = MossPaths::new(&test_dir).build_dir().join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // An earlier build's failure, surviving on the shared registry.
@@ -9819,6 +9832,7 @@ mod registry_clear_tests {
 /// `blocking.rs`), so a fresh site with an external grid link against a local
 /// server shows the fetched title on that same build.
 mod build_time_link_meta_fetch_tests {
+    use crate::moss_paths::MossPaths;
     use crate::build::render::blocking::SiteConfig;
     use std::fs;
 
@@ -9883,7 +9897,7 @@ mod build_time_link_meta_fetch_tests {
         build_site(&test_dir, true);
 
         let index_html = fs::read_to_string(
-            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+            MossPaths::new(&test_dir).build_dir().join("site").join("index.html"),
         )
         .expect("index.html should exist");
         assert!(
@@ -9917,7 +9931,7 @@ mod build_time_link_meta_fetch_tests {
         build_site(&test_dir, true);
 
         let index_html = fs::read_to_string(
-            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+            MossPaths::new(&test_dir).build_dir().join("site").join("index.html"),
         )
         .expect("index.html should exist");
         assert!(
@@ -9957,7 +9971,7 @@ mod build_time_link_meta_fetch_tests {
             watch: false,
             start_server: false,
             host,
-            trigger: crate::build::BuildTrigger::Full,
+            trigger: crate::build::BuildTrigger::Full, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -10024,7 +10038,7 @@ mod build_time_link_meta_fetch_tests {
                 watch: false,
                 start_server: false,
                 host,
-                trigger: crate::build::BuildTrigger::Full,
+                trigger: crate::build::BuildTrigger::Full, reason: None,
                 exits_after_build: false,
                 site_url_override: None,
                 server_port: None,
@@ -10087,7 +10101,7 @@ mod build_time_link_meta_fetch_tests {
         );
 
         let index_html = fs::read_to_string(
-            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+            MossPaths::new(&test_dir).build_dir().join("site").join("index.html"),
         )
         .expect("index.html should exist even though the link never resolved");
         assert!(

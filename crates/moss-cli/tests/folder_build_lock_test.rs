@@ -201,11 +201,11 @@ fn a_second_process_waits_for_the_folder_build_lock_the_first_process_holds() {
 /// admission's tail arrives after a newer one already promoted," reproduced
 /// deterministically rather than raced for.
 ///
-/// Verifies the persisted epoch file (in the folder's build output) directly
-/// (`infra::folder_lock::last_promoted_epoch`), the same public primitive
-/// `run_materialize_phase` itself reads and writes — `record_promoted_epoch` is
-/// called if and only if `materialize_and_promote` just returned
-/// `Promoted`, so the epoch value after the older admission's attempt is a
+/// Verifies the persisted epoch directly (`infra::folder_lock::last_promoted_epoch`,
+/// the promotion record of the generation `current` names), the same public
+/// primitive `run_materialize_phase` itself reads. A refused attempt never
+/// reaches `materialize_and_promote`, so it writes no record and moves no
+/// pointer, and the epoch value after the older admission's attempt is a
 /// direct check of whether that attempt was refused.
 ///
 /// A second, content-based assertion on `current.generation` itself — that
@@ -276,4 +276,49 @@ fn an_older_admission_never_overwrites_an_already_promoted_newer_one() {
         "the older admission overwrote the persisted epoch — its promotion was not refused; \
          its stderr:\n{stderr_older}"
     );
+}
+
+/// The epoch is kept in the record of the generation `current` names. A
+/// generation with no such record (built by a moss that kept none, or its
+/// record purged) is still served, at epoch 0: any build promotes over it, and
+/// of two that follow, the later-locked one ends on `current`.
+#[test]
+fn a_generation_without_its_epoch_record_is_served_and_promoted_over() {
+    let _guard = MOSS_HOME_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let moss_home = tempfile::tempdir().expect("tempdir for MOSS_HOME");
+    let site_root = tempfile::tempdir().expect("tempdir for the site copy");
+    copy_dir_recursive(&fixture_input_dir(), site_root.path());
+    let site_dir = std::fs::canonicalize(site_root.path()).expect("canonicalize the site copy");
+    let run = |admission_nanos: u64| {
+        let output = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+            .arg("build")
+            .arg(&site_dir)
+            .arg("--no-plugins")
+            .env("MOSS_HOME", moss_home.path())
+            .env("MOSS_DESKTOP_SEARCH_ROOT", moss_home.path())
+            .env("MOSS_TEST_ADMISSION_NANOS", admission_nanos.to_string())
+            .stdin(Stdio::null())
+            .output()
+            .expect("run moss-cli build");
+        assert!(output.status.success(), "stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+    };
+    let epoch = || moss_build::infra::folder_lock::last_promoted_epoch(&site_dir);
+    let paths = moss_build::moss_paths::MossPaths::new(&site_dir);
+
+    run(u64::MAX - 2);
+    assert_eq!(epoch(), u64::MAX - 2);
+    let id = paths.current_generation_id().expect("a promoted generation");
+    std::fs::remove_file(moss_build::infra::folder_lock::promotion_record_path(&paths.generations_dir(), &id))
+        .expect("the promotion kept its record");
+    assert!(paths.has_servable_generation(), "a generation without its epoch record is still served");
+    assert_eq!(epoch(), 0);
+
+    // An unchanged folder's build stops before it seals, so each one edits a page.
+    let edit = |n: u64| std::fs::write(site_dir.join("edited.md"), format!("# Edit {n}\n")).expect("edit a page");
+    edit(1);
+    run(1);
+    assert_eq!(epoch(), 1, "an earlier-locked build promotes over epoch 0");
+    edit(2);
+    run(2);
+    assert_eq!(epoch(), 2, "and the later-locked one after it ends on current");
 }

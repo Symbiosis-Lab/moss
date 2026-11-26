@@ -36,8 +36,8 @@ permissions: {}
 
 jobs:
   announce:
-    # An ffmpeg- release hosts the video tool moss downloads, not a moss version: announce nothing for it.
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'ffmpeg-') }}
+    # Only an app release (vX.Y.Z) is a moss version; any other release (the video tool moss downloads, a plugin) announces nothing.
+    if: ${{ startsWith(github.event.release.tag_name || inputs.tag, 'v') }}
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch to npm and the Homebrew tap

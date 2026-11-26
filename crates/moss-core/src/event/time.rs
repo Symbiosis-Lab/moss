@@ -6,7 +6,7 @@
 //! parses and orders; the IANA zone name travels separately as a string.
 
 /// A parsed `start:` or `end:` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EventTime {
     /// `YYYY-MM-DD`: an all-day value.
     Date(u16, u8, u8),

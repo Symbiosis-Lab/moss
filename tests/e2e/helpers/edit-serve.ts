@@ -6,6 +6,7 @@
  */
 import { test, expect, type Frame, type Page, type TestInfo } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,11 +18,16 @@ export interface EditServe {
   readonly home: string;
   /** Everything the server has printed so far. */
   readonly output: string;
+  /** The site's build output, outside the folder: `MossPaths::build_dir` for a folder under the temporary directory. */
+  readonly buildDir: string;
 }
 
 /** Registers the per-test server; `writeSite` fills the site folder before it starts. */
 export function useEditServe(gate: string, writeSite: (site: string, testInfo: TestInfo) => void, env: Record<string, string> = {}): EditServe {
-  const state = { site: '', home: '', output: '' };
+  const state = {
+    site: '', home: '', output: '',
+    get buildDir() { return join(tmpdir(), 'moss-folder-stores', 'caches', createHash('sha256').update(this.site).digest('hex'), 'build'); },
+  };
   let server: ChildProcess | undefined;
 
   test.beforeEach(async ({}, testInfo) => {
@@ -31,13 +37,16 @@ export function useEditServe(gate: string, writeSite: (site: string, testInfo: T
     mkdirSync(join(state.home, 'moss'));
     writeSite(state.site, testInfo);
     // MOSS_HOME and the search root keep the binary from finding, or handing
-    // the folder to, an installed desktop app.
+    // the folder to, an installed desktop app. TMPDIR is Node's: with it unset,
+    // Rust's temporary directory is another one, so moss would not see the site
+    // as temporary and would keep its stores in the real app data.
     server = spawn(MOSS_BIN, ['edit', state.site, '--serve', '--no-browser', '--port', String(gatePort(`${gate}:ui`))], {
       env: {
         ...process.env,
         MOSS_HOME: join(state.home, 'moss'),
         MOSS_DESKTOP_SEARCH_ROOT: state.home,
         MOSS_PREVIEW_PORT_BASE: String(gatePort(`${gate}:preview`)),
+        TMPDIR: tmpdir(),
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

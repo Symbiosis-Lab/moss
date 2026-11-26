@@ -4,32 +4,9 @@
 //! written path 404s on a case-sensitive host while a case-insensitive disk
 //! serves it locally.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -74,9 +51,9 @@ fn logo_imgs(logo: &str) -> (PathBuf, Cleanup, Vec<(String, String)>) {
     image::RgbaImage::new(24, 8).save(tmp.join("Pictures/Mark.png")).unwrap();
     write(&tmp, "index.md", &format!("---\ntitle: Harbor Notes\nlogo: {logo}\n---\n\nWelcome.\n"));
     write(&tmp, "Notes/first.md", "---\ntitle: First Note\n---\n\nHello.\n");
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     let imgs = ["index.html", "notes/first/index.html"]
         .iter()
         .map(|page| (page.to_string(), logo_img(&fs::read_to_string(out.join(page)).unwrap())))

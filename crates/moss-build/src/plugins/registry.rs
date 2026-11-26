@@ -87,8 +87,15 @@ pub struct AvailablePlugin {
     /// URL to the plugin icon (empty for bundled - icon loaded separately)
     pub icon_url: Option<String>,
 
-    /// Channel capabilities (e.g., ["syndicate"])
+    /// The hooks moss may call (e.g., ["syndicate"]). Dispatch reads this;
+    /// what the catalog files the row under is `contributions`.
     pub capabilities: Vec<String>,
+
+    /// The names of the contributions the plugin declares (`channel`,
+    /// `deploy_target`, `derivations`, …), as manifest parse reads them, so a
+    /// row is filed in the same place before install and after.
+    #[serde(default)]
+    pub contributions: Vec<String>,
 
     /// Whether this channel is currently active (installed + enabled)
     #[serde(default)]
@@ -206,6 +213,7 @@ pub fn get_available_plugins() -> Vec<AvailablePlugin> {
                 id: plugin_name.to_string(),
                 version: manifest.version.clone(),
                 requires_stack: manifest.needs_stack(),
+                contributions: manifest.contribution_names(),
                 description: manifest.description.unwrap_or_default(),
                 icon_url: None, // Icon loaded from bundled plugin directory
                 capabilities: manifest.capabilities.iter()
@@ -323,6 +331,8 @@ pub fn get_available_plugins_with_status(project_path: &str) -> Vec<AvailablePlu
         if let Some(installed) = crate::plugins::bundled::read_installed_manifest(&dir) {
             plugin.installed = true;
             plugin.version = installed.version.clone();
+            plugin.contributions = installed.contribution_names();
+            plugin.capabilities = installed.capabilities.iter().map(|c| c.hook_name().to_string()).collect();
             // The same call the loader makes, on the same manifest and
             // directory, so the tile explains exactly what the refusal will
             // say — including which reason wins when more than one applies.
@@ -367,6 +377,7 @@ struct BuiltinChannel {
     id: &'static str,
     description: &'static str,
     capabilities: &'static [&'static str],
+    contributions: &'static [&'static str],
     icon_svg: &'static str,
 }
 
@@ -374,6 +385,7 @@ const BUILTIN_CHANNELS: &[BuiltinChannel] = &[BuiltinChannel {
     id: "email",
     description: "Send articles to email subscribers",
     capabilities: &["syndicate"],
+    contributions: &["channel"],
     icon_svg: EMAIL_ICON_SVG,
 }];
 
@@ -392,6 +404,7 @@ fn get_builtin_channels() -> Vec<AvailablePlugin> {
             description: c.description.to_string(),
             icon_url: None,
             capabilities: c.capabilities.iter().map(|s| s.to_string()).collect(),
+            contributions: c.contributions.iter().map(|s| s.to_string()).collect(),
             installed: false, // Will be populated by get_available_channels_with_status
             source: ChannelSource::Builtin,
             requires_stack: false,
@@ -602,23 +615,11 @@ pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool 
 /// Install a plugin into a project.
 ///
 /// Copies it out of the binary when moss ships it, and otherwise downloads the
-/// version the registry publishes — see [`published_entry`].
-///
-/// # Arguments
-/// * `plugin_id` - ID of the plugin to install
-/// * `project_path` - Path to the project where plugin should be installed
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err(String)` with error message on failure
-pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String> {
-    install_plugin_allowing(plugin_id, project_path, crate::infra::app_data::preview_features_on())
-}
-
-/// [`install_plugin`] for a caller that already knows whether the user turned
-/// on Preview features: the app passes the switch its catalog was drawn with,
-/// so a row it shows is never refused when clicked.
-pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: bool) -> Result<(), String> {
+/// version the registry publishes — see [`published_entry`]. `preview_on` is
+/// whether the user turned on Preview features: the app passes the switch its
+/// catalog was drawn with, so a row it shows is never refused when clicked.
+/// `settings` is the file a refusal tells a command-line user to edit.
+pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: bool, settings: Option<&std::path::Path>) -> Result<(), String> {
     // No catalog-row check first. A row is a thing the UI drew; what decides
     // whether an install may proceed is whether the bytes can be got, and the
     // two branches below each answer that for their own origin. Checking the
@@ -646,7 +647,7 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
     // forgotten.
     let Some(manifest) = crate::plugins::bundled::get_bundled_plugin_info(plugin_id) else {
         let entry = published_entry(plugin_id)?;
-        refuse_preview(plugin_id, entry.preview, preview_on)?;
+        refuse_preview(plugin_id, entry.preview, preview_on, settings)?;
         return artifact::install_from_registry(&entry, project_path).map(|_| ());
     };
 
@@ -660,7 +661,7 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
     if let Some(refusal) = enforce::withheld(&manifest, true) {
         return Err(format!("{plugin_id} cannot be installed: {}", refusal.sentence(&manifest)));
     }
-    refuse_preview(plugin_id, manifest.preview, preview_on)?;
+    refuse_preview(plugin_id, manifest.preview, preview_on, settings)?;
 
     // Install from bundled plugins (no download needed)
     install_bundled_plugin(plugin_id, project_path)
@@ -671,12 +672,11 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
 /// typed `moss plugin install` from going round the catalog. A copy already
 /// in the folder never reaches here (an install of it returns early), so it
 /// keeps running.
-fn refuse_preview(plugin_id: &str, preview: bool, preview_on: bool) -> Result<(), String> {
+fn refuse_preview(plugin_id: &str, preview: bool, preview_on: bool, settings: Option<&std::path::Path>) -> Result<(), String> {
     if !preview || preview_on {
         return Ok(());
     }
-    let file = crate::infra::app_data::app_config_path_early()
-        .map_or_else(|| "app-config.json".to_string(), |p| p.display().to_string());
+    let file = settings.map_or_else(|| "app-config.json".to_string(), |p| p.display().to_string());
     Err(format!(
         "{plugin_id} is a preview plugin and installs only with Preview features on. \
          In the moss app, turn on Settings > Preview features. \
@@ -1009,7 +1009,7 @@ mod tests {
         let project_path = temp.path().to_str().unwrap();
         fs::create_dir_all(temp.path().join(".moss")).unwrap();
 
-        let result = install_plugin("nonexistent-plugin", project_path);
+        let result = install_plugin_allowing("nonexistent-plugin", project_path, false, None);
         assert!(result.is_err());
         assert!(
             result.unwrap_err().contains("not in this build or the catalog"),
@@ -1448,6 +1448,38 @@ deploy = "other-deployer"
         assert!(channel_is_listed(&unavailable(false), false));
     }
 
+    /// A row is filed under what its manifest contributes after parse, and
+    /// the copy in the folder decides once there is one.
+    #[test]
+    fn a_row_is_filed_by_its_parsed_contributions() {
+        let plugins = get_available_plugins();
+        let onionpress = plugins.iter().find(|p| p.id == "onionpress").expect("onionpress is bundled");
+        assert!(
+            onionpress.contributions.contains(&"deploy_target".to_string()),
+            "an old capabilities list's deploy is a host: {:?}",
+            onionpress.contributions
+        );
+        assert_eq!(get_builtin_channels()[0].contributions, ["channel"]);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".moss").join("plugins").join("matters");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"name":"matters","version":"9.0.0","entry":"main.js","contributes":{"derivations":{}}}"#,
+        )
+        .unwrap();
+        let rows = get_available_plugins_with_status(tmp.path().to_str().unwrap());
+        let matters = rows.iter().find(|p| p.id == "matters").expect("matters has a row");
+        assert_eq!(matters.contributions, ["derivations"], "the installed copy decides");
+        // The host row lists by capability and the catalog files by contribution: they must agree.
+        for row in &rows {
+            let has = |list: &[String], name: &str| list.iter().any(|n| n == name);
+            assert_eq!(has(&row.contributions, "channel"), has(&row.capabilities, "syndicate"), "{}: {:?} vs {:?}", row.id, row.contributions, row.capabilities);
+            assert_eq!(has(&row.contributions, "deploy_target"), has(&row.capabilities, "deploy"), "{}: {:?} vs {:?}", row.id, row.contributions, row.capabilities);
+        }
+    }
+
     #[test]
     fn manifest_preview_declaration_drives_catalog_visibility() {
         // The readiness bit flows from the plugin's own manifest, not from a
@@ -1618,6 +1650,7 @@ schema_version = {}
             description: "Send articles to email subscribers".to_string(),
             icon_url: None,
             capabilities: vec!["syndicate".to_string()],
+            contributions: vec!["channel".to_string()],
             installed: true,
             source: ChannelSource::Builtin,
             requires_stack: false,

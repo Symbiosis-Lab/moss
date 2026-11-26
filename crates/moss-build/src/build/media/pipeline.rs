@@ -1077,11 +1077,12 @@ impl AssetCopy {
     fn new(ctx: &BackgroundContext, html_files: &[crate::types::content::FileInfo]) -> Self {
         let paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
         let source_root = Path::new(&ctx.source_path);
+        let object_store = crate::build::cache::ObjectStore::for_asset_pass(&paths);
         Self {
-            object_store: crate::build::cache::ObjectStore::for_site(&paths),
+            transforms: crate::build::cache::TransformCache::over(&paths, &object_store),
+            object_store,
             manifest_hash_memo: crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&paths.cache_manifest_hash_memo()),
             staged: crate::build::lifecycle::cas_heal::StagedLinks::load(&paths, "assets", &ctx.staging_dir),
-            transforms: crate::build::cache::TransformCache::for_site(&paths),
             image_config: crate::build::media::image::ImageCompressionConfig::default(),
             canonical_source_root: source_root.canonicalize().unwrap_or_else(|e| {
                 log::info!("[background-assets] canonicalize source_root failed: {e}; symlinks will not be preserved");
@@ -1655,6 +1656,9 @@ pub(crate) fn copy_deferred_assets(
     });
 
     staged.save();
+    if let Err(e) = object_store.save_verified_keeping_unchecked() {
+        log::info!("[background-assets] Failed to persist verified blobs: {e}");
+    }
     // Persist the oid→xxh3 memo once per build (not once per asset — see
     // `ManifestHashMemo`'s doc comment). Best-effort: a failed save just
     // means the next build starts cold, same as today.

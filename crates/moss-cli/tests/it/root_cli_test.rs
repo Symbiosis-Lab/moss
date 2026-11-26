@@ -164,3 +164,60 @@ fn root_leaves_out_an_address_it_cannot_read() {
     assert!(json.get("address").is_none(), "{json}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("address unknown"));
 }
+
+#[test]
+fn root_reports_a_built_page_and_leaves_an_unbuilt_file_without_one() {
+    let home = tempfile::tempdir().unwrap();
+    let site = home.path().join("her-blog");
+    std::fs::create_dir_all(site.join("posts")).unwrap();
+    std::fs::write(site.join("index.md"), "# Her blog\n").unwrap();
+    std::fs::write(site.join("posts/heron.md"), "---\ntitle: Heron\nsyndicate: [bluesky]\n---\n\nA heron.\n").unwrap();
+    let build = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .args(["build", site.to_str().unwrap(), "--no-plugins", "--strict"])
+        .env("HOME", home.path())
+        .env("MOSS_HOME", home.path().join("tooling/.moss"))
+        .env("MOSS_SITE_URL", "https://example.com")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    std::fs::write(site.join("posts/new.md"), "# New\n").unwrap();
+
+    let page = root_command(home.path(), &[site.join("posts/heron.md").to_str().unwrap(), "--json"]);
+    assert!(page.status.success(), "{}", String::from_utf8_lossy(&page.stderr));
+    assert_eq!(String::from_utf8_lossy(&page.stderr), "");
+    let out: serde_json::Value = serde_json::from_slice(&page.stdout).unwrap();
+    assert_eq!(out["page"], serde_json::json!({"path": "/posts/heron/", "draft": false, "published": false, "changed": false,
+        "channels": ["bluesky"], "copies": {}}));
+
+    let unbuilt = root_command(home.path(), &[site.join("posts/new.md").to_str().unwrap(), "--json"]);
+    let out: serde_json::Value = serde_json::from_slice(&unbuilt.stdout).unwrap();
+    assert_eq!(out.get("page"), None);
+}
+
+#[test]
+fn root_names_the_settings_a_page_takes_from_its_folder() {
+    let home = tempfile::tempdir().unwrap();
+    let site = home.path().join("her-blog");
+    std::fs::create_dir_all(site.join("posts")).unwrap();
+    std::fs::write(site.join("index.md"), "# Her blog\n").unwrap();
+    std::fs::write(site.join("posts/index.md"), "---\ntitle: Posts\ncascade:\n  content_width: wide\n  description: From posts\n---\n").unwrap();
+    std::fs::write(site.join("posts/heron.md"), "---\ntitle: Heron\ndescription: Its own\n---\n\nA heron.\n").unwrap();
+    let build = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .args(["build", site.to_str().unwrap(), "--no-plugins", "--strict"])
+        .env("HOME", home.path())
+        .env("MOSS_HOME", home.path().join("tooling/.moss"))
+        .env("MOSS_SITE_URL", "https://example.com")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+
+    let page_of = |file: &str| {
+        let out = root_command(home.path(), &[site.join(file).to_str().unwrap(), "--json"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["page"].clone()
+    };
+    assert_eq!(page_of("posts/heron.md")["inherited"], serde_json::json!([{"name": "content_width", "value": "wide", "from": "/posts/"}]));
+    assert_eq!(page_of("posts/index.md").get("inherited"), None);
+}

@@ -38,6 +38,7 @@
 //! email CSS to the output — no build path performs network fetches, so
 //! snapshot tests stay deterministic and offline.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -77,7 +78,7 @@ fn build_sync(folder_path: &str, auto_serve: bool) -> Result<String, String> {
         watch: false,
         start_server: auto_serve,
         host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         // Mirrors `build_sync`'s own doc comment on `PipelineConfig::
         // exits_after_build`: this process drops its runtime right after
         // `run_pipeline` returns, so link cards are fetched before render
@@ -573,7 +574,7 @@ fn build_fixture(fixture_name: &str) -> (Cleanup, PathBuf) {
     copy_dir_recursive(&input_dir, &temp_dir).expect("Failed to copy input files");
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed for {}: {:?}", fixture_name, result);
-    (cleanup, temp_dir.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&temp_dir).staging_dir())
 }
 
 /// Run a snapshot test for a given fixture.
@@ -849,7 +850,7 @@ fn places_json_hash(mutate: impl FnOnce(&Path)) -> String {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let moss_dir = temp_dir.join(".moss/build.nosync/staging/_moss");
+    let moss_dir = MossPaths::new(&temp_dir).staging_dir().join("_moss");
     fs::read_dir(&moss_dir)
         .expect("_moss dir must exist")
         .flatten()
@@ -994,7 +995,7 @@ fn build_inline_site(files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
     }
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
-    (cleanup, temp_dir.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&temp_dir).staging_dir())
 }
 
 /// A default-language root with three posts and an `en/` tree with its own
@@ -1183,7 +1184,7 @@ fn test_basic_site_structure() {
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
     // Verify expected files exist
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     assert!(site_dir.join("index.html").exists(), "index.html should exist");
     assert!(site_dir.join("about/index.html").exists(), "about/index.html should exist");
     // CSS is now emitted with a content-hash filename; verify by prefix scan.
@@ -1226,7 +1227,7 @@ fn test_collection_site_structure() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     assert!(site_dir.join("index.html").exists(), "index.html should exist");
     assert!(site_dir.join("blog/index.html").exists(), "blog/index.html should exist");
     assert!(site_dir.join("blog/post-1/index.html").exists(), "blog/post-1/index.html should exist");
@@ -1266,7 +1267,7 @@ fn test_homepage_collection_cards_with_covers() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let homepage_content = fs::read_to_string(site_dir.join("index.html"))
         .expect("Failed to read index.html");
 
@@ -1360,7 +1361,7 @@ fn test_collection_requires_index_md() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let homepage_content = fs::read_to_string(site_dir.join("index.html"))
         .expect("Failed to read index.html");
 
@@ -1429,7 +1430,7 @@ fn test_collection_index_shows_article_list() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let collection_index = fs::read_to_string(site_dir.join("tutorials/index.html"))
         .expect("Failed to read tutorials/index.html");
 
@@ -1487,7 +1488,7 @@ fn test_collection_index_article_links_have_correct_href() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let collection_index = fs::read_to_string(site_dir.join("tutorials/index.html"))
         .expect("Failed to read tutorials/index.html");
 
@@ -1559,7 +1560,7 @@ fn test_flatten_lists_all_descendants() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let homepage = fs::read_to_string(site_dir.join("index.html"))
         .expect("Failed to read index.html");
 
@@ -1615,7 +1616,7 @@ fn test_no_flatten_only_direct_children() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let articles_index = fs::read_to_string(site_dir.join("articles/index.html"))
         .expect("Failed to read articles/index.html");
 
@@ -1669,7 +1670,7 @@ fn test_breadcrumbs_auto_enable_when_no_nav_items() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // With no nav items, breadcrumbs should auto-enable for nested pages
     let article = fs::read_to_string(site_dir.join("blog/my-post/index.html"))
@@ -1714,7 +1715,7 @@ fn test_image_paths_adjusted_for_pretty_urls() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let article = fs::read_to_string(site_dir.join("blog/my-post/index.html"))
         .expect("Failed to read article");
 
@@ -1770,7 +1771,7 @@ fn test_root_address_of_a_page_source_links_to_the_served_page() {
 
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
-    let home = fs::read_to_string(temp_dir.join(".moss/build.nosync/staging/index.html"))
+    let home = fs::read_to_string(MossPaths::new(&temp_dir).staging_dir().join("index.html"))
         .expect("Failed to read home page");
 
     let href_of = |text: &str| -> String {
@@ -1813,7 +1814,7 @@ fn test_css_no_default_link_underlines() {
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
     // CSS is now emitted with a content-hash filename; find it by prefix scan.
-    let moss_dir = temp_dir.join(".moss/build.nosync/staging/_moss");
+    let moss_dir = MossPaths::new(&temp_dir).staging_dir().join("_moss");
     let hashed_css_path = fs::read_dir(&moss_dir)
         .expect("_moss dir must exist")
         .flatten()
@@ -1876,7 +1877,7 @@ fn test_series_navigation_with_order() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // Part 1 (first): should have next but no prev
     let part1 = fs::read_to_string(site_dir.join("series/part-1/index.html"))
@@ -1986,7 +1987,7 @@ fn test_comments_precede_series_nav_in_dom_order() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
     let part2 =
         fs::read_to_string(site_dir.join("series/part-2/index.html")).expect("read part-2");
 
@@ -2076,7 +2077,7 @@ fn test_series_navigation_with_wikilink_punctuation_titles() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // The comma in "Rivers, Mountains, and Freedom" becomes a hyphen in the slug:
     // "rivers-mountains-and-freedom"
@@ -2178,7 +2179,7 @@ fn test_collection_explicit_order_wins_over_date_axis() {
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
     let collection = fs::read_to_string(
-        temp_dir.join(".moss/build.nosync/staging/travel/index.html"),
+        MossPaths::new(&temp_dir).staging_dir().join("travel/index.html"),
     )
     .expect("Failed to read collection index page");
 
@@ -2229,7 +2230,7 @@ fn test_default_favicon_when_no_user_favicon() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // Default favicon file should exist in output
     let favicon_path = site_dir.join("assets/favicon.svg");
@@ -2303,7 +2304,7 @@ fn test_user_favicon_takes_precedence() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // Favicon should exist
     let favicon_path = site_dir.join("assets/favicon.svg");
@@ -2349,7 +2350,7 @@ fn test_default_favicon_root_relative_paths() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // Nested article should have root-relative favicon path
     let about_html = fs::read_to_string(site_dir.join("about/index.html")).unwrap();
@@ -2393,7 +2394,7 @@ fn test_images_not_promoted_when_md_children_exist() {
     let result = build_sync(&temp_dir.to_string_lossy(), false);
     assert!(result.is_ok(), "Build failed: {:?}", result);
 
-    let site_dir = temp_dir.join(".moss/build.nosync/staging");
+    let site_dir = MossPaths::new(&temp_dir).staging_dir();
 
     // The first-post should exist as a page
     assert!(

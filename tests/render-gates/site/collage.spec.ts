@@ -832,7 +832,7 @@ test.describe("the contents lane's column is measured against main, not the wind
       return { main: main.getBoundingClientRect().width, cap: parseFloat(getComputedStyle(p).maxInlineSize), column: parseFloat(getComputedStyle(main.querySelector("article")!).maxInlineSize) };
     });
     expect(r.main, "main gave up the padding").toBeLessThan(1300);
-    expect(r.column, "the column is main's width less two lanes (92px each), not the window's").toBeCloseTo(Math.min(1200, r.main - 184), 0);
+    expect(r.column, "the column is main's width less two lanes (96px each), not the window's").toBeCloseTo(Math.min(1200, r.main - 192), 0);
   });
 });
 

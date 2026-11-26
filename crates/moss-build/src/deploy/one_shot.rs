@@ -73,6 +73,10 @@ pub(crate) struct CapturingAnnouncer {
 
 #[async_trait::async_trait]
 impl crate::build::ports::announcer::SealAnnouncer for CapturingAnnouncer {
+    fn needs_a_seal(&self) -> bool {
+        true
+    }
+
     fn promoted(&self, generation_id: &str) {
         self.inner.promoted(generation_id);
     }
@@ -165,7 +169,10 @@ pub(crate) async fn build_and_describe(
         watch: false,
         start_server: false,
         host,
-        trigger: crate::build::BuildTrigger::Full,
+        // Pages nothing changed are carried from the last seal. The build
+        // never stops at its entry: the announcer below must receive a seal.
+        trigger: crate::build::BuildTrigger::Unobserved,
+        reason: Some(crate::build::BuildReason::Publish),
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -288,7 +295,7 @@ mod tests {
             watch: false,
             start_server: false,
             host,
-            trigger: crate::build::BuildTrigger::Full,
+            trigger: crate::build::BuildTrigger::Full, reason: None,
             exits_after_build: true,
             site_url_override: None,
             server_port: None,
@@ -308,5 +315,130 @@ mod tests {
             !sealed.expect("checked").files().is_empty(),
             "the manifest that reaches the publish is the one that was sealed, not an empty twin"
         );
+    }
+
+    fn build_counts(root: &Path) -> serde_json::Value {
+        let profile = std::fs::read_to_string(crate::moss_paths::MossPaths::new(root).profile()).unwrap();
+        profile.lines().rev().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|record| record["kind"] == "build").unwrap()["counts"].clone()
+    }
+
+    async fn deploy_build(root: &Path) -> SealedManifest {
+        deploy_build_with(root, crate::build::PluginMode::Skip).await
+    }
+
+    async fn deploy_build_with(root: &Path, plugins: crate::build::PluginMode) -> SealedManifest {
+        let root = crate::vault::paths::VaultRoot::resolve(root);
+        require_sealed(build_and_seal(&root, crate::cli::host::cli_host_ports(root.as_str()),
+            plugins, false).await.unwrap()).unwrap()
+    }
+
+    fn two_page_site(about: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
+        std::fs::write(dir.path().join("about.md"), about).unwrap();
+        dir
+    }
+
+    /// A deploy with nothing changed since the last build renders no page,
+    /// and still seals the generation it uploads from.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deploy_with_nothing_changed_carries_every_page() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout us.\n");
+        let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
+        // The first build writes files the second reads, so the second renders.
+        deploy_build(dir.path()).await;
+        let first = deploy_build(dir.path()).await;
+        let second = deploy_build(dir.path()).await;
+        let counts = build_counts(dir.path());
+        assert_eq!(counts["pages_rendered"], 0, "{counts}");
+        assert!(counts["pages_carried"].as_u64().unwrap() >= 1, "{counts}");
+        assert_eq!(second.files(), first.files(), "a carried deploy uploads the same site");
+    }
+
+    /// The publish gate reads what the deploy's own build found: a carried
+    /// page's missing picture is found again, not left to an earlier answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_carried_deploy_still_finds_a_missing_reference() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\n![Team](team.png)\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        let _session = crate::system::folder_session::register_session(&folder);
+        let records = crate::system::build_records::records();
+        deploy_build(dir.path()).await;
+        deploy_build(dir.path()).await;
+        let first = records.publish_preflight(&folder).expect("the first build installs its evidence");
+        assert!(!first.missing_references.is_empty(), "fixture: team.png is missing");
+        deploy_build(dir.path()).await;
+        assert!(build_counts(dir.path())["pages_carried"].as_u64().unwrap() >= 1);
+        let second = records.publish_preflight(&folder).unwrap();
+        assert!(second.build_generation > first.build_generation, "the carried build installs its own evidence");
+        assert_eq!(second.missing_references.len(), first.missing_references.len());
+        assert!(matches!(crate::deploy::publish_refusal(&folder).map(|r| r.kind), Some(crate::deploy::RefusalKind::MissingReferences)));
+    }
+
+    const COMMENT_TEXT: &str = "MOSS_MATTERS_TEST_PROFILE";
+
+    /// A site whose process hook writes the comments `about` shows into
+    /// `.moss/data/social/`.
+    fn comment_site() -> tempfile::TempDir {
+        std::env::remove_var(COMMENT_TEXT);
+        let dir = two_page_site("---\ntitle: About\nuid: ab12cd34\ncomments: true\n---\n\nAbout us.\n");
+        let plugin = dir.path().join(".moss/plugins/comment-writer");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "[services.comments]\nenabled = true\n").unwrap();
+        for file in ["manifest.json", "main.bundle.js"] {
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plugins/comment-writer").join(file);
+            std::fs::copy(fixture, plugin.join(file)).unwrap();
+        }
+        dir
+    }
+
+    /// Deploy until the hook has nothing new to write.
+    async fn settle(root: &Path) {
+        for _ in 0..3 {
+            deploy_build_with(root, crate::build::PluginMode::Blocking).await;
+        }
+    }
+
+    fn about_html(root: &Path, sealed: &SealedManifest) -> String {
+        assert!(sealed.files().contains_key("about/index.html"));
+        std::fs::read_to_string(crate::moss_paths::MossPaths::new(root).current_ptr().join("about/index.html")).unwrap()
+    }
+
+    /// A process hook that writes nothing new leaves the deploy free to carry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deploy_whose_process_hook_wrote_nothing_still_carries() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = comment_site();
+        let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
+        settle(dir.path()).await;
+        let sealed = deploy_build_with(dir.path(), crate::build::PluginMode::Blocking).await;
+        let counts = build_counts(dir.path());
+        assert_eq!(counts["pages_rendered"], 0, "{counts}");
+        assert!(counts["pages_carried"].as_u64().unwrap() >= 1, "{counts}");
+        assert!(about_html(dir.path(), &sealed).contains("First reader comment"), "fixture: the page shows the hook's comment");
+    }
+
+    /// A process hook writes the comments a page shows into `.moss/data/social/`
+    /// during the deploy's own build, after the build measured `.moss/`, and
+    /// with nothing in the folder or the plugin's directory moving. The
+    /// deploy ships the page with the new comment, not the carried old one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deploy_ships_the_comments_its_process_hook_wrote() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = comment_site();
+        let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
+        settle(dir.path()).await;
+        std::env::set_var(COMMENT_TEXT, "Second reader comment");
+        let sealed = deploy_build_with(dir.path(), crate::build::PluginMode::Blocking).await;
+        std::env::remove_var(COMMENT_TEXT);
+        let counts = build_counts(dir.path());
+        let written = std::fs::read_to_string(dir.path().join(".moss/data/social/comment-writer.json")).unwrap();
+        assert!(written.contains("Second reader comment"), "fixture: the hook wrote the new comment: {written}");
+        let html = about_html(dir.path(), &sealed);
+        assert!(html.contains("Second reader comment"), "{counts}");
+        assert!(!html.contains("First reader comment"), "{counts}");
     }
 }

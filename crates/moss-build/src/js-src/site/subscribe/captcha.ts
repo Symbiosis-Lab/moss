@@ -20,14 +20,16 @@ export const VERIFYING: Record<Lang, string> = {
  * Resolves true on `passed`, false when the visitor closes the modal (backdrop
  * click, or Escape in this page or in the frame). Rejects on `failed`, after
  * `QUIET_MS` with nothing from the page before `interactive` (Turnstile never
- * loaded or never answered), and two minutes after `interactive`.
+ * loaded or never answered), and two minutes after `interactive`. An expired
+ * check can return `retry`: the caller must repeat its original request and
+ * handle a new challenge URL, without treating the old check as clearance.
  */
 export const QUIET_MS = 20000;
 const OPEN_MS = 120000;
 
-export function solveCaptcha(pageUrl: string): Promise<boolean> {
+export function solveCaptcha(pageUrl: string): Promise<boolean | "retry"> {
   const label = VERIFYING[langBucket(document.documentElement.lang)];
-  return new Promise<boolean>((resolve, reject) => {
+  return new Promise<boolean | "retry">((resolve, reject) => {
     const overlay = document.createElement("div");
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-modal", "true");
@@ -66,7 +68,8 @@ export function solveCaptcha(pageUrl: string): Promise<boolean> {
     };
     const onMessage = (ev: MessageEvent): void => {
       if (ev.source !== frame.contentWindow) return;
-      const state = (ev.data as { moss_captcha?: string } | null)?.moss_captcha;
+      const data = ev.data as { moss_captcha?: string; retry?: boolean } | null;
+      const state = data?.moss_captcha;
       if (state === "interactive") {
         // A puzzle the visitor is solving gets the long wait.
         window.clearTimeout(timer);
@@ -77,7 +80,10 @@ export function solveCaptcha(pageUrl: string): Promise<boolean> {
       } else if (state === "passed") finish(() => resolve(true));
       else if (state === "failed") finish(() => reject(new Error("captcha failed")));
       // Escape pressed inside the frame, where this window cannot hear it.
-      else if (state === "cancelled") cancel();
+      else if (state === "cancelled") {
+        if (data?.retry === true) finish(() => resolve("retry"));
+        else cancel();
+      }
     };
     window.addEventListener("message", onMessage);
     overlay.addEventListener("click", onClick);
@@ -86,4 +92,90 @@ export function solveCaptcha(pageUrl: string): Promise<boolean> {
       window.setTimeout(() => finish(() => reject(new Error("captcha timeout"))), ms);
     let timer = giveUpAfter(QUIET_MS);
   });
+}
+
+/** Background measurement never opens a modal or changes the subscription result. */
+export function observeCaptcha(pageUrl: string): void {
+  try {
+    const url = new URL(pageUrl, location.href);
+    if (url.protocol !== "https:") return;
+    const frame = document.createElement("iframe");
+    frame.hidden = true;
+    frame.tabIndex = -1;
+    frame.setAttribute("aria-hidden", "true");
+    frame.dataset.mossCaptchaObservation = "";
+    frame.src = url.href;
+    const finish = (): void => {
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      frame.remove();
+    };
+    const onMessage = (ev: MessageEvent): void => {
+      if (ev.source === frame.contentWindow && ev.origin === url.origin && ev.data?.moss_captcha === "observed") finish();
+    };
+    const timer = window.setTimeout(finish, 30000);
+    window.addEventListener("message", onMessage);
+    frame.addEventListener("error", finish, { once: true });
+    document.body.appendChild(frame);
+  } catch { /* Observation cannot change a successful form result. */ }
+}
+
+/** The API-origin frame warms a token without taking focus or delaying a press. */
+export function prewarmCaptcha(form: HTMLFormElement): () => { turnstile_started: boolean; turnstile_token?: string } {
+  let frame: HTMLIFrameElement | undefined;
+  let token: { value: string; at: number } | undefined;
+  let started = false;
+  let disposed = false;
+  let observer: IntersectionObserver | undefined;
+  let timer: number | undefined;
+  const action = new URL(form.action, location.href);
+  const site = action.pathname.match(/\/sites\/([a-z0-9][a-z0-9-]{0,62})\/subscribe$/)?.[1];
+  const url = new URL(`/captcha/subscription-prewarm/${site}/`, action.origin);
+  url.searchParams.set('origin', location.origin);
+  const stop = (): void => {
+    disposed = true;
+    observer?.disconnect();
+    window.clearTimeout(timer);
+    form.removeEventListener('focusin', start);
+    window.removeEventListener('message', message);
+    window.removeEventListener('pagehide', stop);
+    frame?.remove();
+  };
+  const message = (event: MessageEvent): void => {
+    if (!frame || event.source !== frame.contentWindow || event.origin !== action.origin) return;
+    if (!form.isConnected) { stop(); return; }
+    if (event.data?.moss_prewarm === 'started') started = true;
+    if (event.data?.moss_prewarm === 'expired') token = undefined;
+    if (event.data?.moss_prewarm === 'ready' && typeof event.data.token === 'string' && event.data.token.length <= 2048) {
+      started = true;
+      token = { value: event.data.token, at: Date.now() };
+    }
+  };
+  const start = (): void => {
+    if (frame || disposed || !site || action.protocol !== 'https:') return;
+    observer?.disconnect();
+    frame = document.createElement('iframe');
+    frame.hidden = true;
+    frame.tabIndex = -1;
+    frame.setAttribute('aria-hidden', 'true');
+    frame.title = 'Subscription check';
+    frame.dataset.mossCaptchaPrewarm = '';
+    frame.src = url.href;
+    window.addEventListener('message', message);
+    window.addEventListener('pagehide', stop);
+    document.body.appendChild(frame);
+    timer = window.setTimeout(stop, 300_000);
+  };
+  form.addEventListener('focusin', start);
+  if (typeof IntersectionObserver !== 'undefined') {
+    observer = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) start(); });
+    observer.observe(form);
+  }
+  return () => {
+    const ready = token && Date.now() - token.at < 240_000 ? token.value : undefined;
+    token = undefined;
+    // Tokens are single use. Never replay one on an enforcing resubmission.
+    if (ready) stop();
+    return { turnstile_started: started, ...(ready ? { turnstile_token: ready } : {}) };
+  };
 }

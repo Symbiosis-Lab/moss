@@ -34,7 +34,7 @@ both erode legibility.
 serves, printing the URL it bound — read that, do not assume a port. (8080 is
 only the first one tried; a foreign dev server holding it means moss lands
 elsewhere, and a hardcoded `localhost:8080` would audit someone else's site.)
-Inspect built HTML under `.moss/build.nosync/current/` (the active frozen generation);
+Inspect built HTML in the folder `moss build <folder> --json` names as `output`;
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
@@ -44,7 +44,7 @@ the `.css` files under its `_moss/` are minified build output — use
 
 **Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` read the files currently on disk without running a build, so versions work before the site has ever been built. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move pages added since that version to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`. To try a restructure on a copy instead, copy the folder without `.moss/identity/`, `.moss/data/`, `.moss/state.toml` and `.moss/build.nosync/`: the site's identity and publish record stay with the original, and `moss deploy <copy> --dry-run` on the copy reports that it has no site and that a real deploy would create a new signing key and be refused until `moss env` names an environment.
 
-**Version control.** Commit `.moss/config.toml`, `.moss/theme/` and `.moss/redirects.json`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
+**Version control.** Commit `.moss/config.toml`, `.moss/theme/`, `.moss/redirects.json` and `.moss/AGENTS.md`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
 
 ## First, get the live vocabulary
 
@@ -103,8 +103,13 @@ declarations that fight each other.
   `:::grid` at the top of the body, when its text is the title. A `:::hero`
   at the top that holds words takes the title's place: a `# Heading` in it
   is the page's title, and without one the title is kept for screen readers
-  only. A page in the navigation takes any `# Heading` it opens with as its
-  title, after a leading picture too. Anywhere else the page shows its
+  only. A wide picture (wider than tall, at least 1200 pixels) alone above
+  the page's only `# Heading` is that page's banner with no fence: write the
+  picture, then the title. A logo, a portrait or a smaller picture stays in
+  the column with its caption, and so does one with a width word (`|body`),
+  a caption line under it or a second `# Heading` on the page. A page in the
+  navigation takes any `# Heading` it opens with as its title, after a
+  leading picture too. Anywhere else the page shows its
   title above the body, so a heading whose text differs follows it.
   A name that starts with a date stamp (`2026-11-06 Autumn hotpot.md`) dates the page and the words after it
   are the title; a name that is only the stamp is an untitled, dated post (`moss guide authoring`, "Content structure").
@@ -149,6 +154,16 @@ For a folder of items with a metadata file (pictures plus a CSV, as an archive o
 10. **The source note** becomes a page by adding frontmatter above its unchanged text.
 11. `moss build --strict`, then read every warning and note.
 
+## A look taken from the person's own material
+
+A site built without a source of its own comes out as the generic template: a centred hero over a gradient, three feature cards with icons, rounded cards with soft shadows everywhere, a purple-blue palette, one sans serif (usually Inter) for everything, a stock "Get started" button, emoji as bullets. Choose the look before writing any CSS, and take it from the person.
+
+1. Gather their material first: their own words and how they write them, their photographs, drawings and objects, the things they make, their old site, their logo and colour. Look at the pictures themselves, not at descriptions of them.
+2. Choose one specific direction and write it in a sentence with its reason: "a printed programme, set in a serif, because they run a theatre and their posters are typeset". If the sentence would fit any other person, it is not a direction yet.
+3. Take the parts from the material: type from their lettering or the tone of their words, the palette from their own pictures (two or three colours sampled from them, one of them the accent), the layout from how their own work is arranged. Their strongest picture or sentence carries the first screen at full size, instead of a stock hero.
+4. Express it in moss's own terms: `--moss-*` tokens first, then selectors on moss's markup (`moss describe --css <selector>`), never a class the page or theme invents, and the pages stay plain markdown. A look that needs HTML in the pages is the wrong look or a gap in moss to report.
+5. Check the result against the person. Would someone who knows them recognise the site as theirs with the name covered? Then name every part of the first screen and one inner page that could sit unchanged on another person's site, and replace or delete it. Keep what they already have when it is good (a logo, a colour, a way of setting dates).
+
 ## Styling: the one-sentence model
 
 Edit `.moss/theme/style.css`: override any `--moss-*` token in `:root {}` (light)
@@ -156,8 +171,8 @@ and `:root[data-theme="dark"] {}` (dark), then write ordinary CSS selectors for
 the rest. No `!important`, no `@layer`.
 
 moss's default rules ship **compiled into the binary** — there is no readable
-default stylesheet on disk anywhere in a site folder. Everything under
-`.moss/build.nosync/` is regenerated output, not source. A themed site has at least two
+default stylesheet on disk anywhere in a site folder. Everything in the build output
+(the `output` path `moss build --json` prints) is regenerated, not source. A themed site has at least two
 stylesheets there: `_moss/style.<hash>.css` (the built-in defaults, minified to
 one line with comments stripped) and `_moss/theme/style.<hash>.css` (a
 hashed copy of your own `.moss/theme/style.css`), plus one
@@ -240,6 +255,12 @@ For a quotation and its source, and for footnotes that move into the margin on a
 
 A stylesheet that is longer than the design needs is a defect even when it renders correctly: build before and after and compare the pages.
 
+## Where you may write
+
+Outside `.moss/`, paths are the author's by default; inside `.moss/`, paths are moss's by default. `moss describe --json` is the authoritative list of exceptions under `.paths`: write paths marked `author`, and leave paths marked `moss` to the command in `changed_by` (`null` for output moss regenerates). The theme, assets, templates, settings and this site's own notes for agents are authoring surfaces. Build output, version history, publish records and the site's keys belong to moss; a hand edit there is overwritten or breaks publishing.
+
+Never hand-apply a rewrite `moss migrate` offers: run it, so it saves a version first. Never lower `min_moss_version` or `schema_version`. Never add a class to pages to make a theme rule match again.
+
 ## Hard rules
 
 - Show a destination once. What the home page already shows (a set of listings, a map) is not also a nav item, and a nav item's page is not repeated on the home page; the same holds for a footer link that repeats the nav.
@@ -252,6 +273,7 @@ A stylesheet that is longer than the design needs is a defect even when it rende
   `::: {.figure fig=teapot}` (which emits `data-fig="teapot"`), or as a raw
   `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
   Drawings and your own JavaScript: `moss guide authoring`.
+- Words live in the page's HTML, readable with JavaScript off; a script never supplies text. See "Pages read without JavaScript" in `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
 - A button that sends or waits changes the moment it is pressed and shows moss's loading state until the answer comes; a form the theme writes itself uses moss's button for it. See `moss guide authoring`, "A press answers at once".
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
@@ -339,7 +361,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Handing a site to another account:** `moss site transfer <folder> --to <email>` mails that address one link; accepting it moves the site to their account (its address, files, subscribers and history stay), and this folder's key can no longer publish it. When this same folder should keep publishing as the new owner, add `--keep-publishing`: the receiver can then also take this folder's key, on its own button, and the folder publishes as them from then on; it is refused when the key has also published another site of the sender's. Run it with `--dry-run` first; `--cancel` withdraws a pending transfer. A site billed through Stripe, or with a domain bought through moss linked, is refused. Ask the human for the address first: it sends a real email.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
-- **Any other host:** set the site's address under `[site]` in `.moss/config.toml` (`url = "https://example.com/"`; `--site-url=` overrides it for one build), run `moss build <folder>`, then upload `.moss/build.nosync/current/` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). The address is required there because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and otherwise derive from mosspub.com deployment state, which any other host never sets. A site served under a path gives the whole address (`url = "https://example.edu/~alice/"`): the build puts every link, picture, stylesheet and script it ships under `/~alice/`, so the output is uploaded as that folder's contents. A link starting with `/` is a page of this site; a page of another site on the same host (`/~bob/`) is linked by its full address. Flag details: `moss describe --json`.
+- **Any other host:** set the site's address under `[site]` in `.moss/config.toml` (`url = "https://example.com/"`; `--site-url=` overrides it for one build), run `moss build <folder> --json`, then upload the folder it names as `output` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). The address is required there because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and otherwise derive from mosspub.com deployment state, which any other host never sets. A site served under a path gives the whole address (`url = "https://example.edu/~alice/"`): the build puts every link, picture, stylesheet and script it ships under `/~alice/`, so the output is uploaded as that folder's contents. A link starting with `/` is a page of this site; a page of another site on the same host (`/~bob/`) is linked by its full address. Flag details: `moss describe --json`.
 
 ## Harvest, don't unilaterally invent
 

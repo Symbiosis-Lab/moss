@@ -6,6 +6,7 @@
 //! fails when they go stale, and `SNAPSHOTS=overwrite` rewrites them. All
 //! names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -77,7 +78,7 @@ fn site() -> Site {
 
 impl Site {
     fn page(&self, url: &str) -> String {
-        let file = self.root.join(".moss/build.nosync/current").join(url).join("index.html");
+        let file = MossPaths::new(&self.root).current_ptr().join(url).join("index.html");
         std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()))
     }
 

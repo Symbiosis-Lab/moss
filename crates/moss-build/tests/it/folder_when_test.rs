@@ -5,10 +5,10 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
-fn shows(index: &str, embed_page: &str) -> Site {
-    Site::new(&[
+fn shows(index: &str, embed_page: &str) -> LoggedSite {
+    LoggedSite::new(&[
         ("index.md", "---\ntitle: Example Hall\n---\n\nWelcome.\n"),
         ("shows/index.md", index),
         ("lab.md", embed_page),

@@ -18,6 +18,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Syndication: one contract for posting copies to other networks](syndication/README.md) | In progress |
 | [Country maps: colour whole countries from a table](country-maps/README.md) | In progress |
 | [A position ruler for a row along an ordered axis](position-ruler/README.md) | Proposed |
+| [Plugin accounts: one Sign in button for every channel](plugin-accounts/README.md) | Proposed |
 | [Duplicate stores in a synced folder: heal them, and stop making them](synced-store-duplicates/README.md) | Shipped |
 | [Keep what a build reads downloaded, in a cloud site folder](keep-site-downloaded/README.md) | Proposed |
 | [Fetch a cached picture before encoding it again, in a cloud site folder](picture-cache-fetch/README.md) | Proposed |
