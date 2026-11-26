@@ -55,13 +55,23 @@ pub struct ServiceCommon {
     pub provider: Option<String>,
 }
 
-/// `[services.analytics]`. Provider today: `goatcounter`.
+/// `[services.analytics]`. Provider: `goatcounter`, or the name of a plugin in
+/// the site's folder that is an analytics service, with the site's `site_id`
+/// there.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[derive(specta::Type)]
 pub struct AnalyticsService {
     #[serde(flatten)]
     pub common: ServiceCommon,
     pub script: Option<String>,
+    pub site_id: Option<String>,
+}
+
+impl AnalyticsService {
+    /// The plugin that serves analytics, and the site's id there.
+    pub fn plugin(&self) -> Option<(&str, &str)> {
+        self.common.provider.as_deref().filter(|p| *p != "goatcounter").map(|p| (p, self.site_id.as_deref().unwrap_or_default()))
+    }
 }
 
 /// `[services.comments]`. Provider: `artalk`.
@@ -216,7 +226,10 @@ impl ServicesConfig {
         }
 
         if let Some(a) = &self.analytics {
-            check("analytics", &a.common, &["goatcounter"], a.script.is_some(), hosted_on_moss)?;
+            if let Some((plugin, "")) = a.plugin() {
+                return Err(format!("[services.analytics] provider is \"{plugin}\", which needs the site's site_id there"));
+            }
+            check("analytics", &a.common, &[a.plugin().map_or("goatcounter", |(p, _)| p)], a.script.is_some() || a.plugin().is_some(), hosted_on_moss)?;
         }
         if let Some(c) = &self.comments {
             // Comments are always wired post-v4: env-derived server URL means
@@ -344,5 +357,16 @@ mod members_tests {
     fn reply_to_never_reaches_the_public_policy() {
         let members = read("[members]\njoin = \"invite\"\nreply_to = \"desk@harbor-mail.org\"\n").unwrap();
         assert_eq!(serde_json::to_string(&members).unwrap(), r#"{"join":"invite"}"#);
+    }
+}
+
+#[cfg(test)]
+mod analytics_plugin_tests {
+    #[test]
+    fn a_plugin_provider_needs_the_site_s_id() {
+        let services = |toml: &str| toml::from_str::<super::ServicesConfig>(toml).unwrap().validate(false);
+        assert_eq!(services("[analytics]\nprovider = \"cloudflare\"\nsite_id = \"t0ken\"\n"), Ok(()));
+        assert!(services("[analytics]\nprovider = \"cloudflare\"\n").unwrap_err().contains("site_id"));
+        assert_eq!(services("[analytics]\nprovider = \"goatcounter\"\nscript = \"https://x.goatcounter.com/count\"\n"), Ok(()));
     }
 }

@@ -1,6 +1,7 @@
 //! CLI subcommand: `moss provider [status|connect|disconnect]`, the site's
-//! outside providers of its parts (the newsletter today), connected through
-//! the hosting service with the folder's own signing key.
+//! outside providers of its parts. The newsletter connects through the hosting
+//! service with the folder's own signing key; analytics connects in the
+//! plugin's own code, which keeps the key outside the folder.
 //!
 //!   moss provider status <folder> [<part>]        Every part, or one: the provider named, whether
 //!                                                 its plugin is installed, the service's state;
@@ -27,11 +28,12 @@ use crate::seta::client::MossSetaClient;
 use crate::seta::newsletter::{ConnectAnswer, ConnectionState, ListPick, NewsletterRefusal, SetaNewsletter};
 use crate::vault_root::VaultRoot;
 
-const PARTS: &str = "newsletter";
+const PARTS: &str = "newsletter, analytics";
 
 fn part(name: &str) -> Result<Part, String> {
     match name {
         "newsletter" => Ok(Part::Newsletter),
+        "analytics" => Ok(Part::Analytics),
         other => Err(format!("`{other}` is not a part a provider serves; the parts are: {PARTS}")),
     }
 }
@@ -72,10 +74,14 @@ pub fn run(args: &[String]) -> i32 {
             if let Err(e) = part(named) {
                 return emit(Outcome::fail(json, 1, e));
             }
+            if named == "analytics" && verb == "disconnect" {
+                return emit(Outcome::fail(json, 1, "remove [services.analytics] from .moss/config.toml to stop counting"));
+            }
             if verb == "disconnect" {
                 return run_async(cmd_disconnect(folder, json));
             }
             match parse_connect(&args[3..]) {
+                Ok(c) if named == "analytics" => run_async(cmd_connect_analytics(folder, c.provider, json)),
                 Ok(c) => run_async(cmd_connect(folder, c, json)),
                 Err(e) => emit(Outcome::fail(json, 1, e)),
             }
@@ -147,8 +153,11 @@ async fn status_flow(client: &MossSetaClient, site_id: &str, folder: &str, json:
         Ok(a) => a,
         Err(e) => return Outcome::fail(json, 1, e),
     };
+    let services = crate::build::site_config::get_services_config(folder).ok();
+    let counted = services.as_ref().and_then(|s| s.analytics.as_ref()?.plugin());
     if json {
-        return Outcome { code, out: format!("{}\n", serde_json::json!({ "newsletter": newsletter, "accounts": accounts })), err: String::new() };
+        let analytics = counted.map(|(provider, site_id)| serde_json::json!({ "provider": provider, "site_id": site_id }));
+        return Outcome { code, out: format!("{}\n", serde_json::json!({ "newsletter": newsletter, "analytics": analytics, "accounts": accounts })), err: String::new() };
     }
     let words = match (&newsletter["provider"], connected) {
         (serde_json::Value::Null, _) => "the hosting service sends it".to_string(),
@@ -157,7 +166,8 @@ async fn status_flow(client: &MossSetaClient, site_id: &str, folder: &str, json:
     };
     let problem = newsletter["problem"].as_str().map(|p| format!("\n  {p}")).unwrap_or_default();
     let rows: String = accounts.iter().map(AccountStatus::row).collect();
-    Outcome { code, out: format!("newsletter: {words}{problem}\n{rows}"), err: String::new() }
+    let analytics = counted.map(|(p, id)| format!("analytics: {p} counts it as {id}\n")).unwrap_or_default();
+    Outcome { code, out: format!("newsletter: {words}{problem}\n{analytics}{rows}"), err: String::new() }
 }
 
 /// Every installed plugin that holds an account: how it signs in, and the
@@ -239,7 +249,7 @@ async fn connect_flow(
         Err(e) => return Outcome::fail(json, 1, e),
     };
     let Some(key) = credential.fits(&paste) else {
-        return Outcome::fail(json, 1, format!("that is not a {provider} key: it starts with {} and is {} characters", credential.prefix, credential.length));
+        return Outcome::fail(json, 1, format!("that is not a {provider} key: {}", credential.shape()));
     };
     let answer = match client.newsletter_connect(site_id, &key, c.list).await {
         Ok(a) => a,
@@ -262,6 +272,54 @@ async fn connect_flow(
     };
     let out = if json { format!("{}\n", serde_json::json!(answer)) } else { text };
     Outcome { code, out, err: String::new() }
+}
+
+async fn cmd_connect_analytics(folder: &str, provider: Option<String>, json: bool) -> i32 {
+    let root = VaultRoot::resolve(folder);
+    emit(connect_analytics_flow(root.as_str(), provider, read_key, json).await)
+}
+
+/// The plugin named by `--provider` or `[services.analytics]`, its key read
+/// as for a newsletter; with no key to read, the one kept is used.
+async fn connect_analytics_flow(
+    folder: &str,
+    provider: Option<String>,
+    read_key: impl FnOnce(&Credential) -> Result<String, String>,
+    json: bool,
+) -> Outcome {
+    use crate::plugins::contributions::provider::{sign_in, SignIn};
+    use crate::plugins::manager::part_call::PartRefusal;
+    let named = crate::build::site_config::get_services_config(folder).ok().and_then(|s| s.analytics).and_then(|a| a.plugin().map(|(p, _)| p.to_string()));
+    let Some(plugin) = provider.or(named) else {
+        return Outcome::fail(json, 1, "this folder names no analytics provider: pass --provider <plugin>");
+    };
+    let manager = match crate::plugins::manager::PluginManager::new(folder, crate::plugins::adapter_host::AdapterHost::headless(crate::build::ports::reporter::discard_owned())) {
+        Ok(m) => m,
+        Err(e) => return Outcome::fail(json, 1, e),
+    };
+    let manifest = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(folder, &plugin));
+    let credential = manifest.and_then(|m| match sign_in(&m) {
+        Some(SignIn::Key(c)) => Some(c),
+        _ => None,
+    });
+    let read = credential.as_ref().map(read_key);
+    let paste = read.as_ref().and_then(|r| r.as_ref().ok());
+    let refusal = match manager.connect_analytics(&plugin, paste.map(String::as_str)).await {
+        Ok(site_id) => {
+            let out = match json {
+                true => format!("{}\n", serde_json::json!({ "status": "connected", "provider": plugin, "site_id": site_id })),
+                false => format!("connected: {plugin} counts this site as {site_id}\n"),
+            };
+            return Outcome { code: 0, out, err: String::new() };
+        }
+        Err(r) => r,
+    };
+    let code = if matches!(refusal, PartRefusal::NotServed | PartRefusal::WrongKey { .. }) { 1 } else { 3 };
+    let why = match (&refusal, read.and_then(Result::err)) {
+        (PartRefusal::SignIn, Some(no_key)) => no_key,
+        _ => refusal.words(&plugin, credential.as_ref().map(|c| c.url.as_str())),
+    };
+    Outcome::fail(json, code, why)
 }
 
 /// What a refusal means and what to do about it, in the provider's own words.

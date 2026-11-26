@@ -246,6 +246,18 @@ pub fn save_newsletter_provider(project_path: &str, provider: Option<&str>) -> R
     write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
 }
 
+/// Name `provider` as the site's analytics service, with the site's id there:
+/// `[services.analytics] provider` and `site_id`.
+pub fn save_analytics_service(project_path: &str, provider: &str, site_id: &str) -> Result<(), String> {
+    crate::config::provider_name(provider)?;
+    let config_path = Path::new(project_path).join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
+    let analytics = subtable(subtable(&mut root, "services")?, "analytics")?;
+    analytics.insert("provider".to_string(), Value::String(provider.to_string()));
+    analytics.insert("site_id".to_string(), Value::String(site_id.to_string()));
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
 /// Set the site's address to a custom domain: `[site].url = "https://<domain>/"`
 /// in config.toml (dropping an older `[site].domain`), the one place the build
 /// reads it from. When the domain actually changed, resets the

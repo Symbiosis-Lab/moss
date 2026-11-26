@@ -970,6 +970,7 @@ fn build_deploy_only_fixture_pages() -> (String, String) {
                 provider: Some("goatcounter".into()),
             },
             script: Some("https://morph-guard-fixture.goatcounter.com/count".into()),
+            site_id: None,
         }),
         ..Default::default()
     };

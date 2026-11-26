@@ -255,22 +255,20 @@ pub fn generate_native_slots<'m>(
     // every build mode so the published artifact is deterministic. Preview
     // safety is the serve-time strip (preview server), since a foreign
     // analytics script cannot self-gate. (See deploy-generation design §6.)
-    if let Some(analytics_script) = services
-        .analytics
-        .as_ref()
-        .and_then(|a| a.script.as_deref())
-    {
-        use crate::build::markdown::AnalyticsConfig as FrontmatterAnalytics;
-        let ac = FrontmatterAnalytics {
-            url: analytics_script.to_string(),
-            provider: None,
-            site_id: None,
-        };
+    let analytics_tag = services.analytics.as_ref().and_then(|a| match a.plugin() {
+        Some((plugin, site_id)) => crate::plugins::contributions::provider::analytics_tag(project_path, plugin, site_id)
+            .map_err(|why| log::warn!(target: "build", "{why}; the site builds without analytics"))
+            .ok(),
+        None => a.script.as_deref().map(|url| {
+            crate::build::markdown::AnalyticsConfig { url: url.to_string(), provider: None, site_id: None }.to_script_tag()
+        }),
+    });
+    if let Some(tag) = analytics_tag {
         // Mark the element itself so the preview server can remove it from
         // served responses while the deployed artifact keeps it — ship's
         // StripPreviewAttrs pass leaves this attribute alone by design
         // (`build::ship::apply_transform`).
-        let script_tag = mark_deploy_only(&ac.to_script_tag());
+        let script_tag = mark_deploy_only(&tag);
         let result = EnhanceResult {
             success: true,
             slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::Static { html: script_tag })]),

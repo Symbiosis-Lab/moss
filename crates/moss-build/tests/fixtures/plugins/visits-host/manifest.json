@@ -1,0 +1,15 @@
+{
+  "name": "visits-host",
+  "version": "0.1.0",
+  "display_name": "Visits host",
+  "entry": "main.bundle.js",
+  "global_name": "VisitsHost",
+  "capabilities": [],
+  "contributes": {
+    "account": { "kind": "key", "url": "https://visits.example/tokens", "length": 40 },
+    "provider": [
+      { "part": "analytics", "needs": "Analytics · Edit", "addresses": ["https://visits.example/beacon.js", "https://visits.example/api"],
+        "analytics": { "script": "https://visits.example/beacon.js", "attributes": { "data-site": "{site_id}" }, "reads": "daily_counts" } }
+    ]
+  }
+}

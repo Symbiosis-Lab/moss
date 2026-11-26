@@ -113,10 +113,12 @@ async fn status_is_one_object_keyed_by_part() {
     let tmp = folder("provider = \"mailer\"\n");
     let body = r#"{"connection":{"state":"connected","pausedFor":null,"fromMoss":null,"sender":null,"senders":[],
         "canSend":true,"account":"news@example.com","list":"Readers"},"counts":{"waiting":0}}"#;
+    crate::vault::config::save_analytics_service(&path(&tmp), "mailer", "s1").unwrap();
     let (_s, _mock, client) = seta("GET", "/status", 200, body).await;
     let out = status_flow(&client, "site-1", &path(&tmp), true).await;
     assert_eq!(out.code, 0, "{}", out.out);
     let v: serde_json::Value = serde_json::from_str(&out.out).unwrap();
+    assert_eq!(v["analytics"], serde_json::json!({ "provider": "mailer", "site_id": "s1" }));
     let n = &v["newsletter"];
     assert_eq!((n["provider"].as_str(), n["installed"].as_bool(), n["connected"].as_bool()), (Some("mailer"), Some(true), Some(true)));
     let a = &v["accounts"][0];
@@ -179,4 +181,32 @@ async fn a_refusal_in_text_says_what_to_do() {
     let (_s, _mock, client) = seta("POST", "/connect", 422, r#"{"refused":"auth"}"#).await;
     let out = connect_flow(&client, "site-1", &path(&tmp), connect(None, Some(ListPick::Id("l1".into()))), |_| Ok(KEY.into()), false).await;
     assert_eq!(out.out.trim(), "mailer did not accept the key: make a new one at https://mailer.example/keys");
+}
+
+/// A folder at example.org with an analytics plugin, `counter`, installed: the
+/// `visits-host` fixture under its own name, so its kept token is its own.
+fn counted_folder() -> tempfile::TempDir {
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".moss")).unwrap();
+    std::fs::write(tmp.path().join(".moss/config.toml"), "[site]\nurl = \"https://example.org/\"\n").unwrap();
+    let plugin = crate::plugins::plugin_dir(tmp.path().to_str().unwrap(), "counter");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plugins/visits-host/");
+    std::fs::copy(format!("{fixture}main.bundle.js"), plugin.join("main.bundle.js")).unwrap();
+    let manifest = std::fs::read_to_string(format!("{fixture}manifest.json")).unwrap();
+    std::fs::write(plugin.join("manifest.json"), manifest.replace("\"visits-host\"", "\"counter\"")).unwrap();
+    tmp
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connecting_analytics_names_the_plugin_and_the_site_s_id() {
+    let tmp = counted_folder();
+    let key = "k".repeat(40);
+    let short = connect_analytics_flow(&path(&tmp), Some("counter".into()), |_| Ok("short".into()), false).await;
+    assert_eq!(short.code, 1, "{}", short.err);
+    assert!(short.err.contains("not a counter key"), "{}", short.err);
+    let done = connect_analytics_flow(&path(&tmp), Some("counter".into()), |_| Ok(key.clone()), true).await;
+    assert_eq!(done.code, 0, "{} {}", done.out, done.err);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&done.out).unwrap()["site_id"], "tag-example.org");
+    assert!(config(&tmp).contains("provider = \"counter\""), "{}", config(&tmp));
 }

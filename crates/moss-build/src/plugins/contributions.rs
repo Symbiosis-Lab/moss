@@ -630,8 +630,9 @@ impl PluginManifest {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
         }
+        let has_entry = manifest.entry.is_some();
         if let Some(c) = manifest.contributes.as_mut() {
-            provider::validate(c.account.as_ref(), c.provider.as_deref_mut().unwrap_or_default(), c.channel.is_some()).map_err(serde_json::Error::custom)?;
+            provider::validate(c.account.as_ref(), c.provider.as_deref_mut().unwrap_or_default(), c.channel.is_some(), has_entry).map_err(serde_json::Error::custom)?;
         }
         if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
             let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
@@ -678,6 +679,12 @@ impl PluginManifest {
     fn fold_legacy_surfaces(&mut self) {
         let legacy_fields = self.legacy_config_fields();
         let fold_stack = self.requires_stack;
+        // A key account of a plugin with code is the plugin's own credential:
+        // the settings page and the publish gate ask for it like a declared one.
+        let account_key = match self.contributes.as_ref().and_then(|c| c.account.as_ref()) {
+            Some(provider::SignIn::Key(key)) if runs_code(self) => Some(key.url.clone()),
+            _ => None,
+        };
         let mut setups = match &mut self.contributes {
             Some(contributes) => contributes.setups_mut(),
             None => Vec::new(),
@@ -696,6 +703,13 @@ impl PluginManifest {
                 );
             }
             return;
+        }
+
+        if let Some(url) = account_key {
+            let setup = setups[0].get_or_insert_with(Default::default);
+            if !setup.settings.iter().any(|f| f.key == provider::TOKEN) {
+                setup.settings.push(Field::legacy_secret(provider::TOKEN.into(), String::new(), Some(url), HashMap::new()));
+            }
         }
 
         // Every contribution folds its own `credentials` — they were declared

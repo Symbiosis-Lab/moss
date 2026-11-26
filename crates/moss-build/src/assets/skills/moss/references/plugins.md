@@ -162,7 +162,7 @@ A plugin for an outside company holds one account there. It declares how the per
 
 `account` is one of these, by `kind`:
 
-- `key`: a key or token the person makes and pastes, with `url` (the page that makes keys), the `prefix` and `length` every key has, and `env`, the environment variable that may hold it in the company's own documented spelling. moss reads `env` only for a command the person runs for one of the account's parts, never for a build or a preview.
+- `key`: a key or token the person makes and pastes, with `url` (the page that makes keys), the `prefix` every key starts with (left out when the company's keys share none), its `length` (a number, or `[fewest, most]` when the company issues keys of several forms), and `env`, the environment variable that may hold it in the company's own documented spelling. moss reads `env` only for a command the person runs for one of the account's parts, never for a build or a preview. In a plugin with code, the pasted key is the plugin's `token` secret: the app asks for it on the plugin's settings page and before a publish that needs it, and the code reads it with `getSecret("token")`.
 - `none`: nothing to sign in to.
 
 A channel plugin declares no `account`: it signs in with its channel's `login`, which `moss provider status` reports as a `code` sign-in (`login: true`) or a `session` (an address).
@@ -187,6 +187,27 @@ A mailing service a site's subscribers are copied to is a provider of the `newsl
 ```
 
 The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to the key's `url`. `{name}` stands for `moss`, the name the server looks for before it deletes the pasted key, and `{permission}` for the part's `needs`, which stays in the service's words in every translation. The service is shown by the manifest's `display_name`. Every address is `https`, and a field moss does not know is refused. The steps are translated through the manifest's `translations` table, keyed by the English text. A provider brings no code, so one installed from the registry at the registry's bytes needs no folder trust; an edited copy does.
+
+A company that holds a domain's DNS is a provider of the `address` part. Its body names the name servers it answers for, as suffixes such as `ns.cloudflare.com`; they only decide which signed-in accounts moss asks first, and a zone is the account's when the account lists it. Its code exports the zone's verbs: `dns_zones`, `dns_records`, `dns_set` (replace every record of one name and type) and `dns_delete`.
+
+An analytics service is a provider of the `analytics` part. Its body is the `script` every page loads, which is also one of the part's `addresses`, the script tag's `data-` `attributes`, where `{site_id}` stands for the site's `[services.analytics] site_id`, and `reads`: `events` when its code's `analytics_read` returns one record per visit, `daily_counts` when it returns visits per page per day. A site turns it on with `provider = "<plugin name>"` and its `site_id` under `[services.analytics]` in `.moss/config.toml`; every published page then loads the script, and the preview never does. A build whose plugin is missing succeeds without analytics and names the install command.
+
+Its code exports two verbs, each taking one object: `analytics_site({ host })` returns `{ site_id }`, the service's id for the site at that domain, made when the service has none, and `analytics_read({ site_id, since })` returns what was counted from that ISO date on. A verb that cannot do what it was asked returns `{ refused: "sign_in" }` when the service no longer takes the key, or `{ refused: "missing_permission", needs }` naming the permission, rather than throwing. `moss provider connect <folder> analytics --provider <plugin>` keeps the key, asks for the site's id at the site's domain and writes both lines. After each publish moss reads the counts back into `.moss/data/visits.jsonl`, one JSON object per page per day.
+
+One token that publishes the site, holds its domain's DNS and reads its visits:
+
+```json
+"account": { "kind": "key", "env": "CLOUDFLARE_API_TOKEN", "url": "https://dash.cloudflare.com/profile/api-tokens", "length": [40, 64] },
+"deploy_target": {},
+"provider": [
+  { "part": "address", "needs": "Zone · DNS · Edit", "addresses": ["https://api.cloudflare.com/client/v4"],
+    "address": { "nameservers": ["ns.cloudflare.com"] } },
+  { "part": "analytics", "needs": "Account · Account Analytics · Read",
+    "addresses": ["https://static.cloudflareinsights.com/beacon.min.js", "https://api.cloudflare.com/client/v4"],
+    "analytics": { "script": "https://static.cloudflareinsights.com/beacon.min.js",
+      "attributes": { "data-cf-beacon": "{\"token\": \"{site_id}\"}" }, "reads": "daily_counts" } }
+]
+```
 
 ## Setup: declare, don't build UI
 

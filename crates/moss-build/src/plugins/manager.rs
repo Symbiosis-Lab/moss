@@ -11,16 +11,20 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub mod accounts;
+pub mod analytics;
 #[cfg(any(test, feature = "contract"))]
 pub mod contract;
 pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
+pub mod part_call;
 mod hook_context;
 #[cfg(test)]
 mod build_run_tests;
 #[cfg(test)]
 mod site_config_plugin_tests;
+#[cfg(test)]
+mod part_call_tests;
 pub mod signal_route;
 
 use hook_context::{context_for_plugin, HookContext};
@@ -202,6 +206,10 @@ pub struct PluginManager {
     grants: crate::engine::host_fns::GrantRegistry,
 
     watchdog: HookWatchdog,
+
+    /// Held for every run of a part's code: two runs of one plugin at once
+    /// share its context and completion slot, so they queue, never overlap.
+    part_runs: tokio::sync::Mutex<()>,
 }
 
 /// How long a hook may go without progress before it is cancelled, and how
@@ -292,6 +300,7 @@ impl PluginManager {
             grants,
             host,
             watchdog: HookWatchdog::default(),
+            part_runs: tokio::sync::Mutex::new(()),
         };
 
         // Nothing to spawn: every plugin self-initializes per-Context on its
@@ -664,6 +673,22 @@ impl PluginManager {
         context_json: &str,
         asked_by: AskedBy,
     ) -> Result<(Option<HookResult>, Option<serde_json::Value>), String> {
+        let key = singleflight_key(&plugin.manifest.name, hook_name, asked_by);
+        self.run_shared(plugin, hook_name, key, context_json, asked_by, None).await
+    }
+
+    /// [`Self::execute_plugin_javascript`] under a caller's own singleflight
+    /// key: concurrent calls with the same key share one run, which holds
+    /// `serial` while it runs.
+    async fn run_shared(
+        &self,
+        plugin: &Plugin,
+        hook_name: &str,
+        singleflight_key: String,
+        context_json: &str,
+        asked_by: AskedBy,
+        serial: Option<&tokio::sync::Mutex<()>>,
+    ) -> Result<(Option<HookResult>, Option<serde_json::Value>), String> {
         let hook_state = &self.host.state.hooks;
 
         // --- Singleflight: deduplicate concurrent dispatch of the same hook ---
@@ -688,7 +713,6 @@ impl PluginManager {
         //
         // Keyed by who asked too: a Sync the person clicks must not quietly
         // take the result of a build's run, which may not write the folder.
-        let singleflight_key = singleflight_key(&plugin.manifest.name, hook_name, asked_by);
         let (is_first, mut rx) = hook_state.in_flight_hooks.try_start(&singleflight_key);
 
         if !is_first {
@@ -720,6 +744,10 @@ impl PluginManager {
             singleflight_key.clone(),
         );
 
+        let _serial = match serial {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
         match self.run_hook(plugin, hook_name, context_json, &hook_state, asked_by).await {
             // Parse/dispatch failure: the JS never ran. Guard drop aborts the
             // key; waiters treat the closed channel as a no-op, exactly as if

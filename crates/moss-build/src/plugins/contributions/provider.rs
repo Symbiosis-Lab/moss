@@ -1,9 +1,9 @@
 //! A plugin that holds an account at one company: `contributes.account` says
 //! how the person signs in to it, once, and `contributes.provider` lists the
 //! parts of the site that one sign-in serves, each with what it needs from the
-//! account and what its actions cost. Each part's own fields are its body;
-//! only the newsletter has one so far. A plugin's `deploy_target` and
-//! `channel` read as its host and channels entries ([`parts`]).
+//! account and what its actions cost. Each part's own fields are its body. A
+//! plugin's `deploy_target` and `channel` read as its host and channels
+//! entries ([`parts`]).
 //!
 //! The plugin's name is what a part's config line names, such as
 //! `[channels.email] provider`.
@@ -40,6 +40,19 @@ pub fn newsletter_provider(site: &str, name: &str) -> Result<Newsletter, String>
     }
 }
 
+/// The script tag of the analytics provider the plugin `name` in the site's
+/// folder contributes, carrying the site's `site_id`.
+pub fn analytics_tag(site: &str, name: &str, site_id: &str) -> Result<String, String> {
+    let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(site, name)) else {
+        return Err(format!("[services.analytics] provider is \"{name}\", which is not installed in this site: run `moss plugin install {name}`"));
+    };
+    let entry = manifest.contributes.unwrap_or_default().provider.into_iter().flatten().find(|e| e.part == Part::Analytics);
+    let Some(body) = entry.and_then(|e| e.analytics) else {
+        return Err(format!("[services.analytics] provider is \"{name}\", and the plugin of that name in this site is not an analytics service"));
+    };
+    Ok(body.tag(site_id))
+}
+
 /// How the person signs in to the plugin's account. One per plugin, whatever
 /// parts it serves.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -74,12 +87,19 @@ pub struct ProviderEntry {
     pub costs: Vec<Cost>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub newsletter: Option<NewsletterPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<AddressPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analytics: Option<AnalyticsPart>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum Part {
     Newsletter,
+    /// The DNS of the site's domain.
+    Address,
+    Analytics,
     /// Read from `deploy_target`; not declared in `provider`.
     Host,
     /// Read from `channel`; not declared in `provider`.
@@ -91,6 +111,8 @@ impl Part {
     pub fn name(&self) -> &'static str {
         match self {
             Part::Newsletter => "newsletter",
+            Part::Address => "address",
+            Part::Analytics => "analytics",
             Part::Host => "host",
             Part::Channels => "channels",
         }
@@ -136,7 +158,7 @@ pub fn sign_in(manifest: &PluginManifest) -> Option<SignIn> {
 /// a host entry for `deploy_target` and a channels entry for `channel`.
 pub fn parts(manifest: &PluginManifest) -> Vec<ProviderEntry> {
     let Some(contributes) = manifest.contributes.as_ref() else { return Vec::new() };
-    let read = |part| ProviderEntry { part, addresses: Vec::new(), needs: None, costs: Vec::new(), newsletter: None };
+    let read = |part| ProviderEntry { part, addresses: Vec::new(), needs: None, costs: Vec::new(), newsletter: None, address: None, analytics: None };
     let mut parts = contributes.provider.clone().unwrap_or_default();
     parts.extend(contributes.deploy_target.as_ref().map(|_| read(Part::Host)));
     parts.extend(contributes.channel.as_ref().map(|_| read(Part::Channels)));
@@ -159,6 +181,50 @@ pub struct NewsletterPart {
     pub senders_url: Option<String>,
 }
 
+/// The DNS host of the domains whose name servers it answers for. The plugin's
+/// code exports the zone's verbs: `dns_zones`, `dns_records`, `dns_set` and
+/// `dns_delete`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AddressPart {
+    /// Name-server suffixes such as `ns.cloudflare.com`. They only decide
+    /// which signed-in accounts moss asks first; a zone is the account's when
+    /// the account lists it.
+    pub nameservers: Vec<String>,
+}
+
+/// An analytics service the pages reach through its script. The plugin's code
+/// exports `analytics_read`, which reads the visits back into the folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsPart {
+    /// The script every page loads.
+    pub script: String,
+    /// The script tag's attributes, where `{site_id}` stands for the site's
+    /// `[services.analytics] site_id`.
+    #[serde(default)]
+    pub attributes: std::collections::BTreeMap<String, String>,
+    /// What `analytics_read` returns.
+    pub reads: Reads,
+}
+
+impl AnalyticsPart {
+    fn tag(&self, site_id: &str) -> String {
+        use moss_core::media::html_escape_attr as attr;
+        let attributes: String = self.attributes.iter().map(|(k, v)| format!(" {k}=\"{}\"", attr(&v.replace("{site_id}", site_id)))).collect();
+        format!(r#"<script defer src="{}"{attributes}></script>"#, attr(&self.script))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum Reads {
+    /// One record per visit.
+    Events,
+    /// Visits per page per day.
+    DailyCounts,
+}
+
 /// A key the person makes in the service, and how moss knows one when it is
 /// pasted or read from `env`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -171,14 +237,20 @@ pub struct Credential {
     pub env: Option<String>,
     /// The service's page where keys are made.
     pub url: String,
-    /// Every key of this service starts with it.
+    /// Every key of this service starts with it; empty when the service's
+    /// keys share no beginning.
+    #[serde(default)]
     pub prefix: String,
-    /// Every key of this service is this many characters long.
-    pub length: u32,
+    /// How many characters a key of this service has.
+    pub length: Length,
     /// Always [`KEY_NAME`]; a manifest cannot set it.
     #[serde(skip_deserializing, default = "key_name")]
     pub name: String,
 }
+
+/// The plugin secret a key account's paste is kept under, for a plugin with
+/// code: the plugin reads it with `getSecret("token")`.
+pub const TOKEN: &str = "token";
 
 /// The name moss's steps give a pasted key. moss's server deletes a pasted key
 /// only when it carries this name, since a key named otherwise may serve
@@ -189,12 +261,47 @@ fn key_name() -> String {
     KEY_NAME.to_string()
 }
 
+/// A number of characters: `69`, or `[40, 64]` from the fewest to the most
+/// for a service whose keys come in several forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(untagged)]
+pub enum Length {
+    Exactly(u32),
+    Between([u32; 2]),
+}
+
+impl Length {
+    fn range(self) -> std::ops::RangeInclusive<u32> {
+        match self {
+            Length::Exactly(n) => n..=n,
+            Length::Between([min, max]) => min..=max,
+        }
+    }
+}
+
+impl std::fmt::Display for Length {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Length::Exactly(n) => write!(f, "{n}"),
+            Length::Between([min, max]) => write!(f, "{min} to {max}"),
+        }
+    }
+}
+
 impl Credential {
     /// The key in `paste`, without the spaces and line breaks a copy carries,
     /// when it has this service's prefix and length.
     pub fn fits(&self, paste: &str) -> Option<String> {
         let key: String = paste.split_whitespace().collect();
-        (key.starts_with(&self.prefix) && key.chars().count() == self.length as usize).then_some(key)
+        (key.starts_with(&self.prefix) && self.length.range().contains(&(key.chars().count() as u32))).then_some(key)
+    }
+
+    /// What a key of this service looks like, for a paste that is not one.
+    pub fn shape(&self) -> String {
+        match self.prefix.as_str() {
+            "" => format!("it is {} characters", self.length),
+            prefix => format!("it starts with {prefix} and is {} characters", self.length),
+        }
     }
 }
 
@@ -238,11 +345,12 @@ impl SignIn {
         let refuse = |why: &str| Err(format!("account: {why}"));
         match self {
             SignIn::Key(key) => {
-                if key.prefix.is_empty() || key.prefix.len() > 10 || !key.prefix.bytes().all(|b| b.is_ascii_graphic()) {
-                    return refuse("prefix is 1 to 10 printable ASCII characters");
+                if key.prefix.len() > 10 || !key.prefix.bytes().all(|b| b.is_ascii_graphic()) {
+                    return refuse("prefix is at most 10 printable ASCII characters");
                 }
-                if !(key.prefix.len() as u32 + 1..=512).contains(&key.length) {
-                    return refuse("length is longer than the prefix and at most 512");
+                let lengths = key.length.range();
+                if lengths.is_empty() || *lengths.start() <= key.prefix.len() as u32 || *lengths.end() > 512 {
+                    return refuse("length is longer than the prefix and at most 512, and a range runs from the fewest to the most");
                 }
                 let variable = |v: &str| v.len() <= 64 && v.starts_with(|c: char| c.is_ascii_uppercase())
                     && v.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
@@ -269,7 +377,7 @@ impl Cost {
 
 /// Checks `contributes.account` and `contributes.provider` together, and
 /// clamps the text moss shows.
-pub(crate) fn validate(account: Option<&SignIn>, entries: &mut [ProviderEntry], has_channel: bool) -> Result<(), String> {
+pub(crate) fn validate(account: Option<&SignIn>, entries: &mut [ProviderEntry], has_channel: bool, has_entry: bool) -> Result<(), String> {
     use moss_core::untrusted_text::{bounded, MAX_NAME, MAX_SENTENCE};
     if let Some(account) = account {
         if has_channel {
@@ -298,6 +406,15 @@ pub(crate) fn validate(account: Option<&SignIn>, entries: &mut [ProviderEntry], 
             cost.validate()?;
         }
         entry.needs = entry.needs.as_deref().map(|n| bounded(n, MAX_NAME));
+        let other_bodies = match entry.part {
+            Part::Newsletter => entry.address.is_some() || entry.analytics.is_some(),
+            Part::Address => entry.newsletter.is_some() || entry.analytics.is_some(),
+            Part::Analytics => entry.newsletter.is_some() || entry.address.is_some(),
+            Part::Host | Part::Channels => false,
+        };
+        if other_bodies {
+            return Err(format!("provider: the {} entry carries another part's body", entry.part.name()));
+        }
         match entry.part {
             Part::Host | Part::Channels => {
                 return Err("provider: a host is declared by `deploy_target` and channels by `channel`, which read as entries here".into());
@@ -314,6 +431,31 @@ pub(crate) fn validate(account: Option<&SignIn>, entries: &mut [ProviderEntry], 
                 }
                 for step in &mut body.steps {
                     *step = bounded(step, MAX_SENTENCE);
+                }
+            }
+            Part::Address => {
+                let (true, Some(body)) = (has_entry, entry.address.as_ref()) else {
+                    return Err("provider: an address provider has code (`entry`), which runs the zone's verbs, and an `address` body".into());
+                };
+                let suffix = |n: &String| !n.is_empty() && n.len() <= 253 && !n.starts_with('.') && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
+                if !(1..=MAX_ITEMS).contains(&body.nameservers.len()) || !body.nameservers.iter().all(suffix) {
+                    return Err(format!("provider: address.nameservers holds 1 to {MAX_ITEMS} lowercase name-server suffixes such as ns.example.com"));
+                }
+            }
+            Part::Analytics => {
+                let (true, Some(body)) = (has_entry, entry.analytics.as_mut()) else {
+                    return Err("provider: an analytics provider has code (`entry`), which reads the visits back, and an `analytics` body".into());
+                };
+                https("provider: analytics.script", &body.script)?;
+                if !entry.addresses.contains(&body.script) {
+                    return Err("provider: analytics.script is one of the part's `addresses`".into());
+                }
+                let name = |k: &String| k.starts_with("data-") && k.len() <= 64 && k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+                if body.attributes.len() > MAX_ITEMS || !body.attributes.keys().all(name) {
+                    return Err(format!("provider: analytics.attributes holds at most {MAX_ITEMS} `data-` attributes"));
+                }
+                for value in body.attributes.values_mut() {
+                    *value = bounded(value, MAX_SENTENCE);
                 }
             }
         }
@@ -359,7 +501,7 @@ mod tests {
     fn a_newsletter_provider_needs_no_script() {
         let m = parse(sendgrid()).unwrap();
         let Some(SignIn::Key(key)) = super::sign_in(&m) else { panic!("a key account") };
-        assert_eq!((key.prefix.as_str(), key.length, key.env.as_deref()), ("SG.", 69, Some("SENDGRID_API_KEY")));
+        assert_eq!((key.prefix.as_str(), key.length, key.env.as_deref()), ("SG.", super::Length::Exactly(69), Some("SENDGRID_API_KEY")));
         let parts = super::parts(&m);
         assert_eq!((parts.len(), parts[0].part, parts[0].needs.as_deref()), (1, Part::Newsletter, Some("Full Access")));
         assert!(!crate::plugins::contributions::runs_code(&m));
@@ -384,6 +526,97 @@ mod tests {
         }
         let cost = &super::parts(&m)[0].costs[0];
         assert_eq!((cost.amount.as_str(), cost.unit.as_str()), ("0.001", "USD"));
+    }
+
+    /// One token that publishes the site, holds its domain's DNS and reads its
+    /// analytics.
+    fn cloudflare() -> Value {
+        json!({"name":"cloudflare","version":"1.0.0","entry":"main.bundle.js","contributes":{
+            "account":{"kind":"key","env":"CLOUDFLARE_API_TOKEN","url":"https://dash.cloudflare.com/profile/api-tokens","length":[40,64]},
+            "deploy_target":{},
+            "provider":[
+                {"part":"address","needs":"Zone · DNS · Edit","addresses":["https://api.cloudflare.com/client/v4"],
+                    "address":{"nameservers":["ns.cloudflare.com"]}},
+                {"part":"analytics","needs":"Account · Account Analytics · Read",
+                    "addresses":["https://static.cloudflareinsights.com/beacon.min.js","https://api.cloudflare.com/client/v4"],
+                    "analytics":{"script":"https://static.cloudflareinsights.com/beacon.min.js",
+                        "attributes":{"data-cf-beacon":"{\"token\": \"{site_id}\"}"},"reads":"daily_counts"}}]}})
+    }
+
+    #[test]
+    fn one_token_serves_the_host_the_address_and_analytics() {
+        let m = parse(cloudflare()).unwrap();
+        let parts = super::parts(&m);
+        assert_eq!(parts.iter().map(|p| p.part).collect::<Vec<_>>(), [Part::Address, Part::Analytics, Part::Host]);
+        assert_eq!(parts[0].address.as_ref().unwrap().nameservers, ["ns.cloudflare.com"]);
+        let analytics = parts[1].analytics.as_ref().unwrap();
+        assert_eq!((analytics.reads, analytics.attributes["data-cf-beacon"].as_str()), (super::Reads::DailyCounts, "{\"token\": \"{site_id}\"}"));
+        for part in [Part::Address, Part::Analytics] {
+            assert_eq!(json!(part.name()), serde_json::to_value(part).unwrap());
+        }
+    }
+
+    #[test]
+    fn a_key_account_with_code_is_kept_for_the_plugin_as_its_token() {
+        let m = parse(cloudflare()).unwrap();
+        let secrets: Vec<_> = m.declared_secrets(&Default::default()).into_iter().map(|f| (f.key.clone(), f.help_url.clone())).collect();
+        assert_eq!(secrets, [(super::TOKEN.to_string(), Some("https://dash.cloudflare.com/profile/api-tokens".to_string()))]);
+        assert!(parse(sendgrid()).unwrap().declared_secrets(&Default::default()).is_empty(), "seta holds a newsletter key");
+    }
+
+    #[test]
+    fn the_analytics_tag_carries_the_site_s_id_escaped() {
+        let site = tempfile::tempdir().unwrap();
+        let site = site.path().to_str().unwrap();
+        let dir = crate::plugins::plugin_dir(site, "cloudflare");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest.json"), cloudflare().to_string()).unwrap();
+        assert_eq!(super::analytics_tag(site, "cloudflare", "ab\"12").unwrap(),
+            r#"<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;ab&quot;12&quot;}"></script>"#);
+        assert!(super::analytics_tag(site, "umami", "x").unwrap_err().contains("`moss plugin install umami`"));
+    }
+
+    #[test]
+    fn a_key_with_no_prefix_and_several_forms_is_known_by_its_length() {
+        let Some(SignIn::Key(key)) = super::sign_in(&parse(cloudflare()).unwrap()) else { panic!("a key account") };
+        let legacy = "a".repeat(40);
+        let scannable = format!("cfut_{}{}", "b".repeat(40), "c".repeat(8));
+        assert_eq!(key.fits(&format!(" {legacy}\n")), Some(legacy));
+        assert_eq!(key.fits(&scannable), Some(scannable));
+        assert_eq!(key.fits(&"a".repeat(39)), None);
+        assert_eq!(key.fits(&"a".repeat(65)), None);
+        assert_eq!(key.shape(), "it is 40 to 64 characters");
+        let Some(SignIn::Key(sendgrid)) = super::sign_in(&parse(sendgrid()).unwrap()) else { panic!() };
+        assert_eq!(sendgrid.shape(), "it starts with SG. and is 69 characters");
+    }
+
+    #[test]
+    fn an_address_or_analytics_entry_moss_could_not_run_is_refused() {
+        let at = |path: &[&str], value: Value| {
+            let mut m = cloudflare();
+            let mut v = &mut m;
+            for p in path {
+                v = if let Ok(i) = p.parse::<usize>() { &mut v[i] } else { &mut v[*p] };
+            }
+            *v = value;
+            parse(m).unwrap_err()
+        };
+        for (path, value, said) in [
+            (&["entry"][..], Value::Null, "has code (`entry`), which runs the zone's verbs"),
+            (&["contributes", "provider", "0", "address"], Value::Null, "an `address` body"),
+            (&["contributes", "provider", "0", "address", "nameservers"], json!([]), "address.nameservers"),
+            (&["contributes", "provider", "0", "address", "nameservers"], json!(["NS.Cloudflare.com"]), "address.nameservers"),
+            (&["contributes", "provider", "0", "address", "nameservers"], json!([".cloudflare.com"]), "address.nameservers"),
+            (&["contributes", "provider", "0", "newsletter"], json!({"steps":["s"]}), "carries another part's body"),
+            (&["contributes", "provider", "1", "analytics"], Value::Null, "an `analytics` body"),
+            (&["contributes", "provider", "1", "analytics", "script"], json!("http://static.cloudflareinsights.com/beacon.min.js"), "analytics.script"),
+            (&["contributes", "provider", "1", "addresses"], json!(["https://api.cloudflare.com/client/v4"]), "one of the part's `addresses`"),
+            (&["contributes", "provider", "1", "analytics", "attributes"], json!({"onload":"x"}), "`data-` attributes"),
+            (&["contributes", "provider", "1", "analytics", "reads"], json!("visits"), "unknown variant `visits`"),
+        ] {
+            let err = at(path, value);
+            assert!(err.contains(said), "{path:?}: {err}");
+        }
     }
 
     #[test]
@@ -446,7 +679,8 @@ mod tests {
         let newsletter = json!({"part":"newsletter","needs":"x","newsletter":{"steps":["s"]}});
         for (path, value, said) in [
             (&["account", "url"][..], json!("http://app.sendgrid.com/keys"), "account: url"),
-            (&["account", "prefix"], json!(""), "prefix"),
+            (&["account", "prefix"], json!("sendgrid-key-"), "prefix"),
+            (&["account", "length"], json!([69, 40]), "length"),
             (&["account", "length"], json!(3), "length"),
             (&["account", "env"], json!("sendgrid key"), "env"),
             (&["account"], json!({"kind":"none"}), "signs in with a key"),

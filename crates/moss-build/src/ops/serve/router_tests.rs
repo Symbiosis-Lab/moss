@@ -433,6 +433,7 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
                 provider: Some("goatcounter".into()),
             },
             script: Some("https://router-seam-test.goatcounter.com/count".into()),
+            site_id: None,
         }),
         ..Default::default()
     };

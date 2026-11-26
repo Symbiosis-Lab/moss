@@ -352,11 +352,13 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        let (_sent, pictures) = tokio::join!(
+        let site = folder.to_string_lossy();
+        let (_sent, pictures, visits) = tokio::join!(
             crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print),
             crate::deploy::remote_pictures::check_published(folder, url),
+            crate::plugins::manager::analytics::read_after_publish(&site),
         );
-        for line in pictures.lines() {
+        for line in pictures.lines().iter().map(String::as_str).chain(visits.as_deref()) {
             eprintln!("{line}");
         }
         if let Some(page) = flags.copies_of.as_deref().filter(|p| !crate::syndication::send::is_a_page(folder, p)) {
