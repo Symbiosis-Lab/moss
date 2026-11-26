@@ -497,7 +497,7 @@ pub struct ParsedDocument {
     /// limit on cross-ref. Skip-serialize so it never round-trips into stored frontmatter.
     #[serde(skip_serializing, default)]
     pub from_sidebar_alias: Option<bool>,
-    /// Series declaration: bool for weight-based, Vec<String> for explicit wikilink order
+    /// Series declaration: bool turns the folder's series on or off, Vec<String> declares the order
     pub series: Option<SeriesField>,
     /// Override site-wide breadcrumb setting
     pub breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
@@ -1478,7 +1478,6 @@ mod tests {
         let resolved = moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: Some(vec!["京都・鎌倉".to_string(), "osaka".to_string()]),
-            series_default: true,
         };
         let docs: Vec<&ParsedDocument> = vec![&page, &folder];
         let facts: Vec<moss_core::page::site_page::PageFacts> = docs.iter().map(|d| moss_core::page::site_page::PageFacts::from_page(*d)).collect();
@@ -1525,7 +1524,6 @@ mod tests {
         let resolved = moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: Some(vec!["appendix".to_string(), "intro".to_string()]),
-            series_default: true,
         };
         let docs: Vec<&ParsedDocument> = vec![&intro, &appendix, &closing];
         let sorted = moss_core::sort::sort_by_resolved(&docs, &resolved);

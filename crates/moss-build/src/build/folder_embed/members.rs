@@ -91,12 +91,11 @@ pub(super) fn order<'a>(
     let mut resolved = match target_doc {
         Some(t) if is_flatten => t.resolve_for_flatten(folder_docs),
         Some(t) => t.resolve_for_direct_children(),
-        None => ResolvedSort { axis: SortAxis::Date, explicit_order: None, series_default: false },
+        None => ResolvedSort { axis: SortAxis::Date, explicit_order: None },
     };
     if let Some(axis) = sort_override {
-        // Drop explicit_order (sort:axis is a user-typed scalar, not a list)
-        // and recompute series_default to match.
-        resolved = ResolvedSort { axis, explicit_order: None, series_default: matches!(axis, SortAxis::Weight) };
+        // Drop explicit_order (sort:axis is a user-typed scalar, not a list).
+        resolved = ResolvedSort { axis, explicit_order: None };
     }
     let (style, group) = resolve_children_config(folder_docs, style_override, group_override, math);
     // A typed order is a sequence, not a chronology: year sections found by

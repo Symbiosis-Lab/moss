@@ -2148,7 +2148,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Series navigation bar (prev/next/collection) on series pages.",
+        description: "Series navigation bar (prev/next/collection) on the pages of a folder whose home page sets `series:` (`true` or a list). Ordering the folder with `sort:` or `weight:` does not draw it.",
     },
     ComponentEntry {
         class: "moss-series-nav-links",

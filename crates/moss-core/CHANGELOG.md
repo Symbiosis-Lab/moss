@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `page::preview_document(&RenderedPage, lang, base_href)` takes no stylesheet and the document carries none, so a host adds the site's stylesheet once instead of receiving it inside every preview.
 - `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 - **BREAKING:** `page::preview_document` takes a `masthead` after the page, drawn above the article; pass `""` for none.
+- **BREAKING:** `ResolvedSort` loses `series_default`: ordering a folder no longer implies a series, and only the folder's own `series:` turns previous and next on. A struct literal must drop the field.
 
 ### Removed
 

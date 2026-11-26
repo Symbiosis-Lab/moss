@@ -1107,7 +1107,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["date", "date-asc", "weight", "title"]),
         // Frequency=3, Importance=3 → score = 100 - (3*6 + 3*4) = 70
         score: 70,
-        description: "How to sort children in this folder's listing. Use date for newest-first chronological streams, date-asc for the same but oldest first, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
+        description: "How to sort children in this folder's listing. Use date for newest-first chronological streams, date-asc for the same but oldest first, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order. Ordering arranges the listing only; previous and next links come from `series:`.",
         label_key: "chip.sort.label",
         group: "Child Pages",
         applies_when: Some(&[FOLDER, HOME]),
@@ -1120,7 +1120,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         one_of_members: Some(SERIES_MEMBERS),
         // Frequency=0, Importance=2 → score=92
         score: 92,
-        description: "Declares children as a sequential series. On a folder index: true turns prev/next on for its children, a list of wikilinks declares their order, false turns the sequence off. On a page inside such a folder, `series: false` takes that page out of the reading order entirely — it keeps its place in the folder listing, shows no prev/next of its own, and stops being any sibling's prev or next, so an appendix or an editor's note no longer follows the last chapter. Position (\"2 / 3\") counts only the pages still in the order, so a series still being published reads its own length, not its planned one.",
+        description: "Declares children as a sequential series. On a folder index: true turns prev/next on for its children (ordering the folder with `sort:` or `weight:` does not), a list of wikilinks declares their order, false turns the sequence off. On a page inside such a folder, `series: false` takes that page out of the reading order entirely — it keeps its place in the folder listing, shows no prev/next of its own, and stops being any sibling's prev or next, so an appendix or an editor's note no longer follows the last chapter. Position (\"2 / 3\") counts only the pages still in the order, so a series still being published reads its own length, not its planned one.",
         label_key: "chip.series.label",
         group: "Child Pages",
         applies_when: Some(&[PAGE, FOLDER]),

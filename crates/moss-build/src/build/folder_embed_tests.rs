@@ -1,7 +1,7 @@
 use super::*;
 
 fn sorted_by(axis: moss_core::sort::SortAxis) -> moss_core::sort::ResolvedSort {
-    moss_core::sort::ResolvedSort { axis, explicit_order: None, series_default: false }
+    moss_core::sort::ResolvedSort { axis, explicit_order: None }
 }
 
 fn make_doc(url_path: &str, label: &str, date: Option<&str>) -> ParsedDocument {
@@ -26,7 +26,6 @@ pub(crate) fn make_folder_doc(url_path: &str, label: &str) -> ParsedDocument {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     }
@@ -335,7 +334,6 @@ fn explicit_order_listing_omits_card_dates() {
     folder.direct_children_sort = Some(ResolvedSort {
         axis: SortAxis::Date,
         explicit_order: Some(vec!["b".to_string(), "a".to_string()]),
-        series_default: true,
     });
     let a = make_doc("journal/a.html", "A", Some("2025-01-01"));
     let b = make_doc("journal/b.html", "B", Some("2025-03-01"));
@@ -377,7 +375,6 @@ fn explicit_order_listing_omits_card_dates() {
     docs_ctl[0].direct_children_sort = Some(ResolvedSort {
         axis: SortAxis::Date,
         explicit_order: None,
-        series_default: false,
     });
     let out_ctl = resolve_markers(
         &marker,
@@ -1989,7 +1986,6 @@ fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     };
@@ -3126,7 +3122,6 @@ fn trips_folder_note() -> ParsedDocument {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     }

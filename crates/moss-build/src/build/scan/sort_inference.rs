@@ -77,7 +77,6 @@ mod tests {
         let folder = docs.iter().find(|d| d.url_path == "blog/index.html").unwrap();
         let r = folder.direct_children_sort.as_ref().expect("direct_children_sort should be set");
         assert_eq!(r.axis, SortAxis::Date);
-        assert!(!r.series_default);
     }
 
     #[test]
@@ -132,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn weight_signal_in_children_infers_weight_axis_and_series_default() {
+    fn weight_signal_in_children_infers_weight_axis() {
         let mut docs = vec![
             ParsedDocument {
                 url_path: "course/index.html".into(),
@@ -159,7 +158,6 @@ mod tests {
             .unwrap();
         let r = folder.direct_children_sort.as_ref().unwrap();
         assert_eq!(r.axis, SortAxis::Weight);
-        assert!(r.series_default, "weight axis should default series chrome on");
     }
 
     #[test]

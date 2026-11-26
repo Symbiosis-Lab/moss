@@ -41,6 +41,7 @@ All notable changes to moss will be documented here.
 - A page with a subscribe form loads its script as one cached file, `forms.js`, shared with request forms, instead of about 11 KB of script written into every page. A reader who is already subscribed still sees "Subscribed" as the page appears.
 - Request forms no longer carry the hidden `_hp` field (class `moss-form__hp`), and the subscribe form no longer sends `website`. Nothing read either one; a form service that checks a honeypot of its own keeps doing so.
 - `moss doctor --surface` also names the `{.class}` text and raw HTML blocks pages write, and exits 1 when it finds anything, so a script or a hook can hold a site to plain pages.
+- A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links.
 
 ### Fixed
 

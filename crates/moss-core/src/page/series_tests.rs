@@ -253,12 +253,12 @@ impl SitePage for Page {
 }
 
 fn by_weight() -> Option<ResolvedSort> {
-    Some(ResolvedSort { axis: SortAxis::Weight, explicit_order: None, series_default: true })
+    Some(ResolvedSort { axis: SortAxis::Weight, explicit_order: None })
 }
 
 fn weighted_series() -> Vec<Page> {
     vec![
-        Page { url: "guide/index.html", label: "Guide", folder: true, sort: by_weight(), ..Default::default() },
+        Page { url: "guide/index.html", label: "Guide", folder: true, sort: by_weight(), series: Some(SeriesField::Flag(true)), ..Default::default() },
         Page { url: "guide/two/index.html", label: "Two", weight: Some(2), ..Default::default() },
         Page { url: "guide/one/index.html", label: "One", weight: Some(1), ..Default::default() },
         Page { url: "guide/draft/index.html", label: "Draft", weight: Some(3), draft: Some(true), ..Default::default() },
@@ -274,6 +274,13 @@ fn a_weighted_folder_chains_its_listable_direct_children_in_weight_order() {
     assert_eq!(parent.url, "guide/index.html");
     let labels: Vec<&str> = chain(&pages, parent).iter().map(|p| p.label).collect();
     assert_eq!(labels, ["One", "Two"], "a draft and a grandchild are not steps");
+}
+
+#[test]
+fn ordering_a_folder_does_not_make_it_a_series() {
+    let mut pages = weighted_series();
+    pages[0].series = None;
+    assert!(series_parent(&pages[1], &pages).is_none(), "a weight orders the listing, it does not chain the pages");
 }
 
 #[test]

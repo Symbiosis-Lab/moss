@@ -11,7 +11,7 @@ getting-started/, index.md). Supplemental frontmatter was added to exercise
 all documented navigation features:
 
 - `api/index.md` — `nav: true`, `weight: 1`, `cascade: breadcrumb: true`
-- `getting-started/index.md` — `nav: true`, `weight: 1`, `cascade: breadcrumb: true`
+- `getting-started/index.md` — `nav: true`, `weight: 1`, `series: true` (its weighted pages link previous and next), `cascade: breadcrumb: true`
 - `contributing.md` — `nav: true`, `weight: 2`, `footer: true`, `footer_align: right`
 - `changelog.md` — `nav: false`, `footer: true` (hidden from nav, shown in footer)
 - A new `getting-started/index.md` was added (not in the original test-site).

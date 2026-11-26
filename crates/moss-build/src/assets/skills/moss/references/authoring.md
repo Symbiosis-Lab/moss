@@ -1197,6 +1197,8 @@ sort: [intro, setup, advanced]
 
 The order is the same whichever `children_style` draws it, so changing rows to cards moves nothing. Subfolders lead the pages, including one that holds only subfolders (a folder of pictures alone lists as a page); on a date order without year sections, a subfolder whose own page has a date takes its place by that date instead. A typed list is drawn as typed, subfolders where you put them, and draws no year sections unless the folder asks for them with `children_group: year`, which keeps its subfolders above the sections.
 
+Ordering a folder, by `weight:` or by a typed list, arranges its listing and nothing else. Previous and next links between its pages come only from `series:` on the folder's home page (below).
+
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem. Under `sort: date` or `date-asc`, `weight:` also settles pages with the same date, lower first and weighted before unweighted, so two articles of one year stay in the order you number them; pages without one keep the order of their addresses. A feed keeps pure date order.
 
 ### One-page sites: no header
@@ -1251,7 +1253,7 @@ external_url: "/#menu"
 
 A partial with `nav: true` and no `external_url` adds nothing to the nav, and the build warns with the file's name. Write the header link's frontmatter between `---` lines, as above: `external_url` is read from fenced frontmatter only, so in the fence-less `key: value` form the link is not added.
 
-`series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, except that a folder sorted newest first by date is read forward in time, so Next opens the newer page and pages that share a date keep their order; a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
+`series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, except that a folder sorted newest first by date is read forward in time, so Next opens the newer page and pages that share a date keep their order; a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next.
 
 Show a capped feed on the homepage by pointing at that folder:
 

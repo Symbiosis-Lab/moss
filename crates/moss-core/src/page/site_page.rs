@@ -95,7 +95,6 @@ pub trait SitePage: SortableDoc + SortableLabel {
         self.direct_children_sort().cloned().unwrap_or(ResolvedSort {
             axis: crate::sort::SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         })
     }
 }

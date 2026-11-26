@@ -246,7 +246,7 @@ pub fn strip_typed_frontmatter_keys(raw: &mut std::collections::BTreeMap<String,
 /// exactly those two fields so that gap stays on the safe (Full) side rather
 /// than silently shipping a stale footer link on every OTHER page.
 /// `series` similarly turns unsafe on a folder document, because a series
-/// parent's OWN `series:`/chrome-default is read by every child's rendered
+/// parent's OWN `series:` is read by every child's rendered
 /// prev/next block through no digest at all — only a listed CHILD's `series`
 /// (its own opt-out) is covered, via the group-digest loop's blanket
 /// inclusion of every non-blanked field (`listing::project_child`).

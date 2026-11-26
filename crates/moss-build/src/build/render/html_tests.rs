@@ -5891,7 +5891,6 @@ mod children_field_tests {
         homepage.direct_children_sort = Some(moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: None,
-            series_default: false,
         });
 
         let mut older = make_doc("Older Post", "essays/older/index.html");
@@ -5965,7 +5964,6 @@ mod children_field_tests {
         homepage.direct_children_sort = Some(moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: None,
-            series_default: false,
         });
 
         let mut writings = make_doc("Writings", "writings/index.html");
@@ -9573,7 +9571,6 @@ mod sequence_siblings_tests {
         ResolvedSort {
             axis: SortAxis::Weight,
             explicit_order: None,
-            series_default: true,
         }
     }
 
@@ -9594,7 +9591,7 @@ mod sequence_siblings_tests {
     }
 
     fn newest_first(explicit_order: Option<Vec<String>>) -> ResolvedSort {
-        ResolvedSort { axis: SortAxis::Date, explicit_order, series_default: false }
+        ResolvedSort { axis: SortAxis::Date, explicit_order }
     }
 
     #[test]

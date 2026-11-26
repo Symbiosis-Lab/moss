@@ -141,7 +141,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-calendar-links` | standalone | Closing line of an event page ("Add to calendar") or of a folder that holds events (its calendar file and a webcal subscribe link). |
 | `.moss-calendar-link` | instance | One calendar link: the .ics file, or the webcal:// subscription. |
 | `.moss-external-link` | standalone | The link out at the end of a page with an http(s) `external_url:`, named by that address's host. Left out when the body already links to that address. |
-| `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on series pages. |
+| `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on the pages of a folder whose home page sets `series:` (`true` or a list). Ordering the folder with `sort:` or `weight:` does not draw it. |
 | `.moss-series-nav-links` | instance | Row holding prev/next links in series nav. |
 | `.moss-series-nav-link` | instance | Individual link inside series nav. Modifiers: `moss-series-nav-prev`, `moss-series-nav-next`, `empty` (placeholder). |
 | `.empty` | instance | Co-class on a series-nav link with nowhere to go — the previous link on the first entry, the next link on the last. The element is still emitted so the pair keeps its layout. |

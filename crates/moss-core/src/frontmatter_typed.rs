@@ -13,7 +13,7 @@ use serde_yaml::Value;
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(untagged)]
 pub enum SeriesField {
-    /// `series: true` — sequential mode, sort children by weight.
+    /// `series: true` — previous and next in the folder's own order.
     Flag(bool),
     /// `series: ["[[Ch 1]]", "[[Ch 2]]"]` — explicit wikilink order.
     Ordered(Vec<String>),

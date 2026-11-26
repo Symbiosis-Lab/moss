@@ -48,8 +48,6 @@ pub enum SortField {
 pub struct ResolvedSort {
     pub axis: SortAxis,
     pub explicit_order: Option<Vec<String>>,
-    /// Default value of `series:` chrome. True iff axis == Weight OR explicit_order is Some.
-    pub series_default: bool,
 }
 
 impl ResolvedSort {
@@ -207,14 +205,13 @@ pub fn resolve_folder_sort_with_undated<'a, D: SortableDoc>(
         }
     };
 
-    let series_default = matches!(axis, SortAxis::Weight) || explicit_order.is_some();
     let undated = if partly_dated {
         article_children.into_iter().filter(|c| c.date().is_none()).copied().collect()
     } else {
         Vec::new()
     };
 
-    (ResolvedSort { axis, explicit_order, series_default }, undated)
+    (ResolvedSort { axis, explicit_order }, undated)
 }
 
 /// The inferred axis, and whether it is title only because some but too few
@@ -320,16 +317,14 @@ mod inference_tests {
         let r = resolve_folder_sort(&f, &[&a]);
         assert_eq!(r.axis, SortAxis::Title);
         assert!(r.explicit_order.is_none());
-        assert!(!r.series_default);
     }
 
     #[test]
-    fn explicit_list_implies_chrome_on() {
+    fn explicit_list_keeps_its_stems() {
         let f = folder("blog/index.html", Some(SortField::List(vec!["a".into(), "b".into()])));
         let a = art("a", None, None);
         let b = art("b", None, None);
         let r = resolve_folder_sort(&f, &[&a, &b]);
-        assert!(r.series_default, "explicit list-form sort implies series chrome on");
         assert_eq!(r.explicit_order.as_ref().unwrap().len(), 2);
         assert_eq!(r.axis, SortAxis::Title, "tail axis inferred from undated children");
     }
@@ -365,7 +360,6 @@ mod inference_tests {
         let b = art("advanced", None, Some(20));
         let r = resolve_folder_sort(&f, &[&a, &b]);
         assert_eq!(r.axis, SortAxis::Weight);
-        assert!(r.series_default, "weight axis implies series chrome on");
     }
 
     #[test]
@@ -378,7 +372,6 @@ mod inference_tests {
         let e = art("e", None, None);
         let r = resolve_folder_sort(&f, &[&a, &b, &c, &d, &e]);
         assert_eq!(r.axis, SortAxis::Date);  // 4/5 dated
-        assert!(!r.series_default);
     }
 
     #[test]
@@ -611,7 +604,7 @@ mod sort_dispatch_tests {
         let a = doc_with_label("a", Some("2025-01-01"), None, "A");
         let b = doc_with_label("b", Some("2025-03-01"), None, "B");
         let c = doc_with_label("c", Some("2025-02-01"), None, "C");
-        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None, series_default: false };
+        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None };
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "b");
         assert_eq!(sorted[2].clean_stem(), "a");
@@ -625,7 +618,7 @@ mod sort_dispatch_tests {
         let a = doc_with_label("a", Some("2025-01-01"), None, "A");
         let b = doc_with_label("b", Some("2025-03-01"), None, "B");
         let c = doc_with_label("c", Some("2025-02-01"), None, "C");
-        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None };
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "a");
         assert_eq!(sorted[1].clean_stem(), "c");
@@ -639,7 +632,7 @@ mod sort_dispatch_tests {
     fn date_asc_still_keeps_undated_entries_last() {
         let dated = doc_with_label("dated", Some("2025-01-01"), None, "Dated");
         let undated = doc_with_label("undated", None, None, "Undated");
-        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None, series_default: false };
+        let r = ResolvedSort { axis: SortAxis::DateAsc, explicit_order: None };
         let sorted = sort_by_resolved(&[&undated, &dated], &r);
         assert_eq!(sorted[0].clean_stem(), "dated");
         assert_eq!(sorted[1].clean_stem(), "undated");
@@ -656,7 +649,7 @@ mod sort_dispatch_tests {
         let c3 = doc_with_label("chapter-3", Some("1804"), None, "Chapter 3");
         let c4 = doc_with_label("chapter-4", Some("1804"), None, "Chapter 4");
         let later = doc_with_label("epilogue", Some("1805"), None, "Epilogue");
-        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None, series_default: true };
+        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None };
         let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
             sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
         };
@@ -672,7 +665,7 @@ mod sort_dispatch_tests {
         let a = doc_with_label("a", None, Some(1), "Same");
         let b = doc_with_label("b", None, Some(1), "Same");
         for axis in [SortAxis::Weight, SortAxis::Title] {
-            let r = ResolvedSort { axis, explicit_order: None, series_default: true };
+            let r = ResolvedSort { axis, explicit_order: None };
             let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
                 sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
             };
@@ -686,7 +679,7 @@ mod sort_dispatch_tests {
         let a = doc_with_label("a", None, Some(2), "A");
         let b = doc_with_label("b", None, None, "B");
         let c = doc_with_label("c", None, Some(1), "C");
-        let r = ResolvedSort { axis: SortAxis::Weight, explicit_order: None, series_default: true };
+        let r = ResolvedSort { axis: SortAxis::Weight, explicit_order: None };
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "c");
         assert_eq!(sorted[1].clean_stem(), "a");
@@ -698,7 +691,7 @@ mod sort_dispatch_tests {
         let a = doc_with_label("zebra", None, None, "Zebra");
         let b = doc_with_label("apple", None, None, "Apple");
         let c = doc_with_label("mango", None, None, "Mango");
-        let r = ResolvedSort { axis: SortAxis::Title, explicit_order: None, series_default: false };
+        let r = ResolvedSort { axis: SortAxis::Title, explicit_order: None };
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "apple");
         assert_eq!(sorted[2].clean_stem(), "zebra");
@@ -745,7 +738,6 @@ mod sort_dispatch_tests {
         let r = ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: Some(vec!["intro".into()]),
-            series_default: true,
         };
         let sorted = sort_by_resolved(&[&a, &b, &intro], &r);
         assert_eq!(sorted[0].clean_stem(), "intro");  // listed first
@@ -787,7 +779,6 @@ mod sort_dispatch_tests {
         let r = ResolvedSort {
             axis: SortAxis::Title,
             explicit_order: Some(vec!["appendix".into(), "intro".into()]),
-            series_default: true,
         };
 
         let sorted = sort_by_resolved(&[&appendix, &intro], &r);

@@ -499,7 +499,7 @@ fn test_generate_children_pre_sorted_card_style() {
 }
 
 fn weight_sort() -> moss_core::sort::ResolvedSort {
-    moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::Weight, explicit_order: None, series_default: true }
+    moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::Weight, explicit_order: None }
 }
 
 #[test]

@@ -122,7 +122,7 @@ pub(super) fn order_docs<'a>(
     if keep_order {
         return soon.into_iter().chain(rest).collect();
     }
-    let by = |axis| ResolvedSort { axis, explicit_order: None, series_default: false };
+    let by = |axis| ResolvedSort { axis, explicit_order: None };
     sort_by_resolved(&soon, &by(SortAxis::DateAsc))
         .into_iter()
         .chain(sort_by_resolved(&rest, &by(SortAxis::Date)))

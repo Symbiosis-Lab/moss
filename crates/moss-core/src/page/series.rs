@@ -122,15 +122,12 @@ pub fn is_sequence_step<P: SitePage>(page: &P) -> bool {
         && !matches!(page.series(), Some(SeriesField::Flag(false)))
 }
 
-/// Whether a folder's series chrome is on for its children: an explicit
-/// `series:` on the folder wins (the list form always means on), else its
-/// resolved sort decides (a weight axis or an explicit order).
+/// Whether a folder's series chrome is on for its children: only the
+/// folder's own `series:` turns it on (`true`, or the list form). How the
+/// folder is ordered says nothing about it, since most ordered folders are
+/// sections, not sequences to read through.
 pub fn chrome_on<P: SitePage>(folder: &P) -> bool {
-    match folder.series() {
-        Some(SeriesField::Flag(on)) => *on,
-        Some(SeriesField::Ordered(_)) => true,
-        None => folder.direct_children_sort().is_some_and(|sort| sort.series_default),
-    }
+    matches!(folder.series(), Some(SeriesField::Flag(true) | SeriesField::Ordered(_)))
 }
 
 /// The folder whose series chain `page` steps in, when that chain's chrome is
