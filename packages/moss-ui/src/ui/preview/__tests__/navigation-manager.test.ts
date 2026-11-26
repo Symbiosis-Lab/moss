@@ -917,7 +917,7 @@ describe("a link click the bridge announces", () => {
   test("a build landing before the new page reports in neither morphs nor reloads the page being left", async () => {
     start("http://localhost:8080/pictures/?__moss_shell=1");
     expect(navManager.isNavigationPending()).toBe(true);
-    await expect(navManager.morph()).resolves.toBe(false);
+    await expect(navManager.morph()).resolves.toBe("failed");
     await expect(navManager.reload()).resolves.toBe(true);
     expect(rpcMorph).not.toHaveBeenCalled();
     expect(rpcCall).not.toHaveBeenCalled();
@@ -970,25 +970,33 @@ describe("NavigationManager.morph()", () => {
     vi.restoreAllMocks();
   });
 
-  test("returns false immediately when there is no iframe", async () => {
+  test("fails immediately when there is no iframe", async () => {
     const noIframe = new NavigationManager(null);
-    await expect(noIframe.morph()).resolves.toBe(false);
+    await expect(noIframe.morph()).resolves.toBe("failed");
   });
 
-  test("posts moss-morph with the generation and resolves true on the ack", async () => {
+  test("posts moss-morph with the generation and resolves applied on the ack", async () => {
     const p = navManager.morph();
     expect(postSpy).toHaveBeenCalledWith({ type: "moss-morph", gen: 1 }, "*");
     // Bridge acks success.
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { gen: (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen, type: "moss-morph-applied" } }));
-    await expect(p).resolves.toBe(true);
+    await expect(p).resolves.toBe("applied");
   });
 
-  test("resolves false on moss-morph-failed", async () => {
+  test("a page that declines resolves declined, not failed", async () => {
+    const p = navManager.morph();
+    window.dispatchEvent(
+      new MessageEvent("message", { source: iframe.contentWindow, data: { gen: (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen, type: "moss-morph-declined", scripts: ["src:/_moss/theme/script.js"] } }),
+    );
+    await expect(p).resolves.toBe("declined");
+  });
+
+  test("resolves failed on moss-morph-failed", async () => {
     const p = navManager.morph();
     window.dispatchEvent(
       new MessageEvent("message", { source: iframe.contentWindow, data: { gen: (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen, type: "moss-morph-failed", error: "boom" } }),
     );
-    await expect(p).resolves.toBe(false);
+    await expect(p).resolves.toBe("failed");
   });
 
   test("ignores unrelated messages, then resolves on the real ack", async () => {
@@ -996,14 +1004,14 @@ describe("NavigationManager.morph()", () => {
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { type: "unrelated-navigation", url: "/x" } }));
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { type: "something-else" } }));
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { gen: (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen, type: "moss-morph-applied" } }));
-    await expect(p).resolves.toBe(true);
+    await expect(p).resolves.toBe("applied");
   });
 
-  test("resolves false after the timeout when no ack arrives", async () => {
+  test("resolves failed after the timeout when no ack arrives", async () => {
     vi.useFakeTimers();
     const p = navManager.morph();
     await vi.advanceTimersByTimeAsync(4000);
-    await expect(p).resolves.toBe(false);
+    await expect(p).resolves.toBe("failed");
   });
 
   test("syncs the nav-pill title from the morph ack (heals a stuck title)", async () => {
@@ -1019,7 +1027,7 @@ describe("NavigationManager.morph()", () => {
         data: { gen: (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen, type: "moss-morph-applied", title: "奥林匹克国家公园" },
       }),
     );
-    await expect(p).resolves.toBe(true);
+    await expect(p).resolves.toBe("applied");
     expect(pill.textContent).toBe("奥林匹克国家公园");
   });
 
@@ -1039,13 +1047,13 @@ describe("NavigationManager.morph()", () => {
     const secondGen = (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen;
     expect(secondGen).not.toBe(firstGen);
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { type: "moss-morph-applied", gen: firstGen, title: "First" } }));
-    await expect(first).resolves.toBe(true);
+    await expect(first).resolves.toBe("applied");
     let secondSettled = false;
     void second.then(() => { secondSettled = true; });
     await Promise.resolve();
     expect(secondSettled).toBe(false);
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { type: "moss-morph-applied", gen: secondGen, title: "Second" } }));
-    await expect(second).resolves.toBe(true);
+    await expect(second).resolves.toBe("applied");
   });
 
   test("a late morph acknowledgement cannot change the title after navigation intent changes", async () => {
@@ -1054,7 +1062,7 @@ describe("NavigationManager.morph()", () => {
     const gen = (postSpy.mock.calls.at(-1)![0] as { gen: number }).gen;
     navManager.beginNavigation("http://localhost:8080/posts/");
     window.dispatchEvent(new MessageEvent("message", { source: iframe.contentWindow, data: { type: "moss-morph-applied", gen, title: "Obsolete" } }));
-    await expect(morph).resolves.toBe(false);
+    await expect(morph).resolves.toBe("failed");
     expect(document.getElementById("moss-url-text")!.textContent).toBe("Current");
   });
 
@@ -2808,7 +2816,7 @@ describe("NavigationManager navigation deadline", () => {
     (manager as any).iframe = { contentWindow: { postMessage: post }, addEventListener: vi.fn() };
     manager.beginNavigation(`${origin}/x/`);
     await expect(manager.reload()).resolves.toBe(true);
-    await expect(manager.morph()).resolves.toBe(false);
+    await expect(manager.morph()).resolves.toBe("failed");
     expect(call).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
     (manager as any).iframe = null;

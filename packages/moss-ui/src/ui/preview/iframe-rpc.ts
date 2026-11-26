@@ -4,8 +4,14 @@
 // the preview iframe via postMessage. The iframe runs an injected bridge
 // script (iframe-bridge.js) that handles RPC calls dynamically.
 
-/** How a request to update the page in place ended; `error` says why the caller must reload instead. */
-export type MorphResult = { applied: true; title?: string } | { applied: false; error: string };
+/**
+ * How a request to update the page in place ended. `declined` is a page that must reload by
+ * design (its author's scripts would not survive a morph); `error` is a morph that failed.
+ */
+export type MorphResult =
+  | { applied: true; title?: string }
+  | { applied: false; declined: string[] }
+  | { applied: false; error: string };
 
 type PendingCall = {
   resolve: (result: unknown) => void;
@@ -107,8 +113,9 @@ export class IframeRPC {
       };
       const onMessage = (e: MessageEvent) => {
         const type = e.data?.type;
-        if ((type !== "moss-morph-applied" && type !== "moss-morph-failed") || e.source !== target || e.data?.gen !== gen) return;
+        if ((type !== "moss-morph-applied" && type !== "moss-morph-failed" && type !== "moss-morph-declined") || e.source !== target || e.data?.gen !== gen) return;
         if (type === "moss-morph-applied") return done({ applied: true, title: e.data?.title });
+        if (type === "moss-morph-declined") return done({ applied: false, declined: e.data?.scripts ?? [] });
         // `changedScripts` names the scripts behind a `script-changed` verdict.
         const why = (e.data?.changedScripts as string[] | undefined)?.join(", ");
         done({ applied: false, error: `${e.data?.error ?? "unknown"}${why ? ` [${why}]` : ""}` });

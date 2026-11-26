@@ -115,6 +115,24 @@ export function describeScriptChange(live: ParentNode, next: ParentNode): string
 }
 
 /**
+ * A script the author wrote and the site serves: the theme's, or one of the site's own
+ * files. A morph never re-runs it, so what it built would be erased; moss's own `/_moss/`
+ * scripts re-scan on `moss-morph-patched` instead. Cross-origin tags (analytics and the
+ * like) draw nothing and would reload every page, and inline scripts (moss emits unmarked
+ * ones) are not counted.
+ */
+function isAuthorScript(key: string): boolean {
+  const src = key.startsWith("src:") ? key.slice(4) : null;
+  if (src === null || /^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) return false;
+  return src.startsWith("/_moss/theme/") || !src.startsWith("/_moss/");
+}
+
+/** The live page's author scripts, by key; any one means it reloads rather than morphs. */
+export function authorScriptKeys(root: ParentNode): string[] {
+  return siteScriptKeys(root).filter(isAuthorScript);
+}
+
+/**
  * The attribute names `<body>` last carried FROM THE SERVER.
  *
  * Seeded by `captureServerBody()` at bridge INIT — not lazily on the first

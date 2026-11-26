@@ -14,7 +14,7 @@
 
 import { Idiomorph } from "idiomorph";
 import { pickThemeFromMessage, startPageColor } from "./iframe-bridge-theme";
-import { describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
+import { authorScriptKeys, describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
 import { createAssetSwapBuffer } from "./asset-swap-buffer";
 import { bustSrcset, normPath, refetchSrc, srcsetMatches } from "./asset-urls";
 import { FOCUS_FRACTION, getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "./scroll-interpolate";
@@ -994,6 +994,12 @@ import { installCaptureResponder } from "./capture/responder";
     if (e.data?.type !== "moss-morph") return;
     const { gen } = e.data as { gen?: number };
     const url = location.href; // same-origin; carries ?__moss_shell=1
+    // What the author's own scripts built would not survive a morph: decline, and the shell reloads.
+    const scripts = authorScriptKeys(document);
+    if (scripts.length > 0) {
+      window.parent.postMessage({ type: "moss-morph-declined", gen, url, scripts }, "*");
+      return;
+    }
     // `cache: "reload"` forces a fresh fetch of the just-rebuilt page.
     fetch(url, { cache: "reload" })
       .then((r) => {

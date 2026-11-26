@@ -190,6 +190,9 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
   writeFileSync(join(site, '.moss', 'config.toml'), '[site]\nurl = "https://garden.example.org"\n');
   mkdirSync(join(site, 'notes'));
   writeFileSync(join(site, 'notes', 'first-frost.md'), '---\ntitle: First frost\ndate: 2026-10-01\n---\nThe beds are covered.\n');
+  // A page that owns a script, which draws into it as a theme's map does. In a folder, so the tree the drag test measures keeps its length.
+  writeFileSync(join(site, 'notes', 'drawn.md'), '---\ntitle: Drawn\n---\n' + Array.from({ length: 80 }, (_, i) => `Row ${i} of the drawn page.`).join('\n\n') + '\n');
+  writeFileSync(join(site, 'notes', 'drawn.js'), "document.querySelector('main').append(Object.assign(document.createElement('figure'), { className: 'drawn' }));\n");
 }, {
   // The new-page test reads the rename's own request from the log.
   MOSS_LOG_LEVEL: 'info',
@@ -887,6 +890,20 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
   expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
+});
+
+test("an edit to a page whose own script draws into it reloads it, keeping the drawing and the scroll", async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await preview.evaluate(() => location.assign('/notes/drawn/'));
+  await preview.waitForFunction(() => location.pathname === '/notes/drawn/' && document.readyState === 'complete' && document.querySelector('figure.drawn'), null, { timeout: 30_000 });
+  await preview.evaluate(() => { window.scrollTo(0, 900); (window as unknown as { kept: boolean }).kept = true; });
+
+  writeFileSync(join(serve.site, 'notes', 'drawn.md'), readFileSync(join(serve.site, 'notes', 'drawn.md'), 'utf8') + '\nA line added.\n');
+  await preview.waitForFunction(() => document.body?.innerText.includes('A line added') && document.querySelector('figure.drawn'), null, { timeout: 30_000 });
+  expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was morphed, not reloaded').toBeUndefined();
+  expect(await preview.locator('figure.drawn').count()).toBe(1);
+  await expect.poll(() => preview.evaluate(() => Math.round(window.scrollY)), { message: 'the scroll was kept' }).toBe(900);
 });
 
 // Red only in WebKit without the fix: Chromium's in-place refresh succeeds mid-navigation, WebKit's fails and falls back to a reload.

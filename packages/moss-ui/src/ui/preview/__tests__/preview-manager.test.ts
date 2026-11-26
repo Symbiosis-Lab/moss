@@ -123,7 +123,7 @@ vi.mock('../navigation-manager', () => ({
     }
     // Both return false so refresh() exercises the cache-busting iframe.src
     // fallback (morph default-ON tries morph first, then reload, then iframe.src).
-    async morph() { return false; }
+    async morph() { return 'failed'; }
     async reload() { return false; }
     async callBridge(...args: unknown[]) { mockNavState.bridgeCalls.push(args); return mockNavState.bridgeAnswer?.(...args) ?? null; }
   },
@@ -1993,7 +1993,7 @@ describe('PreviewManager', () => {
 
     test('a FileChanged before the first bridge navigation waits for it before requesting a morph', async () => {
       const nav = (previewManager as any).navigationManager;
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       nav.beginNavigation('http://localhost:8080/');
       expect(nav.getCurrentUrl()).toBe('http://localhost:8080/');
       expect(nav.getActivePage()).toBeNull();
@@ -2029,7 +2029,7 @@ describe('PreviewManager', () => {
     test('a FileChanged affecting the current page: morph lands → outcome=morph-applied', async () => {
       mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
-      vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue(true);
+      vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue('applied');
       const refreshSpy = vi.spyOn(previewManager, 'refresh');
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html'] });
@@ -2061,7 +2061,7 @@ describe('PreviewManager', () => {
         // resolved in preview-actions.test.ts against the real URL).
         { attributes: { rel: 'stylesheet', href: 'http://localhost:3000/notes/handout.css' } },
       ]);
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['notes/handout.css', 'sitemap.xml'] });
@@ -2094,7 +2094,7 @@ describe('PreviewManager', () => {
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       const nav = (previewManager as any).navigationManager;
       vi.spyOn(nav, 'callBridge').mockResolvedValue([{ attributes: { href: 'http://localhost:3000/_moss/theme/style.css' } }]);
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', '_moss/theme/style.css'] });
@@ -2110,7 +2110,7 @@ describe('PreviewManager', () => {
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       const nav = (previewManager as any).navigationManager;
       vi.spyOn(nav, 'callBridge').mockResolvedValue([]);
-      vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      vi.spyOn(nav, 'morph').mockResolvedValue('applied');
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', 'rss.xml'] });
 
@@ -2128,6 +2128,20 @@ describe('PreviewManager', () => {
 
       expect(vi.mocked(info)).toHaveBeenCalledWith(
         '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=morph-failed→reload',
+      );
+    });
+
+    test('a page that declines the morph reloads → outcome=reload, not a morph failure', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      vi.spyOn(nav, 'morph').mockResolvedValue('declined');
+      vi.spyOn(nav, 'reload').mockResolvedValue(true);
+
+      await previewManager.refresh('file-changed');
+
+      expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=reload',
       );
     });
 

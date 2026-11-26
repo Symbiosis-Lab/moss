@@ -42,6 +42,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- The live preview keeps what a theme's or page's own script draws, such as a map, when the site rebuilds: a page that runs one reloads instead of having its content swapped in place, which erased the drawing and left its empty frame.
 - `moss deploy` no longer refuses a page as "would roll back to older source content" when the page is the published one without the `uid:` line moss wrote into it after that publish, as a copy from git or a sync has it. A page that is really older still needs `--accept-stale-content`.
 - `moss build --serve` on a folder with nothing new since the last build prints the preview's address again ("Preview server ready! Access at …"). Since 0.15.27 it said only "Unchanged since the last build."
 - Before a publish, moss no longer warns that folders such as `/assets/` will go offline. This came up after a publish from a ready-made folder, or after the attachment folder was set to `assets`.

@@ -1833,14 +1833,13 @@ export class PreviewManager {
     // Use in-place idiomorph updates by default; moss.preview.morph=0 opts out. The bridge
     // re-fetches its own URL same-origin and reconciles the DOM in place,
     // eliminating the WebKit blank-until-scroll a cross-origin iframe reload
-    // causes (#135275). On failure/timeout it returns false → we fall through
-    // to reload() below, so behavior never regresses when the morph misfires.
-    let outcome: RefreshOutcome | undefined, morphAttempted = false;
+    // causes (#135275). A declined or failed morph falls through to reload() below.
+    let outcome: RefreshOutcome | undefined, morph: 'applied' | 'declined' | 'failed' | undefined;
     const yielded = this.navigationManager.isNavigationPending();
     if (PreviewManager.isMorphEnabled() && !reloadOnly) {
-      morphAttempted = true;
       diagCount('preview.morph');
-      if (await this.navigationManager.morph()) outcome = 'morph-applied';
+      morph = await this.navigationManager.morph();
+      if (morph === 'applied') outcome = 'morph-applied';
       if (!isCurrent()) return;
     }
 
@@ -1849,7 +1848,7 @@ export class PreviewManager {
       // reload() reports success without acting while a navigation is pending.
       outcome = yielded
         ? 'skipped(navigation pending)'
-        : morphAttempted ? 'morph-failed→reload' : 'reload';
+        : morph === 'failed' ? 'morph-failed→reload' : 'reload';
     }
     if (!isCurrent()) return;
 

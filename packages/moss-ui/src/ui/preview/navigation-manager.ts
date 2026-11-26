@@ -1341,19 +1341,23 @@ export class NavigationManager {
 
   /**
    * Morph the current document in place, preserving scroll, focus and undo.
-   * False lets the current request fall back to reload.
+   * Anything but `applied` lets the current request fall back to reload.
    */
-  async morph(): Promise<boolean> {
-    if (!this.rpc || this.requestedUrl) return false;
+  async morph(): Promise<"applied" | "declined" | "failed"> {
+    if (!this.rpc || this.requestedUrl) return "failed";
     const request = this.pageRequest.current();
     const result = await this.rpc.morph();
-    if (this.pageRequest.isStale(request)) return false;
+    if (this.pageRequest.isStale(request)) return "failed";
     if (result.applied) {
       this.applyMorphedTitle(result.title);
-      return true;
+      return "applied";
+    }
+    if ("declined" in result) {
+      debug(`[NavigationManager] morph declined, author scripts [${result.declined.join(", ")}] → reload`);
+      return "declined";
     }
     warn(`[NavigationManager] morph failed: ${result.error} → reload fallback`);
-    return false;
+    return "failed";
   }
 
   /** One call into the previewed page; rejects when it has no bridge. */
