@@ -491,8 +491,10 @@ mod tests {
 
         let mut files = Vec::new();
         walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
-        let mut listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
-        listed.extend(crate::config::site_settings::UNLISTED_SITE_KEYS);
+        // The union the unknown-key note reads: a retired key such as `domain` is still read.
+        let retired = moss_core::contract::retired::RETIRED.iter().filter(|r| r.kind == moss_core::contract::retired::RetiredKind::ConfigKey);
+        let listed: Vec<String> = crate::config::site_settings::config_keys().chain(retired.map(|r| r.name.to_string())).collect();
+        let listed: Vec<&str> = listed.iter().filter_map(|k| k.strip_prefix("site.")).collect();
 
         let mut missing = Vec::new();
         for file in &files {

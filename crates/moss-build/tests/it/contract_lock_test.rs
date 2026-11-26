@@ -1,7 +1,9 @@
 //! A released contract name never leaves silently.
 //!
-//! `src/contract/released-contract.txt` lists every class, `data-*` value and
-//! `--moss-*` property a release has shipped. Each must still be in the
+//! moss-core's `src/contract/released-contract.txt` lists every class, `data-*`
+//! value, `--moss-*` property, authored name and config key a release has
+//! shipped. It is checked from this crate because the config keys are
+//! assembled here. Each must still be in the
 //! contract or have a row in `contract::retired`, which is what the build
 //! tells a theme's author. The file is read here only, never compiled into
 //! the library. At a release cut, `CONTRACT_LOCK=update` adds the live names
@@ -15,7 +17,13 @@ use moss_core::schema_fields::BUILTIN_FIELDS;
 use moss_core::contract::tokens::load_tokens;
 use std::collections::BTreeSet;
 
-const LOCK: &str = include_str!("../../src/contract/released-contract.txt");
+// A macro, not a const, because `include_str!` takes only a literal or a macro.
+macro_rules! lock_path {
+    () => {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../moss-core/src/contract/released-contract.txt")
+    };
+}
+const LOCK: &str = include_str!(lock_path!());
 
 fn live() -> BTreeSet<String> {
     let mut names = BTreeSet::new();
@@ -45,8 +53,10 @@ fn live() -> BTreeSet<String> {
     for f in BUILTIN_FIELDS {
         names.insert(format!("front-matter {}", f.name));
     }
-    // Config keys are assembled in moss-build, out of this crate's reach, so a
-    // locked `config-key` line is never reported as gone here.
+    // The checked tables only; a table with no known-key list has no lines.
+    for k in moss_build::config::site_settings::config_keys() {
+        names.insert(format!("config-key {k}"));
+    }
     names
 }
 
@@ -80,8 +90,7 @@ fn contract_lock_every_released_name_is_live_or_retired() {
         let mut all: BTreeSet<String> = locked().into_iter().map(String::from).collect();
         all.extend(live());
         let body: String = all.iter().map(|l| format!("{l}\n")).collect();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/contract/released-contract.txt");
-        std::fs::write(path, header + &body).expect("write released-contract.txt");
+        std::fs::write(lock_path!(), header + &body).expect("write released-contract.txt");
         return;
     }
     let live = live();

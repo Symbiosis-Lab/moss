@@ -1,5 +1,5 @@
-# Every contract name moss has released: a class, a data-* value or a --moss-* property.
-# Written only at a release cut (CONTRACT_LOCK=update cargo test -p moss-core --test it contract_lock), never by hand.
+# Every contract name moss has released: a class, a data-* value, a --moss-* property, an authored name or a config key.
+# Written only at a release cut (CONTRACT_LOCK=update cargo test -p moss-build --test it contract_lock), never by hand.
 # Lines are only ever added. A name that leaves the contract needs a row in src/contract/retired.rs.
 # Names only: a class moved under another parent is not caught here; the CHANGELOG and client regression cover structure.
 class active

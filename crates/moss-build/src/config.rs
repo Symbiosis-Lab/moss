@@ -47,6 +47,9 @@ pub mod site_settings;
 use moss_core::page::site_config::{ConfigValue, CoreConfig};
 use toml::Value;
 
+/// The keys a `[fields.<name>]` table may set.
+pub(crate) const FIELD_KEYS: &[&str] = &["type", "of", "place", "label", "text", "in", "card", "pictures"];
+
 /// The parsed contents of one `.moss/config.toml`.
 ///
 /// Parsed once per call today, and holdable — which is the point. The app used
@@ -206,14 +209,18 @@ impl ConfigFile {
     /// the file, and the nearest known key when one is near. A note, not a
     /// problem, because older moss versions left keys that no code reads now.
     pub fn unknown_site_keys(&self) -> Vec<String> {
-        use crate::config::site_settings::{nearest_known_key, site_settings, UNLISTED_SITE_KEYS};
+        use crate::config::site_settings::{nearest_known_key, site_settings};
+        use moss_core::contract::retired::{find, RetiredKind};
         let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
             return Vec::new();
         };
         let known: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
         site.keys()
-            .filter(|key| !known.contains(&key.as_str()) && !UNLISTED_SITE_KEYS.contains(&key.as_str()))
+            .filter(|key| !known.contains(&key.as_str()))
             .map(|key| {
+                if let Some(r) = find(RetiredKind::ConfigKey, &format!("site.{key}")) {
+                    return format!("[site] {key} in .moss/config.toml was retired {}; {}", r.when(), r.note);
+                }
                 if key == "title" {
                     return "[site] title is not a setting in .moss/config.toml; the site's name is the `title:` of its home page".to_string();
                 }
@@ -443,7 +450,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in" | "card" | "pictures") {
+                if !FIELD_KEYS.contains(&key.as_str()) {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }

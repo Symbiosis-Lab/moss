@@ -65,6 +65,7 @@ mod comment_moderation_gate_test;
 mod comment_refresh_on_request_test;
 mod composed_asset_name_test;
 mod content_lock_test;
+mod contract_lock_test;
 mod copy_dir;
 mod country_map_contrast_test;
 mod country_map_search_test;

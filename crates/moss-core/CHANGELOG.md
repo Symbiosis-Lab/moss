@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The released-contract lock test moved to moss-build, which can see the config keys, and `released-contract.txt` now records a `config-key` line for every key the build checks. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-build --test it contract_lock`.
+
 - **BREAKING:** `ast::block_images` returns `Vec<BlockImage>`, each picture's `src` with its `alt`, instead of `Vec<&Url>`.
 - **BREAKING:** `page::preview_document(&RenderedPage, lang, base_href)` takes no stylesheet and the document carries none, so a host adds the site's stylesheet once instead of receiving it inside every preview.
 - `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.

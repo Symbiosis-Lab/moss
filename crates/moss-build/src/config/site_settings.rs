@@ -1,14 +1,22 @@
-//! The `[site]` keys the build reads, one entry each, and the check that names
-//! the keys it does not read. `moss describe` prints this table too, and the
-//! drift test in `cli::describe` fails when a key is read in code and missing here.
+//! The `[site]` keys the build reads, one entry each, the one set of every
+//! checked config key, and the check that names the keys it does not read.
+//! `moss describe` prints the `[site]` table too, and the drift test in
+//! `cli::describe` fails when a key is read in code and missing here.
 
 use moss_core::contract::describe::SiteSettingInfo;
 
 use crate::infra::edit_distance::levenshtein;
 
-/// Read but not listed: `domain` is read as `url` in a folder written before
-/// `url` existed.
-pub(crate) const UNLISTED_SITE_KEYS: [&str; 1] = ["domain"];
+/// Every config key the build checks, as `<table>.<key>`: the one set the
+/// unknown-key reports read, and the one the released-contract name lock
+/// records. Tables with no known-key check (`[channels.*]`, `[services]`, ...)
+/// are not in it.
+pub fn config_keys() -> impl Iterator<Item = String> {
+    let site = site_settings().into_iter().map(|s| s.name);
+    [("site", site.collect::<Vec<_>>()), ("fields.*", super::FIELD_KEYS.to_vec()), ("map.layers.*", super::map_layers::KEYS.to_vec())]
+        .into_iter()
+        .flat_map(|(table, keys)| keys.into_iter().map(move |k| format!("{table}.{k}")))
+}
 
 /// `[site]` table in `.moss/config.toml` — one entry per key the build reads
 /// through `site_bool` / `site_str`. The drift test in `cli::describe` fails when

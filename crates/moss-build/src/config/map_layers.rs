@@ -16,7 +16,8 @@ pub const MIN_MAX_ZOOM: i64 = 10;
 pub const MAX_MAX_ZOOM: i64 = 19;
 const DEFAULT_MAX_ZOOM: u8 = 16;
 
-const KEYS: &str = "kind, source, bbox, max_zoom, budget, credit, annotations";
+/// The keys a `[map.layers.<name>]` table may set.
+pub(crate) const KEYS: &[&str] = &["kind", "source", "bbox", "max_zoom", "budget", "credit", "annotations"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerKind {
@@ -72,8 +73,8 @@ fn parse_layer(name: &str, value: &Value) -> Result<MapLayer, String> {
         return Err(format!("{table} the layer name may use only letters, digits, - and _; it names a folder of tiles"));
     }
     let Some(t) = value.as_table() else { return Err(format!("{table} must be a table")) };
-    if let Some(key) = t.keys().find(|k| !KEYS.split(", ").any(|known| known == k.as_str())) {
-        return Err(format!("{table} has an unknown key \"{key}\"; the keys are {KEYS}"));
+    if let Some(key) = t.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(format!("{table} has an unknown key \"{key}\"; the keys are {}", KEYS.join(", ")));
     }
     let kind = match t.get("kind") {
         None => return Err(format!("{table} needs a `kind`: \"historical\" or \"streets\"")),

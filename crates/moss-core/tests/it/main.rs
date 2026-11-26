@@ -6,7 +6,6 @@ const OWN_PROCESS: &[&str] = &[];
 
 mod attr_value_render;
 mod components_sync_test;
-mod contract_lock_test;
 mod components_test;
 mod describe_test;
 mod diagram_hook;
