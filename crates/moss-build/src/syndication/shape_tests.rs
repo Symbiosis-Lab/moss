@@ -22,6 +22,7 @@ fn post(title: &str, content: &str) -> ArticleInfo {
         uid: Some("ab12cd34".into()),
         syndicate: None,
         untitled: false,
+        hidden_from_search_engines: false,
     }
 }
 

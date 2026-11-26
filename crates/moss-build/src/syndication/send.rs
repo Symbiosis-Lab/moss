@@ -295,6 +295,7 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
 async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
     let mp = crate::moss_paths::MossPaths::new(folder);
     let records = Records::in_vault(&mp);
+    let choices = super::choose::Choices::in_vault(&mp);
     let channels = manager.copy_channels();
     let by_uid = latest_by_uid(articles);
 
@@ -302,7 +303,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let mut due = records.all();
     due.sort_by_cached_key(|r| {
         let post = r.post.as_ref().map(|p| &p.article).or_else(|| by_uid.get(&r.uid).copied());
-        let rank = post.and_then(|p| super::Named::of_post(p, &channels)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
+        let rank = post.and_then(|p| super::Named::of_post(p, &channels, &choices)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
     let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
@@ -325,7 +326,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     if icon.is_none() && !queues.is_empty() {
         log::warn!(target: "syndication", "this site has no icon of its own at 256 px or more (assets/favicon.svg, or a PNG of at least 256 px), so channels that show one get none");
     }
-    let run = Run { folder, manager, records: &records, channels: &channels, by_uid: &by_uid, articles, config: &config, handoffs: &handoffs, opts, icon };
+    let run = Run { folder, manager, records: &records, choices: &choices, channels: &channels, by_uid: &by_uid, articles, config: &config, handoffs: &handoffs, opts, icon };
     let out = std::sync::Mutex::new(Vec::new());
     let push = |place: usize, s: Sent| {
         (opts.emit)(&s);
@@ -342,6 +343,7 @@ struct Run<'a> {
     folder: &'a Path,
     manager: &'a PluginManager,
     records: &'a Records,
+    choices: &'a super::choose::Choices,
     channels: &'a BTreeMap<String, CopyChannel>,
     by_uid: &'a HashMap<String, &'a ArticleInfo>,
     articles: &'a ArticleMap,
@@ -357,7 +359,7 @@ impl Run<'_> {
     /// place in the whole send. Under the channel's turn, each record is
     /// read again: another send may have settled it meanwhile.
     async fn channel(&self, channel_id: String, queue: Vec<(usize, CopyRecord)>, push: &(dyn Fn(usize, Sent) + Sync)) {
-        let Run { folder, manager, records, channels, by_uid, articles, config, handoffs, opts, .. } = *self;
+        let Run { folder, manager, records, choices, channels, by_uid, articles, config, handoffs, opts, .. } = *self;
         let _turn = match records.channel_turn(&channel_id).await {
             Ok(turn) => turn,
             Err(e) => {
@@ -379,7 +381,7 @@ impl Run<'_> {
             }
             // The latest build is the author's latest word: a channel the post no
             // longer names gets nothing more, and its record keeps its history.
-            if now.is_some_and(|p| !super::Named::of_post(p, &channels).is_some_and(|n| n.ids().contains(&record.channel))) {
+            if now.is_some_and(|p| !super::Named::of_post(p, &channels, choices).is_some_and(|n| n.ids().contains(&record.channel))) {
                 continue;
             }
             let Some(channel) = channels.get(&record.channel) else { continue };
@@ -964,7 +966,7 @@ mod tests {
         let records = Records::in_vault(&mp);
         let plans = plan::decide(&plan::PlanInputs {
             folder: root, articles: &map, previously_live: None, edited_sources: &Default::default(),
-            channels: &channels, config: &config, site_url: Some(site),
+            channels: &channels, config: &config, site_url: Some(site), choices: &Default::default(),
         }, &records);
         assert_eq!(plans[0].entries[0].action, plan::Action::Due);
         let options = ShapeOptions::new(&config, root, &map, &post, "one", None);

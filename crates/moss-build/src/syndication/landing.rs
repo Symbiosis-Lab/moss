@@ -60,7 +60,8 @@ impl Before {
                 return Vec::new();
             }
         };
-        let inputs = PlanInputs { config, folder, site_url: self.site_url.as_deref(), articles: live, previously_live, edited_sources: &self.edited, channels: &self.channels };
+        let choices = super::choose::Choices::in_vault(&MossPaths::new(folder));
+        let inputs = PlanInputs { config, folder, site_url: self.site_url.as_deref(), articles: live, previously_live, edited_sources: &self.edited, channels: &self.channels, choices: &choices };
         plan::decide(&inputs, records)
     }
 

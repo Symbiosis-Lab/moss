@@ -14,6 +14,7 @@ fn post(source: &str, url: &str, uid: &str, syndicate: &[&str], fm: serde_json::
         uid: Some(uid.into()),
         syndicate: Some(syndicate.iter().map(|s| s.to_string()).collect()),
         untitled: false,
+        hidden_from_search_engines: false,
     }
 }
 
@@ -45,7 +46,7 @@ fn a_new_post_is_due_on_every_channel_it_names() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().into());
     let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky", "mastodon"], serde_json::json!({}))]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     assert_eq!(
         actions(&plans),
         [("notes/a/".into(), "bluesky".into(), Action::Due), ("notes/a/".into(), "mastodon".into(), Action::Due)]
@@ -63,7 +64,7 @@ fn a_post_live_before_its_folder_named_the_channel_waits_unless_it_names_it_itse
         post("notes/bare.md", "notes/bare/", "0c0c0c0c", &["bluesky"], serde_json::json!({})),
     ]);
     let before = [live("0a0a0a0a", "notes/old/"), live("0b0b0b0b", "notes/own/"), live("99999999", "notes/bare/")];
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: Some(&before), edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: Some(&before), edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     let got = actions(&plans);
     assert!(matches!(got[0].2, Action::Skip { .. }), "{got:?}");
     assert!(matches!(got[1].2, Action::Skip { .. }), "{got:?}");
@@ -81,11 +82,11 @@ fn a_recorded_copy_is_not_planned_again_and_an_edit_marks_it_for_update() {
     std::fs::write(dir.path().join("aa11aa11.mastodon.json"), "garbage").unwrap();
 
     let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky", "mastodon"], serde_json::json!({"uid": "aa11aa11"}))]);
-    let unchanged = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let unchanged = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     assert!(actions(&unchanged).is_empty(), "an unreadable record still blocks a repost: {unchanged:?}");
 
     let edited = HashSet::from(["notes/a.md".to_string()]);
-    let changed = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &edited, channels: &channels() }, &records);
+    let changed = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &edited, channels: &channels(), choices: &Default::default() }, &records);
     assert_eq!(actions(&changed), [("notes/a/".into(), "bluesky".into(), Action::Update)]);
 }
 
@@ -95,7 +96,7 @@ fn a_copy_already_listed_in_syndicated_is_adopted_not_posted() {
     let records = Records::at(dir.path().into());
     let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": ["https://bsky.app/profile/a/post/1"]});
     let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], fm)]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://bsky.app/profile/a/post/1".into() });
 
     let applied = apply(plans, &records, None, None, &HashMap::new());
@@ -112,7 +113,7 @@ fn a_copy_listed_with_another_spelling_of_its_host_is_adopted() {
         let records = Records::at(dir.path().into());
         let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": [listed]});
         let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], fm)]);
-        let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+        let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
         assert_eq!(actions(&plans)[0].2, Action::Adopt { url: listed.into() }, "{listed}");
     }
 }
@@ -123,7 +124,7 @@ fn a_copy_listed_as_one_address_is_adopted_too() {
     let records = Records::at(dir.path().into());
     let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": "https://bsky.app/profile/a/post/1"});
     let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], fm)]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://bsky.app/profile/a/post/1".into() });
 }
 
@@ -135,7 +136,7 @@ fn a_channel_nobody_set_up_is_reported_and_false_plans_nothing() {
         post("notes/a.md", "notes/a/", "aa11aa11", &["threads"], serde_json::json!({"uid": "aa11aa11"})),
         post("notes/b.md", "notes/b/", "bb22bb22", &[], serde_json::json!({"uid": "bb22bb22"})),
     ]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     let got = actions(&plans);
     assert_eq!(got.len(), 1);
     assert!(matches!(&got[0].2, Action::Skip { reason } if reason.contains("threads")));
@@ -149,9 +150,9 @@ fn a_handed_off_copy_is_adopted_once_the_author_lists_its_address() {
     handed.state = State::HandedOff;
     records.save(&handed).unwrap();
     let before = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["mastodon"], serde_json::json!({"uid": "aa11aa11"}))]);
-    let (none, chans) = (HashSet::new(), channels());
+    let (none, chans, choices) = (HashSet::new(), channels(), Default::default());
     let config = crate::config::ConfigFile::parse("").unwrap();
-    let inputs = |m| PlanInputs { folder: std::path::Path::new("."), config: &config, site_url: Some("https://example.org"), articles: m, previously_live: None, edited_sources: &none, channels: &chans };
+    let inputs = |m| PlanInputs { folder: std::path::Path::new("."), config: &config, site_url: Some("https://example.org"), articles: m, previously_live: None, edited_sources: &none, channels: &chans, choices: &choices };
     assert!(actions(&decide(&inputs(&before), &records)).is_empty(), "nothing to do until the address is listed");
 
     let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": ["https://example.social/@a/9"]});
@@ -167,7 +168,7 @@ fn email_in_the_list_is_the_newsletter_and_plans_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().into());
     let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["email", "bluesky"], serde_json::json!({"uid": "aa11aa11"}))]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     assert_eq!(actions(&plans), [("notes/a/".into(), "bluesky".into(), Action::Due)]);
 }
 
@@ -179,7 +180,7 @@ fn a_copy_is_keyed_by_the_uid_its_page_was_built_under() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().join("copies"));
     let m = map(vec![post("notes/copy.md", "notes/copy/", "bb22bb22", &["bluesky"], serde_json::json!({"uid": "aa11aa11"}))]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     apply(plans, &records, None, None, &HashMap::new());
     assert!(records.exists("bb22bb22", "bluesky"));
     assert!(!records.exists("aa11aa11", "bluesky"), "the original's uid belongs to the original's copies");
@@ -190,7 +191,7 @@ fn a_page_whose_uid_cannot_be_written_gets_no_record() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().join("copies"));
     let m = map(vec![post("notes/missing.md", "notes/missing/", "aa11aa11", &["bluesky"], serde_json::json!({}))]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels(), choices: &Default::default() }, &records);
     let unstamped = HashMap::from([("notes/missing.md".to_string(), "it is still in the cloud".to_string())]);
     let applied = apply(plans, &records, None, None, &unstamped);
     assert!(matches!(&applied[0].action, Action::Skip { reason } if reason.contains("note id") && reason.contains("cloud")));
@@ -209,7 +210,7 @@ fn edited_refusals_refresh_the_snapshot_while_uncertain_copies_keep_it() {
     let m = map(vec![edited]);
     let edits = HashSet::from(["a.md".into()]);
     let chans = channels();
-    let inputs = PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &edits, channels: &chans };
+    let inputs = PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), articles: &m, previously_live: None, edited_sources: &edits, channels: &chans, choices: &Default::default() };
     for state in [State::Refused, State::Due, State::Sending, State::Unconfirmed, State::HandedOff] {
         let mut r = CopyRecord::due("u", "bluesky", "a.md", "a/");
         r.state = state;
@@ -253,7 +254,7 @@ fn unavailable_pages_are_skipped_before_any_new_record_is_written() {
     let config = crate::config::ConfigFile::parse("").unwrap();
     for site_url in [None, Some("https://example.org")] {
         let m = map(vec![article.clone()]);
-        let inputs = PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &config, site_url, previously_live: None, edited_sources: &HashSet::new() };
+        let inputs = PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &config, site_url, previously_live: None, edited_sources: &HashSet::new(), choices: &Default::default() };
         let plans = decide(&inputs, &records);
         assert!(matches!(&actions(&plans)[0].2, Action::Unavailable { reason } if reason.contains("take articles")));
         apply(plans, &records, site_url, Some(&m), &HashMap::new());
@@ -261,7 +262,7 @@ fn unavailable_pages_are_skipped_before_any_new_record_is_written() {
     }
     article.frontmatter.insert("syndicated".into(), serde_json::json!(["https://bsky.app/existing"]));
     let m = map(vec![article]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &config, site_url: None, previously_live: None, edited_sources: &HashSet::new() }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &config, site_url: None, previously_live: None, edited_sources: &HashSet::new(), choices: &Default::default() }, &records);
     assert!(matches!(actions(&plans)[0].2, Action::Adopt { .. }), "identity wins over fit");
 }
 
@@ -274,7 +275,7 @@ fn old_posted_copies_are_not_marked_for_update() {
     r.remote = Some(RemoteRef { id: "1".into(), url: "https://bsky.app/1".into() });
     records.save(&r).unwrap();
     let m = map(vec![post("a.md", "a/", "u", &["bluesky"], serde_json::json!({}))]);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &channels(), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), previously_live: None, edited_sources: &HashSet::from(["a.md".into()]) }, &records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &channels(), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), previously_live: None, edited_sources: &HashSet::from(["a.md".into()]), choices: &Default::default() }, &records);
     assert!(matches!(&actions(&plans)[0].2, Action::Unavailable { reason } if reason.contains("retaining")));
     apply(plans, &records, None, Some(&m), &HashMap::new());
     assert_eq!(records.get("u", "bluesky").unwrap(), r);
@@ -285,7 +286,7 @@ fn replan_edit(records: &Records, article: ArticleInfo) -> (Vec<Planned>, Articl
     let m = map(vec![article]);
     let mut chans = channels();
     chans.get_mut("bluesky").unwrap().spec.max_chars = Some(80);
-    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), previously_live: None, edited_sources: &edits }, records);
+    let plans = decide(&PlanInputs { folder: std::path::Path::new("."), articles: &m, channels: &chans, config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"), previously_live: None, edited_sources: &edits, choices: &Default::default() }, records);
     (apply(plans, records, Some("https://example.org"), Some(&m), &HashMap::new()), m)
 }
 
@@ -381,7 +382,7 @@ fn with_x() -> BTreeMap<String, ChannelInfo> {
 
 fn decide_with(channels: &BTreeMap<String, ChannelInfo>, m: &ArticleMap, before: Option<&[LiveEntry]>, records: &Records) -> Vec<(String, String, Action)> {
     let config = crate::config::ConfigFile::parse("").unwrap();
-    actions(&decide(&PlanInputs { folder: std::path::Path::new("."), config: &config, site_url: Some("https://example.org"), articles: m, previously_live: before, edited_sources: &HashSet::new(), channels }, records))
+    actions(&decide(&PlanInputs { folder: std::path::Path::new("."), config: &config, site_url: Some("https://example.org"), articles: m, previously_live: before, edited_sources: &HashSet::new(), channels, choices: &Default::default() }, records))
 }
 
 #[test]

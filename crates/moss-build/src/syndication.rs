@@ -82,10 +82,9 @@ impl Named {
         named
     }
 
-    /// The channels a post's copies go to, its folders' list applied; `None`
-    /// when neither the post nor a folder names any.
-    pub fn of_post(post: &crate::build::scan::article_map::ArticleInfo, channels: &std::collections::BTreeMap<String, plan::ChannelInfo>) -> Option<Self> {
-        post.syndicate.as_ref().map(|list| Self::of(list, channels))
+    /// The channels a post's copies go to; `None` when nothing names any.
+    pub fn of_post(post: &crate::build::scan::article_map::ArticleInfo, channels: &std::collections::BTreeMap<String, plan::ChannelInfo>, choices: &choose::Choices) -> Option<Self> {
+        Asked::by_post(post, channels, choices).list
     }
 
     pub fn ids(&self) -> &[String] {
@@ -96,6 +95,44 @@ impl Named {
     /// names none.
     pub fn shared(&self) -> &[(String, String)] {
         &self.shared
+    }
+}
+
+/// What a post asks for, by the one rule the chips, the plan and the send all
+/// share: the post's own `syndicate:` line if it has one, else its folders'
+/// list with its channel choices on top.
+#[derive(Debug, Default)]
+pub(crate) struct Asked {
+    /// The post's own word: its line, or the channels its choices turn on. A
+    /// post that was live before sends only what it names itself.
+    pub own: Named,
+    /// What the post sends; `None` when nothing names any channel.
+    pub list: Option<Named>,
+}
+
+impl Asked {
+    pub(crate) fn new(hidden: bool, line: Option<Named>, folders: Option<Named>, uid: &str, choices: &choose::Choices) -> Self {
+        if hidden {
+            return Self { own: Named::default(), list: Some(Named::default()) };
+        }
+        if let Some(line) = line {
+            return Self { own: line.clone(), list: Some(line) };
+        }
+        let own = Named { ids: choices.turned_on(uid), shared: Vec::new() };
+        if !choices.any(uid) {
+            return Self { own, list: folders };
+        }
+        let mut list = folders.unwrap_or_default();
+        choices.apply(uid, &mut list.ids);
+        Self { own, list: Some(list) }
+    }
+
+    /// From the article map, whose `syndicate` is the page's line where it has
+    /// one and its folders' list otherwise.
+    pub(crate) fn by_post(post: &crate::build::scan::article_map::ArticleInfo, channels: &std::collections::BTreeMap<String, plan::ChannelInfo>, choices: &choose::Choices) -> Self {
+        let named = post.syndicate.as_ref().map(|list| Named::of(list, channels));
+        let (line, folders) = if post.frontmatter.contains_key("syndicate") { (Some(named.unwrap_or_default()), None) } else { (None, named) };
+        Self::new(post.hidden_from_search_engines, line, folders, post.uid.as_deref().unwrap_or_default(), choices)
     }
 }
 

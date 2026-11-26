@@ -448,6 +448,7 @@ mod tests {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         }
     }
 

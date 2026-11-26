@@ -73,6 +73,7 @@ fn legacy_bytes(pages: &[(&str, &str, &str)]) -> String {
                 uid: Some((*uid).to_string()),
                 syndicate: None,
                 untitled: false,
+                hidden_from_search_engines: false,
             },
         );
     }
@@ -576,6 +577,7 @@ fn from_article_map_carries_the_title_through() {
             uid: Some("aaaa1111".into()),
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 

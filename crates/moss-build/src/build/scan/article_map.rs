@@ -80,6 +80,11 @@ pub struct ArticleInfo {
     /// copy of it is its text, not a titled article.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub untitled: bool,
+
+    /// A page reached only by its link (`search_engines: false`): no copy of
+    /// it goes anywhere, whatever its channel choices say.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_from_search_engines: bool,
 }
 
 /// Mapping from URL path to article source information
@@ -550,6 +555,7 @@ pub fn build_article_map(
             uid: doc.uid.clone(),
             syndicate: doc.channels(),
             untitled: doc.untitled,
+            hidden_from_search_engines: doc.hidden_from_search_engines(),
         };
         map.articles.insert(pretty_url, article_info);
     }

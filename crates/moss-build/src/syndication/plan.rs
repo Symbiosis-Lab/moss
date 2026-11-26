@@ -26,6 +26,7 @@ pub struct PlanInputs<'a> {
     pub config: &'a crate::config::ConfigFile,
     pub folder: &'a std::path::Path,
     pub site_url: Option<&'a str>,
+    pub choices: &'a super::choose::Choices,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -164,7 +165,8 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
 
     let mut plans = Vec::new();
     for post in articles {
-        let Some(named) = super::Named::of_post(post, inputs.channels) else { continue };
+        let asked = super::Asked::by_post(post, inputs.channels, inputs.choices);
+        let Some(named) = asked.list else { continue };
         let Some(uid) = post.uid.clone() else { continue };
         let entry = |channel: &str, action: Action| Planned {
             source_path: post.source_path.clone(),
@@ -172,11 +174,9 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             channel: channel.to_string(),
             action,
         };
-        let own: Vec<String> = post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
-        let own = super::Named::of(&own, inputs.channels);
         let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
         let already_live = was_live.contains(uid.as_str()) || was_live.contains(post.url_path.as_str());
-        let facts = PostFacts { uid: &uid, own: own.ids(), listed: &listed, already_live };
+        let facts = PostFacts { uid: &uid, own: asked.own.ids(), listed: &listed, already_live };
 
         let mut entries = Vec::new();
         for channel in named.ids() {

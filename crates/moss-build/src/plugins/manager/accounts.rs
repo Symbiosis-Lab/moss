@@ -582,7 +582,7 @@ mod tests {
         let config = crate::config::ConfigFile::parse("").unwrap();
         let records = crate::syndication::record::Records::at(dir.path().join("copies"));
         let none = std::collections::HashSet::new();
-        let plans = decide(&PlanInputs { folder: dir.path(), config: &config, site_url: Some("https://example.org"), articles: &articles, previously_live: None, edited_sources: &none, channels: &channels }, &records);
+        let plans = decide(&PlanInputs { folder: dir.path(), config: &config, site_url: Some("https://example.org"), articles: &articles, previously_live: None, edited_sources: &none, channels: &channels, choices: &Default::default() }, &records);
         let actions: Vec<_> = plans.iter().flat_map(|p| p.entries.iter().map(|e| e.action.clone())).collect();
         assert_eq!(actions, [Action::Adopt { url: listed.into() }], "a copy on the signed-in server is adopted, not posted again");
     }

@@ -537,6 +537,7 @@ mod tests {
             uid: uid.map(|s| s.to_string()),
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         }
     }
 

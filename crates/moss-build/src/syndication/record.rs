@@ -509,7 +509,7 @@ impl Records {
     }
 }
 
-fn plain_id(s: &str) -> bool {
+pub(super) fn plain_id(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 

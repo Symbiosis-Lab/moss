@@ -17,6 +17,7 @@ fn article_info(source_path: &str, url: &str, title: &str) -> ArticleInfo {
         uid: None,
         syndicate: None,
         untitled: false,
+        hidden_from_search_engines: false,
     }
 }
 
