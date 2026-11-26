@@ -387,6 +387,15 @@ impl SitePages {
         Some(format!(r#"<header><nav class="main-nav container"><div class="nav-content">{left}<div class="nav-right">{links}</div></div></nav></header>"#))
     }
 
+    /// The folder title the build draws above a folder home's body, for the
+    /// page at `path` with body `body_markdown`; `None` off a folder home. A
+    /// site or edition home sits under the masthead, which names the site, so
+    /// its title is hidden.
+    pub fn folder_heading(&self, path: &str, body_markdown: &str) -> Option<String> {
+        let page = &self.pages[self.paths.iter().position(|p| p == path)?];
+        page.is_folder_index.then(|| crate::heading::folder_heading(body_markdown, &page.label, false, crate::home::is_language_root(&page.url_path)))
+    }
+
     /// The site's name on a page in `lang`: its edition home's own title, else the site name.
     pub fn site_title(&self, lang: Language) -> String {
         localized_site_title(&self.pages, lang, self.site_lang, &self.site_name, |p| &p.label)

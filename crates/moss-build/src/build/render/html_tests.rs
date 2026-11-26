@@ -6588,7 +6588,7 @@ mod article_cover_tests {
 /// in `folder_cover.rs` (cover branch) and the no-cover branch in this file.
 #[test]
 fn test_auto_folder_index_includes_h1_heading() {
-    let folder_h1 = crate::build::components::folder_title::render("文字", false, false);
+    let folder_h1 = moss_core::heading::folder_title("文字", false, false);
     let article_list = "<div class=\"moss-cards\" data-layout=\"list\">...</div>";
     let content_html = format!("{}\n{}", folder_h1, article_list);
 
@@ -6608,32 +6608,13 @@ fn test_auto_folder_index_includes_h1_heading() {
 /// as the cover branch — single source of the class string.
 #[test]
 fn folder_index_without_cover_prepends_folder_title_h1() {
-    let folder_h1 = crate::build::components::folder_title::render("Projects", false, false);
+    let folder_h1 = moss_core::heading::folder_title("Projects", false, false);
     assert!(folder_h1.contains(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     // Integration: the no-cover branch in this file concatenates folder_h1 \n content.
     let content = "<p>Body.</p>";
     let result = format!("{}\n{}", folder_h1, content);
     assert!(result.starts_with(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     assert!(result.contains("<p>Body.</p>"));
-}
-
-#[test]
-fn no_cover_folder_heading_shows_visible_title() {
-    let doc = crate::build::types::ParsedDocument::default();
-    assert_eq!(
-        super::no_cover_folder_heading(&doc, "Projects", false),
-        r#"<h1 class="moss-folder-title">Projects</h1>"#
-    );
-}
-
-#[test]
-fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
-    // The body's own `# Title` is already the page's h1.
-    let doc = crate::build::types::ParsedDocument {
-        content: "# Projects\n\nBody.".to_string(),
-        ..Default::default()
-    };
-    assert_eq!(super::no_cover_folder_heading(&doc, "Projects", false), "");
 }
 
 // home_file_winner_tests have been moved to page_map.rs

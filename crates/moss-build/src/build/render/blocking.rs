@@ -2322,7 +2322,7 @@ pub fn generate_blocking_content_for_build(
             )
             .unwrap_or_default();
             // Synthetic folder index: no markdown source, so prepend the shared
-            // <h1 class="moss-folder-title"> via folder_title::render. Same
+            // <h1 class="moss-folder-title"> via moss_core::heading::folder_title. Same
             // helper used by folder_cover::render (cover branch) and
             // render/html.rs (no-cover branch).
             //

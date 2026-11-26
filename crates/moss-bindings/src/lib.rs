@@ -69,6 +69,9 @@ impl Site {
     /// A full document, its title, and the renderer's diagnostics. Use `check` for validation.
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         let mut page = page::render_page(path, text, &self.inputs);
+        if let Some(heading) = self.pages.folder_heading(path, moss_core::frontmatter::body(text)).filter(|h| !h.is_empty()) {
+            page.body_html = format!("{heading}\n{}", page.body_html);
+        }
         let typesetting = moss_core::frontmatter::read_page(text).0.typesetting;
         let url = |url_path: &str| moss_core::resolve::output_url::to_pretty_url(url_path);
         if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {

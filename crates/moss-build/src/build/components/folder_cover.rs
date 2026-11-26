@@ -13,7 +13,7 @@ use moss_core::render::image::Loading;
 /// When a cover is set, wraps the content in a two-column row with the cover
 /// media on the left and the cover body on the right. The cover body contains:
 ///   1. An `<h1 class="moss-folder-title">` rendered via
-///      `folder_title::render(label)` — the single page heading for SEO and
+///      `moss_core::heading::folder_title` — the single page heading for SEO and
 ///      a11y outline. Shared with the no-cover folder-index path
 ///      (`render/html.rs`) and the synthetic folder-index path
 ///      (`render/blocking.rs`). A caller whose `content` already opens with
@@ -31,7 +31,7 @@ use moss_core::render::image::Loading;
 ///
 /// `label` is the plain-text chrome label (typically `doc.label`), or `None`
 /// when `content` supplies the page's heading itself; HTML escaping happens
-/// inside `folder_title::render`, so do not pre-escape. `alt_label` names the
+/// inside `moss_core::heading::folder_title`, so do not pre-escape. `alt_label` names the
 /// page for the cover image's `alt` text SEPARATELY from `label` — a claimed
 /// leaf passes `None` for the visible title, and the alt text must still say
 /// who or what the picture is of.
@@ -47,7 +47,7 @@ pub fn render(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     // Editor preview: annotate the heading with `data-source-fm="title"` and
     // the cover media wrapper with `data-source-fm="cover"`, so a click on
-    // either points back at its frontmatter field. See `folder_title::render`.
+    // either points back at its frontmatter field. See `moss_core::heading::folder_title`.
     emit_source_fm: bool,
 ) -> String {
     match cover {
@@ -71,7 +71,7 @@ pub fn render(
                 cover_html
             };
             let folder_title_h1 = match label {
-                Some(label) => super::folder_title::render(label, emit_source_fm, false),
+                Some(label) => moss_core::heading::folder_title(label, emit_source_fm, false),
                 None => String::new(),
             };
             format!(

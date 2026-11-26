@@ -144,35 +144,6 @@ pub fn generate_html_collect_og<'d>(
     )
 }
 
-/// The folder-index heading to prepend in the no-cover branch: the shared
-/// `<h1 class="moss-folder-title">`, unless something else on the page is
-/// already showing the title. Three things can be —
-///
-/// - the body has its own `# Title` (anywhere outside a code fence), which is
-///   then both the visible title and the heading landmark: nothing is
-///   emitted, for nav and non-nav folders alike,
-/// - the body opens with a `:::hero` that carries its own heading: nothing is
-///   emitted, since the hero already supplies the `<h1>`.
-///
-/// A nav folder shows its title like any other folder.
-///
-/// Covered folder indexes bypass this helper entirely (they render the label
-/// inside the cover via `folder_cover::render`), and synthetic folder indexes
-/// are generated in `render/blocking.rs` and never reach it — so this is the
-/// only folder-title site that omits or hides it.
-fn no_cover_folder_heading(
-    doc: &crate::build::types::ParsedDocument,
-    h1_text: &str,
-    emit_source_fm: bool,
-) -> String {
-    use moss_core::heading::TitleOutcome;
-    match moss_core::heading::title_outcome(&doc.content, true) {
-        TitleOutcome::None => String::new(),
-        TitleOutcome::Hidden => crate::build::components::folder_title::render(h1_text, emit_source_fm, true),
-        TitleOutcome::Visible => crate::build::components::folder_title::render(h1_text, emit_source_fm, false),
-    }
-}
-
 /// Split a pipe-encoded `cover:` value ("path|attrs") into its resolved URL
 /// and display attrs. Shared by the folder-index cover branch and the
 /// claimed-leaf-page cover branch below — both draw the page's own `cover:`
@@ -737,15 +708,9 @@ pub(super) fn render_page<'d>(
                 // One top-level heading is required: the header names the
                 // site, so the heading is visually hidden; with no header it
                 // is shown, unless an opening hero stands in for it.
-                use moss_core::heading::{title_outcome, TitleOutcome};
-                let outcome = title_outcome(&doc.content, true);
-                if outcome == TitleOutcome::None {
-                    content
-                } else {
-                    let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
-                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
-                    format!("{h1}\n{content}")
-                }
+                let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
+                let h1 = moss_core::heading::folder_heading(&doc.content, &doc.label, emit_source_lines, !headerless);
+                if h1.is_empty() { content } else { format!("{h1}\n{content}") }
             };
 
             let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
@@ -863,17 +828,9 @@ pub(super) fn render_page<'d>(
                     // gets a hidden one instead (no byline), skipping that dedup,
                     // which guards a second visible title.
                     let heading = if is_explorer_root {
-                        crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
+                        moss_core::heading::folder_title(h1_text, emit_source_lines, true)
                     } else {
-                        format!(
-                            "{}{}",
-                            no_cover_folder_heading(
-                                doc,
-                                h1_text,
-                                emit_source_lines,
-                            ),
-                            folder_byline,
-                        )
+                        format!("{}{}", moss_core::heading::folder_heading(&doc.content, h1_text, emit_source_lines, false), folder_byline)
                     };
                     if heading.is_empty() {
                         content
@@ -902,7 +859,7 @@ pub(super) fn render_page<'d>(
                         } else {
                             format!(
                                 "{}{}",
-                                components::folder_title::render(&doc.title, emit_source_lines, true),
+                                moss_core::heading::folder_title(&doc.title, emit_source_lines, true),
                                 lead,
                             )
                         };

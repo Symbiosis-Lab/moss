@@ -209,3 +209,20 @@ fn preview_draws_the_trail_and_the_nav_bar() {
     assert!(one.contains(r#"<div class="nav-links" id="nav-links"><a href="/about/""#), "{one}");
     assert!(html("about.md").contains(r#"<a href="/about/" class="active" aria-current="page""#));
 }
+
+#[test]
+fn preview_draws_a_folder_home_s_title() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\nWelcome\n",
+        "guide/index.md": "---\ntitle: Guide\n---\nRead on\n",
+        "guide/one.md": "# One\n",
+    });
+    let files = json!(["index.md", "guide/index.md", "guide/one.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = |path: &str| json_value(&site.preview(path, texts[path].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let guide = html("guide/index.md");
+    assert!(guide.contains(r#"<article class="container"><h1 class="moss-folder-title">Guide</h1>"#), "{guide}");
+    assert!(html("index.md").contains(r#"<h1 class="moss-folder-title visually-hidden">Harbor Notes</h1>"#));
+    assert!(!html("guide/one.md").contains("moss-folder-title"));
+}

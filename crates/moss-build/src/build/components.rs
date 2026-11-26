@@ -15,7 +15,6 @@ pub mod child_summary;
 pub mod child_list;
 pub mod grid_card;
 pub mod folder_cover;
-pub mod folder_title;
 pub mod color_extract;
 pub mod date;
 pub mod event_meta;

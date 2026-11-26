@@ -94,6 +94,12 @@ fn masthead_of(html: &str) -> Option<String> {
     Some(regex::Regex::new(r">\s+<").unwrap().replace_all(out.trim(), "><").into_owned())
 }
 
+/// A page's folder title, or nothing when it draws none.
+fn folder_title_of(html: &str) -> String {
+    let Some(start) = html.find(r#"<h1 class="moss-folder-title"#) else { return String::new() };
+    html[start..].find("</h1>").map_or_else(String::new, |end| html[start..start + end + "</h1>".len()].to_string())
+}
+
 /// Fixture × field mismatch counts, and the first few differing pages.
 #[test]
 fn core_site_pages_match_the_builds_pages_on_every_fixture() {
@@ -110,6 +116,7 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     let mut mastheads = 0;
     let (mut no_expected_file, mut forced_trails, mut one_sided) = (0, 0, 0);
     let mut masthead_report = String::new();
+    let (mut headings, mut explorer_roots, mut heading_report) = (0, 0, String::new());
     for name in &names {
         let folder = scratch.join(name).join("site");
         copy_dir(&fixtures.join(name).join("input"), &folder);
@@ -143,6 +150,17 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
                 no_expected_file += 1;
                 continue;
             };
+            // A places explorer root hides its title for the map, which the preview does not draw.
+            let explorer_root = html.contains(r#"class="moss-place-map""#) && html.contains(r#"<h1 class="moss-folder-title visually-hidden""#);
+            explorer_roots += usize::from(explorer_root);
+            if page.is_folder_index && !explorer_root && !html.contains("moss-collection-cover") {
+                let built = folder_title_of(&html).replace("[TEST_DIR]", &captured.root_name);
+                let core = site.folder_heading(path, moss_core::frontmatter::body(&texts[path])).unwrap_or_default();
+                headings += 1;
+                if built != core {
+                    heading_report.push_str(&format!("{name} {path}\n  build {built}\n  core  {core}\n"));
+                }
+            }
             // A page the build draws without a masthead (`header: none`, a bare page).
             let (Some(built), Some(core)) = (masthead_of(&html), site.masthead(path).as_deref().and_then(masthead_of)) else {
                 one_sided += 1;
@@ -203,9 +221,12 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     if let Ok(out) = std::env::var("MASTHEAD_REPORT") {
         let _ = std::fs::write(out, &masthead_report);
     }
+    eprintln!("folder headings compared {headings}, skipped: {explorer_roots} places explorer roots");
     eprintln!("mastheads compared {mastheads}, skipped: {forced_trails} forced places-root trails, {one_sided} without a masthead, {no_expected_file} pages without an expected file");
     assert!(compared > 0, "no page was compared");
     assert!(mastheads > 0, "no masthead was compared");
+    assert!(headings > 0, "no folder heading was compared");
+    assert!(heading_report.is_empty(), "the preview's folder heading differs from the build's:\n{heading_report}");
     assert!(masthead_report.is_empty(), "the preview's masthead differs from the build's:\n{masthead_report}");
     assert_eq!(failures, 0, "core's pages differ from the build's in {failures} of {} fixtures:\n{report}", names.len());
 }
