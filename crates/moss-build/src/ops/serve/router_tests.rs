@@ -158,7 +158,7 @@ async fn test_image_file_returns_wrapped_html() {
     // Verify that requesting an image file returns an HTML wrapper with <img> tag,
     // __moss_raw=1 reference, and the injected bridge script.
     use tempfile::TempDir;
-    let _viewers = event_stream_lock();
+    let _viewers = viewer_signal_lock();
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     // Write a fake PNG file (content doesn't matter for wrapping logic)
@@ -730,7 +730,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_pdf_file_returns_unsupported_page() {
-    let _viewers = event_stream_lock();
+    let _viewers = viewer_signal_lock();
     // Verify that unsupported file types (PDF) get the "open in system viewer" page.
     use tempfile::TempDir;
 
@@ -2268,7 +2268,7 @@ async fn mutate_carrier_refuses_the_token_carried_as_a_cookie() {
 /// the server into whatever folder it was next pointed at.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn folder_switch_retires_the_previous_vaults_token() {
-    let _streams = event_stream_lock();
+    let _streams = viewer_signal_lock();
     let (vault_a, site_a) = served_vault();
     let (vault_b, site_b) = served_vault();
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
@@ -2961,7 +2961,7 @@ async fn read_carrier_walks_its_own_root_not_a_caller_supplied_one() {
 
 // ── The event carrier (`GET /__moss/events`) ─────────────────────────────────
 
-use crate::ops::serve::events::viewer_signal_lock as event_stream_lock;
+use crate::ops::serve::events::{settled_viewer_signal, viewer_signal_lock};
 
 /// Read one SSE record (up to the blank line) off a blocking reader, or give up.
 ///
@@ -2989,7 +2989,7 @@ fn read_one_sse_record(mut reader: impl std::io::Read) -> Option<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_refuses_a_subscriber_with_no_token() {
-    let _streams = event_stream_lock();
+    let _streams = viewer_signal_lock();
     let (_parent, _vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63410).await;
 
@@ -3046,7 +3046,7 @@ async fn event_stream_refuses_a_subscriber_with_no_token() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_delivers_a_published_event_to_a_browser() {
-    let _streams = event_stream_lock();
+    let _streams = viewer_signal_lock();
     use crate::ops::serve::events;
 
     let (_parent, _vault_path, site_dir) = confinement_vault();
@@ -3102,7 +3102,7 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
 /// that reason its frame says only that a rebuild happened.
 #[tokio::test(flavor = "multi_thread")]
 async fn reload_stream_tells_a_page_of_a_rebuild_and_nothing_else() {
-    let _streams = event_stream_lock();
+    let _streams = viewer_signal_lock();
     use crate::ops::serve::events;
     use crate::types::events::{FileChangeEvent, MossEvent};
 
@@ -3135,12 +3135,10 @@ async fn reload_stream_tells_a_page_of_a_rebuild_and_nothing_else() {
 /// waits on to tell whether anyone is watching outside its own window.
 #[tokio::test(flavor = "multi_thread")]
 async fn viewer_activity_follows_an_open_event_stream() {
-    use crate::ops::serve::events;
-    let _streams = event_stream_lock();
+    let (_streams, mut activity) = settled_viewer_signal().await;
 
     let (_parent, _vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63430).await;
-    let mut activity = events::viewer_activity();
     let before = *activity.borrow_and_update();
 
     let url = format!("http://localhost:{port}/__moss/events");
@@ -3177,8 +3175,7 @@ async fn viewer_activity_follows_an_open_event_stream() {
 /// loads, and `<img>` re-fetches after a rebuild would keep a hidden app awake.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
-    use crate::ops::serve::events;
-    let _viewers = event_stream_lock();
+    let (_viewers, mut activity) = settled_viewer_signal().await;
 
     let site = tempfile::TempDir::new().unwrap();
     std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
@@ -3189,8 +3186,6 @@ async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
     ))
     .await
     .expect("Server should start");
-    let mut activity = events::viewer_activity();
-    activity.borrow_and_update();
 
     let get = |path: &str, dest: &'static str| {
         let url = format!("http://localhost:{port}{path}");
@@ -3219,6 +3214,7 @@ async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_shell_page_request_tells_the_derive_scheduler_what_is_on_screen() {
     use crate::system::derive::priority::viewed;
+    let _viewers = viewer_signal_lock();
     let site = tempfile::TempDir::new().unwrap();
     std::fs::create_dir(site.path().join(".moss")).unwrap();
     std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
@@ -3686,7 +3682,7 @@ async fn mutate_carrier_undo_rename_takes_the_rename_id_once_and_never_a_plan() 
 /// save through the carrier kept its text and wrote the person's over it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
-    let _streams = event_stream_lock();
+    let _streams = viewer_signal_lock();
     let (vault, site_dir) = served_vault();
     let theirs = "Agent's line.\n";
     let target = vault.path().join("index.md");
@@ -3743,7 +3739,7 @@ async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
 /// preview answers it with an empty list instead of a 405.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_comment_list_read_is_answered_in_preview() {
-    let _viewers = event_stream_lock();
+    let _viewers = viewer_signal_lock();
     let site = tempfile::TempDir::new().unwrap();
     let (port, _, shutdown_tx) = start_server(ServeConfig::new(crate::moss_paths::Served::test_cell(site.path().to_path_buf()), 64233))
         .await

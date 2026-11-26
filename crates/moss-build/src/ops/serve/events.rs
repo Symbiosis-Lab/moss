@@ -103,13 +103,42 @@ pub struct ViewerActivity {
 
 static ACTIVITY: OnceLock<watch::Sender<ViewerActivity>> = OnceLock::new();
 
+#[cfg(test)]
+static VIEWER_SIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Held by every test that opens an event stream or navigates to a page:
 /// both move the one process-global viewer-activity signal, so what a test
-/// reads of it is only meaningful while no sibling can move it.
+/// reads of it is only meaningful while no sibling can move it. A mover that
+/// runs while no test holds it panics (`assert_signal_locked`).
 #[cfg(test)]
 pub(crate) fn viewer_signal_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    VIEWER_SIGNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A stream's close is left out: it lands after its test has let go, by design.
+/// Probabilistic: a test that forgets the lock passes while a sibling holds it.
+fn assert_signal_locked() {
+    #[cfg(test)]
+    assert!(
+        matches!(VIEWER_SIGNAL_LOCK.try_lock(), Err(std::sync::TryLockError::WouldBlock)),
+        "a test moved the viewer signal without holding viewer_signal_lock()"
+    );
+}
+
+/// For a test that reads the signal: the lock, then the signal once it has
+/// stayed still for 200 ms. Best effort: a sibling that held the lock can
+/// still move it after releasing, when its server drops a stream on the way
+/// down, and a drop later than that wait still lands in the reader's test.
+#[cfg(test)]
+pub(crate) async fn settled_viewer_signal()
+    -> (std::sync::MutexGuard<'static, ()>, watch::Receiver<ViewerActivity>) {
+    let lock = viewer_signal_lock();
+    let mut activity = viewer_activity();
+    activity.borrow_and_update();
+    while tokio::time::timeout(std::time::Duration::from_millis(200), activity.changed()).await.is_ok() {
+        activity.borrow_and_update();
+    }
+    (lock, activity)
 }
 
 /// Watch the preview's viewers. The first call installs the signal; before
@@ -143,6 +172,7 @@ pub(super) async fn track_viewer(
 ) -> axum::response::Response {
     let navigation = super::content_wrapper::is_navigation_request(request.headers());
     if navigation {
+        assert_signal_locked();
         note_activity();
     }
     let shell = navigation && super::iframe_bridge::has_shell_marker(request.uri().query());
@@ -165,6 +195,7 @@ struct Subscription<R>(Option<R>);
 
 impl<R> Subscription<R> {
     fn open(rx: R) -> Self {
+        assert_signal_locked();
         note_activity();
         Self(Some(rx))
     }
