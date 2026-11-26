@@ -76,11 +76,14 @@ async fn two_sends_sharing_a_channel_post_it_once() {
     assert_eq!(record.state, State::Posted);
 }
 
-/// A desk with the app's panel turn, logging each page shown and each close that reaches it.
+/// A desk with the app's panel turn, logging each page shown and each close
+/// that reaches it. Its `return_to_editor` waits for a page to show, so a copy
+/// can ask for the panel only once another holds it.
 #[derive(Default)]
 struct PanelDesk {
     turn: crate::engine::app_host::PanelTurn,
     log: std::sync::Mutex<Vec<String>>,
+    shown: tokio::sync::Notify,
 }
 
 #[async_trait::async_trait]
@@ -91,6 +94,7 @@ impl crate::engine::app_host::AppHost for PanelDesk {
     async fn open_action_panel(&self, _: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> Result<(), String> { unreachable!() }
     async fn set_action_panel_html(&self, _: String, _: Option<String>, plugin: Option<String>) -> Result<(), String> {
         self.log.lock().unwrap().push(format!("page {}", plugin.unwrap_or_default()));
+        self.shown.notify_one();
         Ok(())
     }
     async fn close_action_panel(&self, plugin: Option<String>) -> Result<(), String> {
@@ -98,7 +102,10 @@ impl crate::engine::app_host::AppHost for PanelDesk {
         Ok(())
     }
     async fn open_system_browser(&self, _: String) -> Result<(), String> { unreachable!() }
-    async fn return_to_editor(&self) -> Result<(), String> { unreachable!() }
+    async fn return_to_editor(&self) -> Result<(), String> {
+        self.shown.notified().await;
+        Ok(())
+    }
     async fn fill_browser_panel(&self, _: &str, _: &str, _: serde_json::Value) -> Result<serde_json::Value, String> { unreachable!() }
     async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> Result<Option<String>, String> { unreachable!() }
     fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { 0 }
@@ -118,9 +125,9 @@ fn manager_at(root: &Path, desk: &std::sync::Arc<PanelDesk>) -> std::sync::Arc<P
     }).get_or_create(&root.to_string_lossy()).unwrap()
 }
 
-/// A channel whose `publish_copy` shows a page, waits `ms`, then runs `then` and posts.
-fn showing_a_page(root: &Path, name: &str, ms: u32, then: &str) {
-    let js = format!("({{ publish_copy: async function () {{ \
+/// A channel whose `publish_copy` runs `first`, shows a page, waits `ms`, then runs `then` and posts.
+fn showing_a_page(root: &Path, name: &str, first: &str, ms: u32, then: &str) {
+    let js = format!("({{ publish_copy: async function () {{ {first} \
         await globalThis.__TAURI__.core.invoke('set_action_panel_html', {{ html: '<p>{name}</p>' }}); \
         await new Promise(r => setTimeout(r, {ms})); {then} \
         return {{ success: true, copy: {{ id: '1', url: 'https://{name}.example.net/1' }} }}; }} }})");
@@ -134,17 +141,20 @@ async fn within_ten_seconds(root: &Path, desk: &std::sync::Arc<PanelDesk>, artic
 }
 
 const CLOSES: &str = "await globalThis.__TAURI__.core.invoke('close_action_panel', {});";
+const AFTER_A_PAGE: &str = "await globalThis.__TAURI__.core.invoke('return_to_editor', {});";
+const SLOWLY: &str = "await new Promise(r => setTimeout(r, 300));";
 
 /// Two copies that show pages take the panel one at a time: the second
 /// copy's page shows only after the first copy's hook has ended, so it never
-/// replaces a page the person is still using.
+/// replaces a page the person is still using. The late copy asks for the
+/// panel only once the early one, slow to start, holds it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_copies_show_their_pages_one_at_a_time() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let articles = site(root, &["early", "late"]);
-    showing_a_page(root, "early", 800, CLOSES);
-    showing_a_page(root, "late", 0, CLOSES);
+    showing_a_page(root, "early", SLOWLY, 800, CLOSES);
+    showing_a_page(root, "late", AFTER_A_PAGE, 0, CLOSES);
     let desk = std::sync::Arc::new(PanelDesk::default());
     let emit = |_: &Sent| {};
     let sent = within_ten_seconds(root, &desk, &articles, &emit).await;
@@ -159,8 +169,8 @@ async fn a_close_after_the_turn_has_passed_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let articles = site(root, &["early", "late"]);
-    showing_a_page(root, "early", 0, &format!("setTimeout(async () => {{ {CLOSES} }}, 400);"));
-    showing_a_page(root, "late", 1200, "");
+    showing_a_page(root, "early", "", 0, &format!("setTimeout(async () => {{ {CLOSES} }}, 400);"));
+    showing_a_page(root, "late", AFTER_A_PAGE, 1200, "");
     let desk = std::sync::Arc::new(PanelDesk::default());
     let emit = |_: &Sent| {};
     let sent = within_ten_seconds(root, &desk, &articles, &emit).await;
