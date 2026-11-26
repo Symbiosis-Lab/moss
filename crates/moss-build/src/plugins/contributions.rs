@@ -109,9 +109,13 @@ pub struct PluginContributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<identity::Proof>>,
 
-    /// A third-party provider of one of the site's parts.
+    /// How the person signs in to the one account this plugin holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<provider::ProviderContribution>,
+    pub account: Option<provider::SignIn>,
+
+    /// The parts of the site that account serves, one entry per part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Vec<provider::ProviderEntry>>,
 }
 
 /// Does installing this plugin run code it brought: JavaScript, a pinned
@@ -135,6 +139,7 @@ impl PluginContributes {
             site_settings: _,
             public_data: _,
             identity: _,
+            account: _,
             provider: _,
             channel,
             deploy_target,
@@ -610,7 +615,7 @@ impl PluginManifest {
                 || c.blocks.as_ref().is_some_and(|b| !b.is_empty())
                 || c.public_data.is_some()
                 || c.site_settings.is_some()
-                || c.provider.is_some()
+                || c.provider.as_ref().is_some_and(|p| !p.is_empty())
         });
         if manifest.entry.is_none() && !declarative {
             return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data, site_settings or provider"));
@@ -625,8 +630,8 @@ impl PluginManifest {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
         }
-        if let Some(provider) = manifest.contributes.as_mut().and_then(|c| c.provider.as_mut()) {
-            provider.validate().map_err(serde_json::Error::custom)?;
+        if let Some(c) = manifest.contributes.as_mut() {
+            provider::validate(c.account.as_ref(), c.provider.as_deref_mut().unwrap_or_default(), c.channel.is_some()).map_err(serde_json::Error::custom)?;
         }
         if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
             let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
@@ -955,7 +960,7 @@ mod tests {
         for name in ["channel", "deploy_target", "derivations", "identity", "processor", "site_settings", "stack"] {
             assert!(names.contains(&name.to_string()), "{name} in {names:?}");
         }
-        assert_eq!(names.len(), 13, "{names:?}");
+        assert_eq!(names.len(), 14, "{names:?}");
     }
     use moss_core::untrusted_text::{MAX_NAME, MAX_SENTENCE};
 

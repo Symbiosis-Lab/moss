@@ -63,7 +63,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "provider",
             args: "<status|connect|disconnect> <folder> [<part>] [--provider <id>] [--list <id> | --new-list <name>] [--json]",
-            description: "Check or connect the outside providers of a site's parts (the newsletter today). connect reads the key from the variable the provider's manifest names, such as SENDGRID_API_KEY, or from stdin, never from an argument; without --list it prints the account's lists and exits 2. status reports every part as one object and exits 0 when each named provider is connected.",
+            description: "Check or connect the outside providers of a site's parts (the newsletter today). connect reads the key from the variable the provider's manifest names, such as SENDGRID_API_KEY, or from stdin, never from an argument; without --list it prints the account's lists and exits 2. status reports every part as one object, with each account an installed plugin holds (how it signs in, the parts it serves and their costs), and exits 0 when each named provider is connected.",
         },
         CliCommandInfo {
             name: "site",

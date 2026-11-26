@@ -3,7 +3,9 @@
 //! the hosting service with the folder's own signing key.
 //!
 //!   moss provider status <folder> [<part>]        Every part, or one: the provider named, whether
-//!                                                 its plugin is installed, the service's state.
+//!                                                 its plugin is installed, the service's state;
+//!                                                 and every account a plugin holds, with its parts
+//!                                                 and their costs.
 //!   moss provider connect <folder> <part> [--provider <id>] [--list <id> | --new-list <name>]
 //!                                                 The key from the variable the part's credential
 //!                                                 names, else stdin; never an argument.
@@ -20,7 +22,7 @@ use std::io::{IsTerminal, Read};
 
 use crate::build::site_config::{read_project_config, site_id_for_folder};
 use crate::cli::{client_for_folder, emit, run_async, Outcome};
-use crate::plugins::contributions::provider::{newsletter_provider, Credential, NewsletterPart, Part};
+use crate::plugins::contributions::provider::{newsletter_provider, Credential, Newsletter, Part};
 use crate::seta::client::MossSetaClient;
 use crate::seta::newsletter::{ConnectAnswer, ConnectionState, ListPick, NewsletterRefusal, SetaNewsletter};
 use crate::vault_root::VaultRoot;
@@ -141,8 +143,12 @@ async fn status_flow(client: &MossSetaClient, site_id: &str, folder: &str, json:
         "connected": connected,
         "seta": seta,
     });
+    let accounts = match accounts(folder) {
+        Ok(a) => a,
+        Err(e) => return Outcome::fail(json, 1, e),
+    };
     if json {
-        return Outcome { code, out: format!("{}\n", serde_json::json!({ "newsletter": newsletter })), err: String::new() };
+        return Outcome { code, out: format!("{}\n", serde_json::json!({ "newsletter": newsletter, "accounts": accounts })), err: String::new() };
     }
     let words = match (&newsletter["provider"], connected) {
         (serde_json::Value::Null, _) => "the hosting service sends it".to_string(),
@@ -150,7 +156,33 @@ async fn status_flow(client: &MossSetaClient, site_id: &str, folder: &str, json:
         (p, false) => format!("{} (not connected)", p.as_str().unwrap_or_default()),
     };
     let problem = newsletter["problem"].as_str().map(|p| format!("\n  {p}")).unwrap_or_default();
-    Outcome { code, out: format!("newsletter: {words}{problem}\n"), err: String::new() }
+    let rows: String = accounts.iter().map(AccountStatus::row).collect();
+    Outcome { code, out: format!("newsletter: {words}{problem}\n{rows}"), err: String::new() }
+}
+
+/// Every installed plugin that holds an account: how it signs in, and the
+/// parts that one sign-in serves with what each needs and costs.
+fn accounts(folder: &str) -> Result<Vec<AccountStatus>, String> {
+    use crate::plugins::contributions::provider::{parts, sign_in};
+    let installed = crate::plugins::discovery::scan_installed_plugins(folder)?;
+    Ok(installed.loaded.into_iter().filter_map(|p| {
+        let sign_in = sign_in(&p.manifest)?.kind();
+        Some(AccountStatus { parts: parts(&p.manifest), plugin: p.manifest.name, sign_in })
+    }).collect())
+}
+
+#[derive(serde::Serialize)]
+struct AccountStatus {
+    plugin: String,
+    sign_in: &'static str,
+    parts: Vec<crate::plugins::contributions::provider::ProviderEntry>,
+}
+
+impl AccountStatus {
+    fn row(&self) -> String {
+        let parts: Vec<_> = self.parts.iter().map(|p| p.part.name()).collect();
+        format!("{}: one {} sign-in for {}\n", self.plugin, self.sign_in, parts.join(", "))
+    }
 }
 
 async fn cmd_connect(folder: &str, c: Connect, json: bool) -> i32 {
@@ -197,13 +229,11 @@ async fn connect_flow(
         (Some(p), _) | (None, Some(p)) => p,
         (None, None) => return Outcome::fail(json, 1, "this folder names no newsletter provider: pass --provider <id>"),
     };
-    let contribution = match newsletter_provider(folder, &provider) {
+    let newsletter = match newsletter_provider(folder, &provider) {
         Ok(p) => p,
         Err(e) => return Outcome::fail(json, 1, e),
     };
-    let Some(credential) = contribution.credentials.first() else {
-        return Outcome::fail(json, 1, format!("{provider} names no key"));
-    };
+    let credential = &newsletter.key;
     let paste = match read_key(credential) {
         Ok(k) => k,
         Err(e) => return Outcome::fail(json, 1, e),
@@ -220,7 +250,7 @@ async fn connect_flow(
             let rows: String = lists.iter().map(|l| format!("  {}  {} ({})\n", l.id, l.name, l.count)).collect();
             (2, format!("{account} has these lists; pass --list <id> or --new-list <name>:\n{rows}"))
         }
-        ConnectAnswer::Refused { refused } => (3, format!("{}\n", refusal_words(*refused, &provider, credential, contribution.newsletter.as_ref()))),
+        ConnectAnswer::Refused { refused } => (3, format!("{}\n", refusal_words(*refused, &provider, &newsletter))),
         ConnectAnswer::Connected(done) => {
             if named.is_none() {
                 if let Err(e) = crate::vault::config::save_newsletter_provider(folder, Some(&provider)) {
@@ -235,19 +265,20 @@ async fn connect_flow(
 }
 
 /// What a refusal means and what to do about it, in the provider's own words.
-fn refusal_words(refused: NewsletterRefusal, provider: &str, key: &Credential, body: Option<&NewsletterPart>) -> String {
+fn refusal_words(refused: NewsletterRefusal, provider: &str, newsletter: &Newsletter) -> String {
     let at = |url: Option<&String>| url.map(|u| format!(" at {u}")).unwrap_or_default();
-    let keys = at(Some(&key.url));
+    let keys = at(Some(&newsletter.key.url));
+    let body = &newsletter.body;
     match refused {
         NewsletterRefusal::Auth => format!("{provider} did not accept the key: make a new one{keys}"),
         NewsletterRefusal::Scopes => {
-            let permission = &key.permission;
+            let permission = &newsletter.needs;
             format!("the key does not have {permission}: make a new one with {permission}{keys}")
         }
         NewsletterRefusal::WebhooksFull => {
-            format!("{provider} has no room for another webhook: remove one{}, then connect again", at(body.and_then(|b| b.webhooks_url.as_ref())))
+            format!("{provider} has no room for another webhook: remove one{}, then connect again", at(body.webhooks_url.as_ref()))
         }
-        NewsletterRefusal::Sender => format!("{provider} cannot send from that address: add it{}", at(body.and_then(|b| b.senders_url.as_ref()))),
+        NewsletterRefusal::Sender => format!("{provider} cannot send from that address: add it{}", at(body.senders_url.as_ref())),
         NewsletterRefusal::CannotSend => "the connected key cannot send: connect again with a new key".to_string(),
         NewsletterRefusal::Unknown => format!("{provider} refused the key and gave no reason moss knows"),
         NewsletterRefusal::Unreachable => "moss's server is not answering: try again".to_string(),

@@ -11,9 +11,9 @@ fn folder(line: &str) -> tempfile::TempDir {
     std::fs::write(tmp.path().join(".moss/config.toml"), format!("[channels.email]\nreply_to = \"me@example.com\"\n{line}")).unwrap();
     let plugin = crate::plugins::plugin_dir(tmp.path().to_str().unwrap(), "mailer");
     std::fs::create_dir_all(&plugin).unwrap();
-    let manifest = serde_json::json!({"name":"mailer","version":"1.0.0","contributes":{"provider":{"part":"newsletter","addresses":[],
-        "credentials":[{"kind":"key","env":"MAILER_KEY","url":"https://mailer.example/keys","prefix":"mk_","length":12,"permission":"Admin"}],
-        "newsletter":{"steps":["Paste it here"]}}}});
+    let manifest = serde_json::json!({"name":"mailer","version":"1.0.0","contributes":{
+        "account":{"kind":"key","env":"MAILER_KEY","url":"https://mailer.example/keys","prefix":"mk_","length":12},
+        "provider":[{"part":"newsletter","needs":"Admin","newsletter":{"steps":["Paste it here"]}}]}});
     std::fs::write(plugin.join("manifest.json"), manifest.to_string()).unwrap();
     tmp
 }
@@ -119,6 +119,31 @@ async fn status_is_one_object_keyed_by_part() {
     let v: serde_json::Value = serde_json::from_str(&out.out).unwrap();
     let n = &v["newsletter"];
     assert_eq!((n["provider"].as_str(), n["installed"].as_bool(), n["connected"].as_bool()), (Some("mailer"), Some(true), Some(true)));
+    let a = &v["accounts"][0];
+    assert_eq!((a["plugin"].as_str(), a["sign_in"].as_str(), a["parts"][0]["needs"].as_str()), (Some("mailer"), Some("key"), Some("Admin")));
+}
+
+#[test]
+fn the_check_reports_each_account_s_parts_and_costs() {
+    let tmp = folder("provider = \"mailer\"\n");
+    let plugin = crate::plugins::plugin_dir(&path(&tmp), "cloud");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let manifest = serde_json::json!({"name":"cloud","version":"1.0.0","entry":"main.js","contributes":{
+        "account":{"kind":"key","url":"https://cloud.example/tokens","prefix":"ck_","length":40},
+        "deploy_target":{},
+        "provider":[{"part":"newsletter","needs":"Mail send","newsletter":{"steps":["s"]},
+            "costs":[{"action":"send","amount":"0.25","unit":"USD","price_url":"https://cloud.example/pricing"}]}]}});
+    std::fs::write(plugin.join("manifest.json"), manifest.to_string()).unwrap();
+    std::fs::write(plugin.join("main.js"), "").unwrap();
+
+    let accounts = accounts(&path(&tmp)).unwrap();
+    let cloud = accounts.iter().find(|a| a.plugin == "cloud").unwrap();
+    assert_eq!(cloud.row(), "cloud: one key sign-in for newsletter, host\n");
+    let cloud = serde_json::to_value(cloud).unwrap();
+    assert_eq!(cloud["sign_in"], "key");
+    let parts: Vec<_> = cloud["parts"].as_array().unwrap().iter().map(|p| p["part"].as_str().unwrap()).collect();
+    assert_eq!(parts, ["newsletter", "host"]);
+    assert_eq!(cloud["parts"][0]["costs"][0]["amount"], "0.25");
 }
 
 #[tokio::test]
