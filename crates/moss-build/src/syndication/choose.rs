@@ -88,6 +88,8 @@ fn read_page(folder: &Path, source: &str) -> Option<String> {
 
 type Channels = BTreeMap<String, ChannelInfo>;
 
+const HIDDEN: &str = "the page is reached only by its link (`search_engines: false`)";
+
 /// The chips' clicks on posts with no `syndicate:` line, kept in moss's own
 /// records rather than the page: one file per post and channel under
 /// `.moss/deploy/choices/`, named `<uid>.<channel>` and holding `on` or `off`.
@@ -215,6 +217,9 @@ pub fn read_post_with(folder: &Path, source: &str, channels: &BTreeMap<String, C
     };
     let config = crate::build::site_config::read_project_config(&folder.to_string_lossy()).ok()?;
     Some(channels.iter().map(|(id, info)| {
+        if post.hidden_from_search_engines {
+            return view.choice(id, Verdict::Unavailable { reason: HIDDEN.into() });
+        }
         let opts = super::shape::ShapeOptions::new(&config, folder, &map, post, id, None);
         let verdict = plan::verdict(id, Some(info), &view.facts, &view.records, false);
         view.choice(id, plan::assess_verdict(verdict, post, info, &view.records, id, config.site_str("url"), &opts))
@@ -302,6 +307,9 @@ pub fn set_post(folder: &Path, source: &str, channel: &str, on: bool) -> Result<
     let map = load_map(folder).ok_or("this site has not been built yet")?;
     let post = map.articles.values().find(|a| a.source_path == source).ok_or("this page is not a post")?;
     let uid = post.uid.as_deref().ok_or("this post has no note ID yet")?;
+    if post.hidden_from_search_engines {
+        return Err(HIDDEN.into());
+    }
     let mp = MossPaths::new(folder);
     let live = live_state(&live_baseline::load(&mp), post, uid);
     let channels = super::landing::channels(folder);

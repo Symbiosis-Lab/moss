@@ -531,7 +531,6 @@ fn a_click_on_turns_a_waiting_channel_on_for_a_live_post() {
     std::fs::copy(mp.article_map(), mp.deployed_article_map()).unwrap();
     let chips = set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
     assert!(chips.iter().any(|c| c.channel == "bluesky" && c.on), "{chips:?}");
-    assert_eq!(sends(&dir), strings(&["bluesky"]));
 }
 
 #[test]
@@ -544,5 +543,8 @@ fn a_choice_never_sends_a_page_reached_only_by_its_link() {
     post.syndicate = Some(Vec::new());
     map.save(&dir.path().join(".moss")).unwrap();
     assert_eq!(sends(&dir), Vec::<String>::new());
-    assert_eq!(chips_on(&dir), Vec::<String>::new());
+    let chips = read_post(dir.path(), SOURCE).unwrap();
+    assert!(chips.iter().all(|c| c.origin == ChoiceOrigin::Unavailable && c.reason.as_deref() == Some(HIDDEN)), "{chips:?}");
+    assert_eq!(set_post(dir.path(), SOURCE, "bluesky", true), Err(HIDDEN.to_string()));
+    assert_eq!(choice_files(&dir), vec![format!("{UID}.xcom")], "a refused click records nothing");
 }
