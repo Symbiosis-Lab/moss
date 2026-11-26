@@ -5583,6 +5583,21 @@ logo: assets/mark.svg
   },
 };
 
+// A long site name over a trail two ancestors deep: at a phone width the row runs out of room even after the
+// middle crumb has collapsed to its "…", and something must give before the parent crumb is clipped.
+// Served by playwright/nav-trail-clip.config.ts.
+export const NAV_TRAIL_CLIP_GATE: ScratchSiteSpec = {
+  name: "nav-trail-clip-gate",
+  files: {
+    "index.md": `---\ntitle: Field Notes from the Northern Ridge\nuid: "ntc0c101"\nbreadcrumb: true\n---\n\n# Field Notes from the Northern Ridge\n`,
+    "Journal/index.md": `---\ntitle: Journal\nuid: "ntc0c102"\n---\n\n# Journal\n`,
+    "Journal/Expeditions/index.md": `---\ntitle: Expeditions\nuid: "ntc0c103"\n---\n\n# Expeditions\n`,
+    "Journal/Expeditions/Winter Camp Records/index.md": `---\ntitle: Winter Camp Records\nuid: "ntc0c104"\n---\n\n# Winter Camp Records\n`,
+    "Journal/Expeditions/Winter Camp Records/Day Twelve on the Ice.md": `---\ntitle: Day Twelve on the Ice\nuid: "ntc0c105"\n---\n\n# Day Twelve on the Ice\n`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // A theme that lays a breadcrumb masthead out itself: `.nav-right` flattened, the trail alone on row 1 at a
 // full-row basis, the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum
 // overflows at every width, so the split would otherwise take over everywhere.

@@ -9,8 +9,9 @@
  * masthead is the theme's, so moss's float layout for a plain name must stay
  * off it. In both the theme's `white-space: normal` must be able to wrap a
  * long name rather than have it clipped, and in the hamburger range (≤20rem)
- * a name past two lines gets its one-line width back, as on any other
- * masthead.
+ * a plain name past two lines gets its one-line width back, as on any other
+ * masthead. On a trail the name wraps as far as the parent crumb's floor
+ * needs, so it has no line limit there.
  *
  * Run via:
  *   npx playwright test -c playwright/nav-flattened.config.ts
@@ -71,10 +72,9 @@ for (const [shape, url] of Object.entries(SITES)) {
     test(`a flattened masthead (${shape}) keeps its layout and its whole name at ${width}px`, async ({ page }) => {
       const m = await measure(page, url, width);
       const where = JSON.stringify(m);
-      // A trail folds its crumbs to fit, by design.
-      if (shape !== "trail") expect(m.textEnd, where).toBeLessThanOrEqual(m.clipEnd + 0.5);
+      expect(m.textEnd, where).toBeLessThanOrEqual(m.clipEnd + 0.5);
       if (width <= HAMBURGER_MAX) {
-        expect(m.nameLines, where).toBeLessThanOrEqual(2);
+        if (shape !== "trail") expect(m.nameLines, where).toBeLessThanOrEqual(2);
         return;
       }
       if (shape === "beside" && width >= 768) return;

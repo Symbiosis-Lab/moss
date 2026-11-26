@@ -2469,9 +2469,8 @@ article.container > .moss-article-title:has(+ [data-width="screen"][data-header=
    before anything else. Never wraps to a second line internally (that would
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /
    nav-links). The clip removes residue after `flex-shrink` has done its job —
-   e.g., when the parent-page segment (the last ancestor anchor, min-width:
-   5em) still can't fit. On a breadcrumb page below ~320px the site name
-   itself may be clipped.
+   e.g., when even the site name, shrunk to nothing, leaves the parent-page
+   segment no room for its floor.
 
    `clip` rather than `hidden` for the same reason as
    `.moss-nav-island-trail`: `hidden` makes a scroll container, and a hover
@@ -2502,7 +2501,7 @@ article.container > .moss-article-title:has(+ [data-width="screen"][data-header=
   min-inline-size: 0;
 }
 
-/* Site Name — the site root; always fully visible (flex-shrink: 0).
+/* Site Name — the site root; never shrinks, except on a trail (below).
    Font scales with viewport via clamp(). Where a rule lets it wrap, an
    overlong word still breaks, and its min-content stays the longest word. */
 .site-name {
@@ -2535,7 +2534,8 @@ body > header .site-name {
 
 /* Breadcrumb Navigation — middle-truncation pattern.
    Industry-standard (macOS Finder path bar, GitHub file tree):
-   - Site root (.site-name) stays fully visible — anchors "where am I"
+   - Site root (.site-name) stays fully visible — anchors "where am I" —
+     until the parent has nothing left to give, then ellipsizes
    - Last breadcrumb segment (parent page) stays fully visible or
      minimally truncated — most contextual piece of info
    - Middle segments shrink first with ellipsis — less contextual
@@ -2574,7 +2574,7 @@ body > header .site-name {
      ancestor keeps one "…" token that is still a link and still carries its
      full name in the hover hint. */
   min-inline-size: 1.4em;
-  flex-shrink: 5;
+  flex-shrink: 5000000;
 }
 
 .breadcrumb-label {
@@ -2590,13 +2590,14 @@ body > header .site-name {
    min-inline-size: 5em ≈ 5 characters: preserves a recognizable fragment of the
    parent page name even when the segment is squeezed to its minimum.
 
-   The 5× ratio is expressed as middles=5 / parent=1, NOT middles=1 /
-   parent=0.2, even though the two describe the same priority. Flexbox only
-   distributes the whole overflow when the shrink factors of the still-shrinking
-   items sum to at least 1; once the middles freeze at their floor the parent is
-   the only one left, and a lone 0.2 made the browser absorb 20% of the overflow
-   and let the rest run off the edge — the parent segment stayed full width and
-   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it.
+   The factors are scaled up (middles=5e6 / parent=1e6) rather than the site
+   name's scaled down: flexbox distributes the whole overflow only while the
+   still-shrinking items' factors sum to at least 1, so a name left shrinking
+   alone at 1e-6 would absorb almost none of it and the rest would run past
+   the clip. Shrink is shared by factor × base size, so while the parent
+   shrinks the name (1) still takes a share, and any share draws a "…". At 1e6
+   that share stays under one layout unit (1/64px) for a name and overflow up
+   to 1000px over a 100px parent, so it rounds to nothing.
 
    `a.breadcrumb-segment:last-of-type`, not a bare `:last-child`: every
    ancestor/home segment is an `<a>`, but an explorer root's forced-visible
@@ -2616,8 +2617,19 @@ body > header .site-name {
    old `:last-child` form never risked, since the island's last CHILD is
    always its own current `<span>`, never an ancestor. */
 .nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
-  flex-shrink: 1;
+  flex-shrink: 1000000;
   min-inline-size: 5em;
+}
+
+/* Last to give way on a trail the CSS ladder sizes: the site name ellipsizes
+   rather than let `.nav-left`'s clip cut the parent below its floor. Not under
+   masthead-fold.ts, which measures the name at its full width. */
+.nav-left:not([data-fold-managed]):has(a.breadcrumb-segment) > .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .breadcrumb-segment:hover {
@@ -2631,7 +2643,7 @@ body > header .site-name {
 
 /* Phone (≤ 32rem): a deep trail — 河灣 · 週刊 / 評選 / 小說組 / 第二屆 /
    雨季裡的一封信… — has no room left for a 5-character parent segment once
-   the site name (which never shrinks) and four separators have taken their
+   the site name and four separators have taken their
    share, so the floor drops to 3em and the separators tighten. Everything else
    about the collapse is width-driven, not breakpoint-driven: the middles reach
    their "…" through the same `min-inline-size: 1.4em` that governs them on a laptop

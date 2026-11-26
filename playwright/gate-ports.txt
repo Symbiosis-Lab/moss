@@ -132,3 +132,4 @@ nav-nowrap:logo
 nav-flattened
 nav-flattened:beside
 nav-first-paint:owned
+nav-trail-clip

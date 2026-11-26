@@ -63,6 +63,7 @@ GATES_BUILD=(
   nav-split-order
   nav-split-pack
   nav-nowrap
+  nav-trail-clip
   nav-flattened
   nav-one-row
   nav-first-paint
