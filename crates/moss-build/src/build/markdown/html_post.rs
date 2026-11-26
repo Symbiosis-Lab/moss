@@ -99,7 +99,7 @@ pub(crate) fn split_leading_eyebrow(html: &str) -> (&str, &str) {
 /// Returns the link it put there.
 pub(crate) fn prepend_parent_label(
     content: &mut String,
-    parent: &crate::build::components::nav::BreadcrumbSegment,
+    parent: &moss_core::page::nav::BreadcrumbSegment,
 ) -> Option<String> {
     if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
@@ -1296,7 +1296,7 @@ mod tests {
 
     #[test]
     fn prepend_parent_label_sits_before_the_title() {
-        let parent = crate::build::components::nav::BreadcrumbSegment {
+        let parent = moss_core::page::nav::BreadcrumbSegment {
             title: "Opera & Co".to_string(),
             url: "/opera/".to_string(),
             is_current: false,
@@ -1311,7 +1311,7 @@ mod tests {
 
     #[test]
     fn prepend_parent_label_skips_content_with_no_visible_title() {
-        let parent = crate::build::components::nav::BreadcrumbSegment {
+        let parent = moss_core::page::nav::BreadcrumbSegment {
             title: "Opera".to_string(),
             url: "/opera/".to_string(),
             is_current: false,

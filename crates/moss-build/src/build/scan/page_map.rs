@@ -407,42 +407,13 @@ pub(crate) fn build_external_url_map_with_evicted(
     out
 }
 
-/// Returns `true` when `url` is an absolute `http(s):` URL accepted as a valid
-/// `external_url` value.  Any other non-empty string (relative path, `ftp://`,
-/// `javascript:`, `data:`, …) is considered invalid and should trigger a
-/// warning — see `warn_invalid_external_url`.
-///
-/// Pure predicate with no side effects; kept separate so it can be tested
-/// independently of the logger.
-pub(crate) fn is_valid_external_url(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
-}
+pub(crate) use moss_core::page::nav::{is_valid_external_url, is_valid_nav_target};
 
-/// Returns `true` when `url` can be a nav bar entry's target: an absolute
-/// http(s) URL, `mailto:`, `tel:`, an in-page `#anchor`, or a site path
-/// (`/path`, `/path#anchor`). A wider set than [`is_valid_external_url`] on
-/// purpose — a nav item may point at an address or a section, but a card,
-/// canonical link or sitemap entry may not. `javascript:`, `data:` and
-/// protocol-relative `//host` stay out.
-pub(crate) fn is_valid_nav_target(url: &str) -> bool {
-    is_valid_external_url(url)
-        || url.starts_with("mailto:")
-        || url.starts_with("tel:")
-        || url.starts_with('#')
-        || (url.starts_with('/') && !url.starts_with("//"))
-}
-
-/// A page's `external_url:` as its nav bar entry's target, or `None` when
-/// the page has none (or it is not a [`is_valid_nav_target`]), in which case
-/// the entry links to the page itself. Silent: the scan already warned.
+/// [`moss_core::page::nav::nav_link`] over the raw frontmatter. Silent: the scan already warned.
 pub fn nav_external_href(
     raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Option<&str> {
-    raw_frontmatter
-        .get("external_url")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|u| is_valid_nav_target(u))
+    moss_core::page::nav::nav_link(raw_frontmatter.get("external_url").and_then(|v| v.as_str()))
 }
 
 /// Where a listing row or card for `doc` links instead of its local address: a

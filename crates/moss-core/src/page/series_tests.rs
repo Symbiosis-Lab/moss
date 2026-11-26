@@ -239,6 +239,17 @@ impl SitePage for Page {
     fn slot_only(&self) -> bool { false }
     fn hidden_home(&self) -> Option<&str> { None }
     fn direct_children_sort(&self) -> Option<&ResolvedSort> { self.sort.as_ref() }
+    fn source_path(&self) -> Option<&str> { None }
+    fn lang(&self) -> crate::i18n::Language { crate::i18n::Language::En }
+    fn edition(&self) -> &str { "" }
+    fn is_root_level(&self) -> bool { false }
+    fn partial(&self) -> bool { false }
+    fn nav(&self) -> Option<bool> { None }
+    fn nav_label(&self) -> Option<&str> { None }
+    fn nav_link(&self) -> Option<&str> { None }
+    fn breadcrumb(&self) -> Option<crate::frontmatter_typed::BreadcrumbSetting> { None }
+    fn translates_home(&self) -> bool { false }
+    fn passthrough_root(&self) -> Option<&str> { None }
 }
 
 fn by_weight() -> Option<ResolvedSort> {

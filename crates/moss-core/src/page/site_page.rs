@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::frontmatter_typed::{FrontMatter, SeriesField};
+use crate::frontmatter_typed::{BreadcrumbSetting, FrontMatter, SeriesField};
 use crate::i18n::Language;
 use crate::sort::{ResolvedSort, SortField, SortableDoc, SortableLabel};
 
@@ -31,6 +31,32 @@ pub trait SitePage: SortableDoc + SortableLabel {
     fn hidden_home(&self) -> Option<&str>;
     /// The folder's resolved sort for its direct children; `None` on a page.
     fn direct_children_sort(&self) -> Option<&ResolvedSort>;
+    /// The site-relative source file, `None` for a page the build made.
+    fn source_path(&self) -> Option<&str>;
+    /// The interface language the page's chrome is drawn in.
+    fn lang(&self) -> Language;
+    /// The language edition the page is in, `""` for the site's own.
+    fn edition(&self) -> &str;
+    /// At the top of its edition: the site root, or directly in a language tree.
+    fn is_root_level(&self) -> bool;
+    /// `partial: true`.
+    fn partial(&self) -> bool;
+    /// The author's `nav:`.
+    fn nav(&self) -> Option<bool>;
+    /// The author's `nav_label:`, trimmed and non-empty.
+    fn nav_label(&self) -> Option<&str>;
+    /// The page's `external_url:` when it is a valid nav target.
+    fn nav_link(&self) -> Option<&str>;
+    fn breadcrumb(&self) -> Option<BreadcrumbSetting>;
+    /// A translation of the site's home page.
+    fn translates_home(&self) -> bool;
+    /// The `[build].passthrough` folder holding this page.
+    fn passthrough_root(&self) -> Option<&str>;
+
+    /// The text the site's own navigation shows for the page.
+    fn nav_text(&self) -> &str {
+        self.nav_label().unwrap_or(self.label())
+    }
 
     fn is_not_found_page(&self) -> bool {
         self.url_path() == NOT_FOUND_PAGE
@@ -96,6 +122,17 @@ pub struct PageFacts {
     pub slot_only: bool,
     pub hidden_home: Option<String>,
     pub direct_children_sort: Option<ResolvedSort>,
+    pub source_path: Option<String>,
+    pub lang: Language,
+    pub edition: String,
+    pub is_root_level: bool,
+    pub partial: bool,
+    pub nav: Option<bool>,
+    pub nav_label: Option<String>,
+    pub nav_link: Option<String>,
+    pub breadcrumb: Option<BreadcrumbSetting>,
+    pub translates_home: bool,
+    pub passthrough_root: Option<String>,
 }
 
 impl PageFacts {
@@ -117,6 +154,17 @@ impl PageFacts {
             slot_only: page.slot_only(),
             hidden_home: page.hidden_home().map(str::to_string),
             direct_children_sort: page.direct_children_sort().cloned(),
+            source_path: page.source_path().map(str::to_string),
+            lang: page.lang(),
+            edition: page.edition().to_string(),
+            is_root_level: page.is_root_level(),
+            partial: page.partial(),
+            nav: page.nav(),
+            nav_label: page.nav_label().map(str::to_string),
+            nav_link: page.nav_link().map(str::to_string),
+            breadcrumb: page.breadcrumb(),
+            translates_home: page.translates_home(),
+            passthrough_root: page.passthrough_root().map(str::to_string),
         }
     }
 }
@@ -144,6 +192,17 @@ impl SitePage for PageFacts {
     fn slot_only(&self) -> bool { self.slot_only }
     fn hidden_home(&self) -> Option<&str> { self.hidden_home.as_deref() }
     fn direct_children_sort(&self) -> Option<&ResolvedSort> { self.direct_children_sort.as_ref() }
+    fn source_path(&self) -> Option<&str> { self.source_path.as_deref() }
+    fn lang(&self) -> Language { self.lang }
+    fn edition(&self) -> &str { &self.edition }
+    fn is_root_level(&self) -> bool { self.is_root_level }
+    fn partial(&self) -> bool { self.partial }
+    fn nav(&self) -> Option<bool> { self.nav }
+    fn nav_label(&self) -> Option<&str> { self.nav_label.as_deref() }
+    fn nav_link(&self) -> Option<&str> { self.nav_link.as_deref() }
+    fn breadcrumb(&self) -> Option<BreadcrumbSetting> { self.breadcrumb }
+    fn translates_home(&self) -> bool { self.translates_home }
+    fn passthrough_root(&self) -> Option<&str> { self.passthrough_root.as_deref() }
 }
 
 /// Every page of the site as the build sees it once all pages are read: its
@@ -168,7 +227,8 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     let html: Vec<&str> = bundle.files.iter().map(String::as_str)
         .filter(|f| std::path::Path::new(f).extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "html" | "htm")))
         .collect();
-    let reserved = crate::source_edit::policy::reserved_home_dirs(html.iter().copied(), &crate::source_edit::policy::compute_passthrough_roots(&html, &bundle.passthrough));
+    let passthrough = crate::source_edit::policy::compute_passthrough_roots(&html, &bundle.passthrough);
+    let reserved = crate::source_edit::policy::reserved_home_dirs(html.iter().copied(), &passthrough);
     let open = |path: &&str| !reserved.contains(crate::resolve::parent_dir(path));
     let claims: Vec<HomeClaim<'_>> = paths.iter().zip(&read).filter(|(path, _)| open(path))
         .map(|(path, (fm, _))| HomeClaim { path, home: fm.home, translation_key: fm.translation_key.as_deref() })
@@ -185,19 +245,21 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
 
     let site_langs = SiteLangs { site: site_lang, folders: folder_languages(&paths, &read, bundle) };
     let mut pages = Vec::with_capacity(paths.len());
-    let mut langs = Vec::with_capacity(paths.len());
+    let mut lang_tags = Vec::with_capacity(paths.len());
+    let mut translation_keys = Vec::with_capacity(paths.len());
     let mut cascades = Vec::with_capacity(paths.len());
     for ((path, url_path, _), (mut fm, body)) in entries.into_iter().zip(read) {
         cascades.push(fm.cascade.take());
+        translation_keys.push(fm.translation_key.clone());
         fill_inferred(&mut fm, &path, texts, &graph, bundle);
-        let (page, lang) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
+        let (page, lang_tag) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
         pages.push(page);
-        langs.push(lang);
+        lang_tags.push(lang_tag);
     }
 
-    let slug_entries: Vec<super::page_map::SlugEntry<'_>> = pages.iter().zip(&langs).zip(&paths)
-        .map(|((p, lang), path)| super::page_map::SlugEntry {
-            url_path: &p.url_path, is_folder: p.is_folder_index, lang: *lang, slot_only: p.slot_only, source_path: Some(path),
+    let slug_entries: Vec<super::page_map::SlugEntry<'_>> = pages.iter().zip(&paths)
+        .map(|(p, path)| super::page_map::SlugEntry {
+            url_path: &p.url_path, is_folder: p.is_folder_index, lang: p.lang, slot_only: p.slot_only, source_path: Some(path),
         })
         .collect();
     let (moved, _) = super::page_map::resolve_duplicate_slugs(&slug_entries, site_lang);
@@ -205,35 +267,89 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
         pages[i].url_path = url_path;
     }
 
+    place_in_editions(&mut pages, &bundle.lang, &passthrough, &dir_overrides);
+    mark_home_translations(&mut pages, &paths, lang_tags, translation_keys);
+
     let hidden = super::inherit::hidden_homes(pages.iter().map(|p| (p.url_path.as_str(), p.is_folder_index && p.search_engines == Some(false))));
     for (page, home) in pages.iter_mut().zip(hidden) {
         page.hidden_home = home;
     }
 
-    // Of the keys a folder cascades, only `sort` is a fact a pass reads.
-    let plan = super::inherit::cascade_plan(pages.iter().zip(&cascades).map(|(p, c)| (p.url_path.as_str(), c.is_some())));
-    for step in plan {
-        let Some(sort) = cascades[step.source].as_ref().and_then(|c| c.get("sort")) else { continue };
-        let Ok(sort) = serde_yaml::from_value::<SortField>(sort.clone()) else { continue };
-        for i in step.targets {
-            pages[i].declared_sort.get_or_insert_with(|| sort.clone());
-        }
-    }
+    apply_folder_cascades(&mut pages, &cascades);
 
     let sorts: Vec<(usize, ResolvedSort)> = crate::sort::direct_children_sorts(&pages).into_iter().map(|(i, s, _)| (i, s)).collect();
     for (i, sort) in sorts {
         pages[i].direct_children_sort = Some(sort);
     }
-    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, langs }
+    let has_content_folders = super::nav::has_content_folders(bundle.files.iter().map(String::as_str).filter(|f| {
+        std::path::Path::new(f).extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "md" | "html" | "htm"))
+    }));
+    let home = pages.iter().find(|p| p.url_path == "index.html");
+    let site_name = crate::home::site_name(home.and_then(|p| p.source_path.as_deref()), home.map(|p| p.label.as_str()), root_name);
+    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, site_lang, has_content_folders, site_name }
 }
 
-/// Every page of a site, in the build's walk order: each one's source path,
-/// facts and language at the same index.
+/// Each page's language edition, and the passthrough folder it sits in,
+/// addressed as the folder's own `url:` moved it.
+fn place_in_editions(pages: &mut [PageFacts], site_lang: &str, passthrough: &std::collections::HashSet<String>, dir_overrides: &HashMap<String, String>) {
+    let editions = crate::home::Editions::new(site_lang, pages.iter().map(|p| p.url_path.as_str()));
+    let passthrough: Vec<String> = passthrough.iter().filter_map(|root| root.strip_suffix('/'))
+        .filter_map(|dir| crate::resolve::output_url::resolve_path_with_overrides(&format!("{dir}/index.html"), dir_overrides).strip_suffix("/index.html").map(str::to_string))
+        .collect();
+    for page in pages {
+        page.edition = editions.of(&page.url_path);
+        let folder = page.url_path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        page.passthrough_root = passthrough.iter().find(|root| crate::resolve::folder_within(root, folder)).cloned();
+    }
+}
+
+/// Marks each page that is a translation of the site's home page.
+fn mark_home_translations(pages: &mut [PageFacts], paths: &[&str], lang_tags: Vec<String>, translation_keys: Vec<Option<String>>) {
+    let translations = crate::i18n::link::build_translation_links(&pages.iter().zip(paths).zip(lang_tags).zip(translation_keys).enumerate()
+        .map(|(index, (((p, path), lang_tag), translation_key))| crate::i18n::link::DocumentInfo {
+            index,
+            clean_stem: p.clean_stem.clone(),
+            directory: translation_directory(path),
+            lang_tag,
+            url_path: p.url_path.clone(),
+            translation_key,
+        })
+        .collect::<Vec<_>>());
+    for (page, links) in pages.iter_mut().zip(translations) {
+        page.translates_home = links.iter().any(|l| l.url_path == "index.html");
+    }
+}
+
+/// Of the keys a folder cascades, the facts a pass reads: `sort`, `nav` and
+/// `breadcrumb`. A page's own value wins. The build parses them in its own
+/// cascade pass; `core_site_pages_match_the_builds_pages_on_every_fixture` holds the two equal.
+fn apply_folder_cascades(pages: &mut [PageFacts], cascades: &[Option<HashMap<String, serde_yaml::Value>>]) {
+    let plan = super::inherit::cascade_plan(pages.iter().zip(cascades).map(|(p, c)| (p.url_path.as_str(), c.is_some())));
+    for step in plan {
+        let Some(cascade) = cascades[step.source].as_ref() else { continue };
+        let value = |key: &str| cascade.get(key).cloned();
+        let sort = value("sort").and_then(|v| serde_yaml::from_value::<SortField>(v).ok());
+        let nav = value("nav").and_then(|v| serde_yaml::from_value::<bool>(v).ok());
+        let breadcrumb = value("breadcrumb").and_then(|v| serde_yaml::from_value::<BreadcrumbSetting>(v).ok());
+        for i in step.targets {
+            let page = &mut pages[i];
+            if page.declared_sort.is_none() { page.declared_sort = sort.clone(); }
+            if page.nav.is_none() { page.nav = nav; }
+            if page.breadcrumb.is_none() { page.breadcrumb = breadcrumb; }
+        }
+    }
+}
+
+/// Every page of a site, in the build's walk order: each one's source path
+/// and facts at the same index.
 #[derive(Debug, Clone, Default)]
 pub struct SitePages {
     pub paths: Vec<String>,
     pub pages: Vec<PageFacts>,
-    pub langs: Vec<Language>,
+    pub site_lang: Language,
+    pub has_content_folders: bool,
+    /// The home page's title, else the folder's name.
+    pub site_name: String,
 }
 
 impl SitePages {
@@ -244,8 +360,58 @@ impl SitePages {
         let i = self.paths.iter().position(|p| p == path)?;
         let page = &self.pages[i];
         let parent = series::series_parent(page, &self.pages)?;
-        series::nav(page, parent, &series::chain(&self.pages, parent), url, self.langs[i], typesetting)
+        series::nav(page, parent, &series::chain(&self.pages, parent), url, page.lang, typesetting)
     }
+
+    /// The masthead the build draws on the page at `path`: the trail, or the
+    /// linked site name, and the nav bar's page items. It leaves out the logo,
+    /// term-kind entries, the toggles, `[site].header`'s other modes and the
+    /// trail the build forces onto a places root.
+    pub fn masthead(&self, path: &str) -> Option<String> {
+        use super::nav;
+        let page = &self.pages[self.paths.iter().position(|p| p == path)?];
+        let url = Some(page.url_path.as_str());
+        let lang = nav::chrome_lang(url, page.lang, self.site_lang);
+        let home_path = nav::home_path(url, &page.edition, page.lang, self.site_lang);
+        let title = self.site_title(page.lang);
+        let left = match nav::breadcrumb_segments(page, &self.pages, &title, self.has_content_folders, false) {
+            Some(segments) if !segments.is_empty() => nav::trail_html(&segments, &nav::TrailMarkup {
+                home_path: &home_path, logo_html: "", current_visible: false, source_fm: false, lang: page.lang,
+            }),
+            _ => format!(r#"<div class="nav-left"><a href="{home_path}" class="site-name">{title}</a></div>"#),
+        };
+        let bar = nav::nav_bar_pages(&self.pages, lang, &page.edition, self.has_content_folders);
+        let mut items = nav::nav_items(&bar, Some(&page.url_path), false, page.lang);
+        nav::sort_nav_items(&mut items);
+        let links: String = items.into_iter().map(|item| item.html).collect();
+        let links = if links.is_empty() { links } else { format!(r#"<div class="nav-links" id="nav-links">{links}</div>"#) };
+        Some(format!(r#"<header><nav class="main-nav container"><div class="nav-content">{left}<div class="nav-right">{links}</div></div></nav></header>"#))
+    }
+
+    /// The site's name on a page in `lang`: its edition home's own title, else the site name.
+    pub fn site_title(&self, lang: Language) -> String {
+        localized_site_title(&self.pages, lang, self.site_lang, &self.site_name, |p| &p.label)
+    }
+}
+
+/// `lang`'s home page: `<lang>/index.html` off the site's language, else the site's `index.html`.
+pub fn edition_home<P: SortableDoc>(pages: &[P], lang: Language, site_lang: Language) -> Option<&P> {
+    let own = (lang != site_lang).then(|| format!("{}/index.html", lang.code()));
+    own.and_then(|own| pages.iter().find(|p| p.url_path() == own))
+        .or_else(|| pages.iter().find(|p| p.url_path() == "index.html"))
+}
+
+/// The site's name on a page in `lang`: the `title` of that edition's own
+/// home, unless it is missing or only a filename, else `fallback`.
+pub fn localized_site_title<P: SitePage>(pages: &[P], lang: Language, site_lang: Language, fallback: &str, title: impl Fn(&P) -> &str) -> String {
+    if lang == site_lang {
+        return fallback.to_string();
+    }
+    edition_home(pages, lang, site_lang)
+        .filter(|p| p.url_path() != "index.html" && p.source_path().is_some())
+        .map(title)
+        .filter(|t| !t.is_empty() && !crate::home::is_index_stem(t))
+        .map_or_else(|| fallback.to_string(), str::to_string)
 }
 
 /// The `title` and `date` a page lists under `inferred:`, filled from the
@@ -273,6 +439,13 @@ fn fill_inferred(fm: &mut FrontMatter, path: &str, texts: &HashMap<String, Strin
     if let Some(date) = facts.fact_for("date", fm.date.as_deref(), listed) {
         fm.date = Some(date);
     }
+}
+
+/// The folder a page shares with its translations: its source folder, less a
+/// leading language tree, so `a/x.md` and `zh-hans/a/x.md` pair.
+fn translation_directory(path: &str) -> String {
+    let within = crate::home::lang_tree_prefix(path).and_then(|tree| path.strip_prefix(tree)).and_then(|rest| rest.strip_prefix('/')).unwrap_or(path);
+    std::path::Path::new(within).parent().and_then(|p| p.to_str()).unwrap_or_default().to_string()
 }
 
 /// The site's language and each folder's, settled once for every page.
@@ -308,7 +481,7 @@ fn one_page(
     root_name: &str,
     langs: &SiteLangs,
     bundle: &super::SiteBundle,
-) -> (PageFacts, Language) {
+) -> (PageFacts, String) {
     use crate::heading;
     fm.normalize();
     let event_when = fm.start.as_deref().and_then(|s| crate::event::EventTime::parse(s).ok()).map(|t| t.sort_key());
@@ -322,6 +495,7 @@ fn one_page(
     let inferred = langs.folders.get(folder).copied();
     let ancestor = crate::i18n::folder_language(path, inferred, slot_only);
     let (lang, clean_stem) = crate::i18n::resolve_document_language(fm.lang.as_deref(), if stem.is_empty() { "untitled" } else { stem }, langs.site, ancestor);
+    let lang_tag = crate::i18n::declared_lang_tag(fm.lang.as_deref(), stem, path, ancestor).unwrap_or_else(|| crate::i18n::lang_tag(&bundle.lang));
 
     let parent_name = folder.rsplit('/').next().filter(|_| !folder.is_empty()).unwrap_or(root_name);
     let by_name = crate::home::is_home_file(&stem.to_lowercase(), parent_name);
@@ -347,6 +521,8 @@ fn one_page(
         if state.text.is_empty() { filename_title } else { state.text }
     };
     let order_match_name = crate::sort::order_match_name(is_folder_index, Some(path), &url_path, &clean_stem).to_string();
+    let nav_label = fm.nav_label.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let nav_link = super::nav::nav_link(fm.external_url.as_deref()).map(str::to_string);
     let page = PageFacts {
         date: event_when.or(fm.date),
         weight: fm.weight,
@@ -363,9 +539,20 @@ fn one_page(
         slot_only,
         hidden_home: None,
         direct_children_sort: None,
+        source_path: Some(path.to_string()),
+        lang,
+        edition: String::new(),
+        is_root_level: crate::home::is_edition_top_level(path, &bundle.lang),
+        partial: slot_only && fm.partial == Some(true) && fm.draft != Some(true),
+        nav: fm.nav,
+        nav_label,
+        nav_link,
+        breadcrumb: fm.breadcrumb,
+        translates_home: false,
+        passthrough_root: None,
         url_path,
     };
-    (page, lang)
+    (page, lang_tag)
 }
 
 #[cfg(test)]

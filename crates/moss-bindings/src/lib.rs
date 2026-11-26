@@ -74,7 +74,8 @@ impl Site {
         if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {
             page.body_html.push_str(&nav);
         }
-        let html = page::preview_document(&page, &self.inputs.lang, base_href);
+        let masthead = self.pages.masthead(path).unwrap_or_default();
+        let html = page::preview_document(&page, &masthead, &self.inputs.lang, base_href);
         serde_json::to_string(&page::PagePreview {
             revision: page::content_hash(text.as_bytes()),
             html,

@@ -1,4 +1,9 @@
 use super::*;
+use moss_core::page::nav::{
+    breadcrumb_segments, has_nav_items, home_breadcrumb_setting, is_nav_bar_item, is_nav_bar_page, is_navigational_page,
+    parent_label_segment, NavFacts,
+};
+use moss_core::frontmatter_typed::BreadcrumbSetting;
 
 /// Helper to create a test ParsedDocument with minimal fields
 fn make_doc(url_path: &str, title: &str, weight: Option<i32>, nav: Option<bool>) -> ParsedDocument {
@@ -525,34 +530,34 @@ fn test_auto_nav_combined_scenario() {
 
 #[test]
 fn is_navigational_page_organized_root_nonindex() {
-    assert!(super::is_navigational_page(true, false, "about", true));
+    assert!(is_navigational_page(true, false, "about", true));
 }
 
 #[test]
 fn is_navigational_page_organized_root_index() {
     // The site home is never a navigational page.
-    assert!(!super::is_navigational_page(true, true, "index", true));
+    assert!(!is_navigational_page(true, true, "index", true));
 }
 
 #[test]
 fn is_navigational_page_organized_nested() {
-    assert!(!super::is_navigational_page(false, false, "post", true));
+    assert!(!is_navigational_page(false, false, "post", true));
 }
 
 #[test]
 fn is_navigational_page_flat_keyword() {
-    assert!(super::is_navigational_page(true, false, "about", false));
+    assert!(is_navigational_page(true, false, "about", false));
 }
 
 #[test]
 fn is_navigational_page_flat_nonkeyword() {
-    assert!(!super::is_navigational_page(true, false, "contact", false));
+    assert!(!is_navigational_page(true, false, "contact", false));
 }
 
 #[test]
 fn is_navigational_page_nested_keyword_excluded() {
     // Keyword only counts at the root.
-    assert!(!super::is_navigational_page(false, false, "about", false));
+    assert!(!is_navigational_page(false, false, "about", false));
 }
 
 // ===========================================
@@ -581,7 +586,7 @@ fn test_breadcrumb_renders_when_enabled_on_homepage() {
 
     let doc = &documents[2]; // posts/hello/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_some(),
         "Breadcrumbs should be computed when homepage has breadcrumb: true"
@@ -656,7 +661,7 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
     let doc = &documents[2];
 
     let build = |fm: bool, logo_fm: bool| {
-        let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false)
+        let segments = breadcrumb_segments(doc, &documents, "My Site", true, false)
             .expect("breadcrumbs enabled by homepage");
         NavigationBuilder::new(
             &documents,
@@ -720,7 +725,7 @@ fn test_breadcrumb_not_rendered_on_root_page() {
 
     let doc = &documents[0]; // index.html (homepage)
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Root page (depth 0) should NOT get breadcrumbs"
@@ -728,7 +733,7 @@ fn test_breadcrumb_not_rendered_on_root_page() {
 
     // Also test non-index root page
     let doc = &documents[1]; // about.html
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Root-level page (depth 0) should NOT get breadcrumbs"
@@ -746,7 +751,7 @@ fn test_breadcrumb_per_page_override_false() {
 
     let doc = &documents[2]; // posts/secret/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "Page with breadcrumb: false should not get breadcrumbs"
@@ -763,7 +768,7 @@ fn test_breadcrumb_not_rendered_when_explicitly_disabled() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(
         segments.is_none(),
         "No breadcrumbs when homepage has breadcrumb: false"
@@ -782,10 +787,10 @@ fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_brea
     ];
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(segments.is_none(), "without force, the site-wide breadcrumb: false still wins");
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, true)
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, true)
         .expect("force must draw a trail even when the site disables breadcrumbs");
     assert_eq!(segments.len(), 2, "site name, then the root's own title as the current crumb");
     assert_eq!(segments[0].title, "My Site");
@@ -799,7 +804,7 @@ fn test_breadcrumb_force_names_an_explorer_root_even_when_the_site_disables_brea
     let mut opted_out = documents[1].clone();
     opted_out.breadcrumb = Some(BreadcrumbSetting::Off);
     assert!(
-        compute_breadcrumb_segments(&opted_out, &documents, "My Site", true, true).is_none(),
+        breadcrumb_segments(&opted_out, &documents, "My Site", true, true).is_none(),
         "an explicit per-page opt-out still wins over force"
     );
 }
@@ -818,14 +823,14 @@ fn test_breadcrumb_force_yields_to_the_nav_bar_when_the_site_has_nav_items() {
     let doc = &documents[2];
 
     assert!(
-        compute_breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
+        breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
         "an explorer root on a site with nav items renders the nav, not a trail"
     );
 
     let mut trail_home = documents.clone();
     trail_home[0].breadcrumb = Some(BreadcrumbSetting::On);
     assert!(
-        compute_breadcrumb_segments(&trail_home[2], &trail_home, "My Site", true, true).is_some(),
+        breadcrumb_segments(&trail_home[2], &trail_home, "My Site", true, true).is_some(),
         "a homepage that sets breadcrumb: true still draws the trail"
     );
 }
@@ -842,7 +847,7 @@ fn test_breadcrumb_page_opt_out_still_wins_for_an_explorer_root_with_nav_items()
     let doc = &documents[2];
 
     assert!(
-        compute_breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
+        breadcrumb_segments(doc, &documents, "My Site", true, true).is_none(),
         "breadcrumb: false on the root wins over force with nav items"
     );
 }
@@ -859,7 +864,7 @@ fn test_breadcrumb_auto_enable_flat_mode_with_keyword() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", false, false);
     assert!(
         segments.is_none(),
         "Flat mode with 'about' → nav item exists → no auto-breadcrumbs"
@@ -878,7 +883,7 @@ fn test_breadcrumb_auto_enable_flat_mode_no_keyword() {
         make_doc_with_breadcrumb("writing/article/index.html", "Article", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", false, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", false, false);
     assert!(
         segments.is_some(),
         "Flat mode with no keyword files → no nav items → auto-breadcrumbs"
@@ -902,7 +907,7 @@ fn test_breadcrumb_segment_titles_from_label_vs_titlecase_fallback() {
 
     let doc = &documents[2]; // blog-posts/tech-tips/my-article/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false);
     assert!(segments.is_some());
 
     let segments = segments.unwrap();
@@ -931,7 +936,7 @@ fn test_breadcrumb_current_page_is_absent() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_builder = NavigationBuilder::new(
         &documents,
@@ -977,7 +982,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
     ];
 
     let deep = &documents[3];
-    let segments = compute_breadcrumb_segments(deep, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(deep, &documents, "My Site", true, false).unwrap();
     let deep_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -1003,7 +1008,7 @@ fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
     );
 
     let shallow = &documents[1];
-    let segments = compute_breadcrumb_segments(shallow, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(shallow, &documents, "My Site", true, false).unwrap();
     let shallow_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -1042,7 +1047,7 @@ fn test_breadcrumb_segment_carries_hint_label_and_label_span() {
     ];
 
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_html = NavigationBuilder::new(
         &documents,
@@ -1086,7 +1091,7 @@ fn test_breadcrumb_hint_escapes_quotes_in_title() {
     ];
 
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     let nav_html = NavigationBuilder::new(
         &documents,
@@ -1121,7 +1126,7 @@ fn test_breadcrumb_single_depth_page() {
 
     let doc = &documents[1]; // about/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
 
     // Raw segments still have 2 entries (site + current)
     assert_eq!(segments.len(), 2);
@@ -1153,13 +1158,17 @@ fn test_breadcrumb_single_depth_page() {
     );
 }
 
+/// A folder with no page and no source file under it to read its name from
+/// (only generated pages) is named from its address.
 #[test]
-fn test_titlecase_segment_function() {
-    assert_eq!(titlecase_segment("hello-world"), "Hello World");
-    assert_eq!(titlecase_segment("tech-tips"), "Tech Tips");
-    assert_eq!(titlecase_segment("simple"), "Simple");
-    assert_eq!(titlecase_segment("a-b-c"), "A B C");
-    assert_eq!(titlecase_segment(""), "");
+fn test_breadcrumb_names_a_folder_of_generated_pages_from_its_address() {
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(BreadcrumbSetting::On)),
+        make_doc_with_breadcrumb("tech-tips/page-2/index.html", "Page 2", None),
+    ];
+    let segments = breadcrumb_segments(&documents[1], &documents, "My Site", true, false).unwrap();
+    let titles: Vec<&str> = segments.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, ["My Site", "Tech Tips", "Page 2"]);
 }
 
 #[test]
@@ -1236,7 +1245,7 @@ fn test_breadcrumb_translation_root_transparent() {
 
     let doc = &documents[3]; // zh-hans/docs/getting-started/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(
         segments.is_some(),
         "Should compute breadcrumbs for translated page"
@@ -1296,7 +1305,7 @@ fn test_breadcrumb_translation_root_homepage_no_breadcrumbs() {
 
     let doc = &documents[1]; // zh-hans/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(
         segments.is_none(),
         "Translation root homepage should NOT get breadcrumbs"
@@ -1338,7 +1347,7 @@ fn test_breadcrumb_translation_root_deep_nesting() {
 
     let doc = &documents[4]; // zh-hans/docs/guides/quickstart/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     assert_eq!(
         segments.len(),
         4,
@@ -1384,7 +1393,7 @@ fn test_breadcrumb_translation_root_non_index_file() {
 
     let doc = &documents[3]; // zh-hans/about/page.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     // home -> about (folder) -> page (current)
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/zh-hans/");
@@ -1426,7 +1435,7 @@ fn test_breadcrumb_translation_root_partial_translation() {
 
     let doc = &documents[2];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/zh-hans/");
     assert_eq!(
@@ -1467,7 +1476,7 @@ fn test_breadcrumb_arbitrary_folder_name_as_translation_root() {
 
     let doc = &documents[2]; // chinese/docs/index.html
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false).unwrap();
     // "chinese" should be transparent even though it's not a language code
     assert_eq!(segments.len(), 2, "Should have 2 segments: home, current");
     assert_eq!(segments[0].title, "青苔");
@@ -1506,7 +1515,7 @@ fn test_breadcrumb_translation_root_direct_child_no_breadcrumbs() {
 
     let doc = &documents[2]; // zh-hans/page.html (effective depth 0 after stripping)
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "青苔", true, false);
+    let segments = breadcrumb_segments(doc, &documents, "青苔", true, false);
     assert!(segments.is_none(),
             "Non-index file directly under translation root (effective depth 0) should get no breadcrumbs");
 }
@@ -1522,7 +1531,7 @@ fn test_breadcrumb_non_translation_folder_unchanged() {
 
     let doc = &documents[2];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     // Normal breadcrumb: site -> docs -> current
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].title, "My Site");
@@ -1543,7 +1552,7 @@ fn test_breadcrumb_folder_with_no_index_not_transparent() {
 
     let doc = &documents[1];
 
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     // Normal: site -> foo (titlecased) -> current
     assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].url, "/");
@@ -2295,8 +2304,8 @@ fn footer_link_no_active_when_current_url_none() {
 #[test]
 fn is_nav_bar_item_explicit_true() {
     // nav: true wins for any file, any depth.
-    assert!(super::is_nav_bar_item(
-        super::NavFacts { nav: Some(true), draft: false, slot_only: false, unlisted: false },
+    assert!(is_nav_bar_item(
+        NavFacts { nav: Some(true), draft: false, slot_only: false, unlisted: false },
         false, false, "post", false
     ));
 }
@@ -2304,8 +2313,8 @@ fn is_nav_bar_item_explicit_true() {
 #[test]
 fn is_nav_bar_item_explicit_false() {
     // nav: false opts out even a root keyword file in organized mode.
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: Some(false), draft: false, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: Some(false), draft: false, slot_only: false, unlisted: false },
         true, false, "about", true
     ));
 }
@@ -2313,8 +2322,8 @@ fn is_nav_bar_item_explicit_false() {
 #[test]
 fn is_nav_bar_item_slot_only_never_nav() {
     // Slot files (footer.md) are chrome, never nav items — even nav: true.
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: Some(true), draft: false, slot_only: true, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: Some(true), draft: false, slot_only: true, unlisted: false },
         true, false, "footer", true
     ));
 }
@@ -2322,8 +2331,8 @@ fn is_nav_bar_item_slot_only_never_nav() {
 #[test]
 fn is_nav_bar_item_organized_root_nonindex() {
     // Organized mode: a root-level non-index file auto-appears.
-    assert!(super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+    assert!(is_nav_bar_item(
+        NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
         true, false, "about", true
     ));
 }
@@ -2331,8 +2340,8 @@ fn is_nav_bar_item_organized_root_nonindex() {
 #[test]
 fn is_nav_bar_item_organized_nested_excluded() {
     // Nested file never auto-appears.
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
         false, false, "post", true
     ));
 }
@@ -2340,8 +2349,8 @@ fn is_nav_bar_item_organized_nested_excluded() {
 #[test]
 fn is_nav_bar_item_organized_root_index_excluded() {
     // The root index is the home page, not a nav item.
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
         true, true, "index", true
     ));
 }
@@ -2349,16 +2358,16 @@ fn is_nav_bar_item_organized_root_index_excluded() {
 #[test]
 fn is_nav_bar_item_flat_keyword() {
     // Flat mode: only keyword filenames auto-appear.
-    assert!(super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+    assert!(is_nav_bar_item(
+        NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
         true, false, "about", false
     ));
 }
 
 #[test]
 fn is_nav_bar_item_flat_nonkeyword_excluded() {
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: None, draft: false, slot_only: false, unlisted: false },
         true, false, "contact", false
     ));
 }
@@ -2366,12 +2375,12 @@ fn is_nav_bar_item_flat_nonkeyword_excluded() {
 #[test]
 fn is_nav_bar_item_draft_never_nav() {
     // draft wins over explicit nav: true and over auto-navigational status
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: Some(true), draft: true, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: Some(true), draft: true, slot_only: false, unlisted: false },
         true, false, "about", true
     ));
-    assert!(!super::is_nav_bar_item(
-        super::NavFacts { nav: None, draft: true, slot_only: false, unlisted: false },
+    assert!(!is_nav_bar_item(
+        NavFacts { nav: None, draft: true, slot_only: false, unlisted: false },
         true, false, "about", true
     ));
 }
@@ -2650,7 +2659,7 @@ fn island_for_deep_page() -> String {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2706,7 +2715,7 @@ fn the_masthead_still_stops_before_the_current_page() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     let nav_html = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2740,7 +2749,7 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
         make_doc_with_breadcrumb("about/index.html", "About Us", None),
     ];
     let doc = &documents[1];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     let shallow = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -2851,7 +2860,7 @@ fn island_labels_are_localized_and_attribute_safe() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "河灣", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "河灣", true, false).unwrap();
     let island = NavigationBuilder::new(
         &documents,
         "河灣",
@@ -3022,7 +3031,7 @@ fn nav_mode_suppresses_the_floating_island() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
+    let segments = breadcrumb_segments(doc, &documents, "My Site", true, false).unwrap();
     let island = NavigationBuilder::new(
         &documents,
         "My Site",
@@ -3158,11 +3167,11 @@ fn unlisted_root_page_is_not_auto_promoted_into_nav() {
     // An unlisted root page would otherwise qualify (organized mode, root level).
     let mut doc = make_doc_with_root_level("stub/index.html", "Stub", None, None, true);
     doc.clean_stem = "stub".to_string();
-    assert!(is_nav_bar_item_doc(&doc, true), "listed root page auto-joins nav");
+    assert!(is_nav_bar_page(&doc, true), "listed root page auto-joins nav");
     doc.listed = Some(false);
-    assert!(!is_nav_bar_item_doc(&doc, true), "listed: false stays out of nav");
+    assert!(!is_nav_bar_page(&doc, true), "listed: false stays out of nav");
     doc.nav = Some(true);
-    assert!(is_nav_bar_item_doc(&doc, true), "explicit nav: true still wins");
+    assert!(is_nav_bar_page(&doc, true), "explicit nav: true still wins");
 }
 
 #[test]
@@ -3175,7 +3184,7 @@ fn test_breadcrumb_label_on_home_gives_a_folder_page_its_parent_and_no_header_tr
     let doc = &documents[2];
 
     assert!(
-        compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_none(),
+        breadcrumb_segments(doc, &documents, "My Site", true, false).is_none(),
         "label on the home page takes the trail out of the header"
     );
     let parent = parent_label_segment(doc, &documents, home_breadcrumb_setting(&documents))
@@ -3217,7 +3226,7 @@ fn test_breadcrumb_true_on_home_keeps_the_header_trail_and_adds_no_parent_label(
     ];
     let doc = &documents[2];
 
-    assert!(compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_some());
+    assert!(breadcrumb_segments(doc, &documents, "My Site", true, false).is_some());
     assert!(parent_label_segment(doc, &documents, home_breadcrumb_setting(&documents)).is_none());
 }
 

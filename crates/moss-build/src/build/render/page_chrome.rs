@@ -3,7 +3,8 @@
 use crate::build::assets::paths::{compute_content_hash, PathResolver};
 use crate::build::assets::theme_modules::ThemeModules;
 use crate::build::cloud_ledger::InputEvidence;
-use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
+use crate::build::components::nav::NavigationBuilder;
+use moss_core::page::nav::breadcrumb_segments;
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::page::layout::LayoutConfig;
 use crate::build::page::meta::escape_html_attr;
@@ -91,7 +92,7 @@ impl PageChromeContext<'_, '_> {
             self.layout.site_name.clone()
         };
         doc.map_or(fallback.clone(), |d| {
-            super::html::localized_site_title(self.documents, d.lang, self.site_lang, &fallback)
+            moss_core::page::site_page::localized_site_title(self.documents, d.lang, self.site_lang, &fallback, |d| &d.title)
         })
     }
 
@@ -138,7 +139,7 @@ impl PageChromeContext<'_, '_> {
             nav = nav.with_logo(logo);
         }
         if let Some(d) = doc {
-            if let Some(segments) = compute_breadcrumb_segments(
+            if let Some(segments) = breadcrumb_segments(
                 d, self.documents, &site_title, self.project.has_content_folders, force_breadcrumb,
             ) {
                 nav = nav.with_breadcrumb(segments, force_breadcrumb);

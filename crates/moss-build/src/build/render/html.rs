@@ -55,49 +55,6 @@ pub const DEFAULT_OG_BG: &str = "#faf8f5";
 pub const DEFAULT_OG_FG: &str = "#1a1816";
 pub const DEFAULT_OG_ACCENT: &str = "#8a7a6f";
 
-/// Look up the homepage `ParsedDocument` for a given page language.
-///
-/// Multilingual sites have one homepage per language: the site-default
-/// homepage at `index.html` and per-language homepages at `<lang>/index.html`.
-/// Pages in a non-default language should pull homepage-cascade fields
-/// (cover, hero, description) from THEIR language's homepage so share cards
-/// don't surface English copy on Chinese pages.
-///
-/// Fallback order: language-specific homepage → site-default homepage → None.
-/// Used by both the OG cover chain and the OG description chain.
-fn find_homepage_doc<'a>(
-    all_docs: &'a [crate::build::types::ParsedDocument],
-    page_lang: crate::i18n::Language,
-    site_lang: crate::i18n::Language,
-) -> Option<&'a crate::build::types::ParsedDocument> {
-    if page_lang != site_lang {
-        let lang_homepage = format!("{}/index.html", page_lang.code());
-        if let Some(d) = all_docs.iter().find(|d| d.url_path == lang_homepage) {
-            return Some(d);
-        }
-    }
-    all_docs.iter().find(|d| d.url_path == "index.html")
-}
-
-/// Resolve the site name visible on a page in `page_lang` from that edition's
-/// authored root. A missing or filename-derived localized title falls back to
-/// the canonical site name, so English and single-language sites are unchanged.
-pub(crate) fn localized_site_title(
-    all_docs: &[ParsedDocument],
-    page_lang: crate::i18n::Language,
-    site_lang: crate::i18n::Language,
-    fallback: &str,
-) -> String {
-    if page_lang == site_lang {
-        return fallback.to_string();
-    }
-    find_homepage_doc(all_docs, page_lang, site_lang)
-        .filter(|d| d.url_path != "index.html" && d.source_path.is_some())
-        .map(|d| d.title.clone())
-        .filter(|t| !t.is_empty() && !moss_core::home::is_index_stem(t))
-        .unwrap_or_else(|| fallback.to_string())
-}
-
 /// One page rendered outside any build, with shared state built for it alone.
 #[cfg(test)]
 pub fn generate_html(
@@ -413,7 +370,7 @@ fn generate_html_inner<'d>(
             documents: all_docs, project, layout: layout_config, site_lang,
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates, theme_modules: &shared.theme_modules },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
-            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
+            home_breadcrumb: moss_core::page::nav::home_breadcrumb_setting(all_docs),
             media_lookup: shared.media_lookup,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
@@ -523,7 +480,7 @@ impl<'a> PageFacts<'a> {
         // site-default homepage, so zh-hans/ pages do not surface the English
         // homepage's description.
         let cascade_homepage = if doc.is_some() && !is_homepage {
-            find_homepage_doc(all_docs, ui_lang, site_lang)
+            moss_core::page::site_page::edition_home(all_docs, ui_lang, site_lang)
         } else {
             None
         };
@@ -1277,7 +1234,7 @@ pub(super) fn render_page<'d>(
         // The `breadcrumb: label` link is chrome around the finished title
         // block, so it goes on last: the splices above see the title at the
         // head of the content and need not step past anything.
-        let label = doc.and_then(|d| crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb));
+        let label = doc.and_then(|d| moss_core::page::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb));
         let label = label.and_then(|parent| crate::build::markdown::html_post::prepend_parent_label(&mut finished, &parent));
         if let Some(d) = doc {
             crate::build::components::field_places::warn_title_block_unplaced(d, &finished);

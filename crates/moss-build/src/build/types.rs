@@ -824,11 +824,7 @@ pub struct ParsedDocument {
     pub remote_picture_occurrences: Vec<ReferenceOccurrence>,
 }
 
-/// Whether `folder` is `root` or a folder inside it. The one test for "at or
-/// under a passthrough root", shared by the listing plan and the breadcrumb.
-pub fn folder_within(root: &str, folder: &str) -> bool {
-    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
-}
+pub use moss_core::resolve::folder_within;
 
 /// Addresses of a page's copies on other sites, from its frontmatter
 /// `syndicated:` value (a list, or one string).
@@ -1320,6 +1316,17 @@ impl moss_core::page::site_page::SitePage for ParsedDocument {
     fn slot_only(&self) -> bool { self.slot_only }
     fn hidden_home(&self) -> Option<&str> { self.hidden_home.as_deref() }
     fn direct_children_sort(&self) -> Option<&moss_core::sort::ResolvedSort> { self.direct_children_sort.as_ref() }
+    fn source_path(&self) -> Option<&str> { self.source_path.as_deref() }
+    fn lang(&self) -> crate::i18n::Language { self.lang }
+    fn edition(&self) -> &str { &self.edition }
+    fn is_root_level(&self) -> bool { self.is_root_level }
+    fn partial(&self) -> bool { self.is_partial() }
+    fn nav(&self) -> Option<bool> { self.nav }
+    fn nav_label(&self) -> Option<&str> { self.nav_label.as_deref() }
+    fn nav_link(&self) -> Option<&str> { crate::build::scan::page_map::nav_external_href(&self.raw_frontmatter) }
+    fn breadcrumb(&self) -> Option<moss_core::frontmatter_typed::BreadcrumbSetting> { self.breadcrumb }
+    fn translates_home(&self) -> bool { self.translations.iter().any(|t| t.url_path == "index.html") }
+    fn passthrough_root(&self) -> Option<&str> { self.passthrough_root.as_deref() }
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

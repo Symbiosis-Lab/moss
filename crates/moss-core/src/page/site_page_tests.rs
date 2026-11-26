@@ -89,7 +89,7 @@ fn langs_with(texts: &[(&str, &str)], detected: &[(&str, &str, usize)], lang_dec
         .map(|(p, code, weight)| (p.to_string(), crate::i18n::vote::Detected { lang: Some(code.to_string()), weight: *weight }))
         .collect();
     let site = site_pages(&texts, &SiteBundle { files, lang: "en".into(), lang_declared, detected, ..Default::default() }, "site");
-    site.paths.into_iter().zip(site.langs).collect()
+    site.paths.into_iter().zip(site.pages.iter().map(|p| p.lang)).collect()
 }
 
 #[test]

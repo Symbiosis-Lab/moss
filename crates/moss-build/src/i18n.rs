@@ -27,13 +27,14 @@
 //! returned stem is identical.
 
 pub mod detect;
-pub mod link;
+pub use moss_core::i18n::link;
 pub mod site_languages;
 #[cfg(test)]
 mod site_script_strings_tests;
 pub use moss_core::i18n::numerals;
 
 pub use moss_core::i18n::{filename, path, clean_stem_only, folder_language, resolve_document_language};
+pub use moss_core::i18n::{canonical_bcp47, declared_lang_tag, lang_tag, lang_tag_in_tree, switcher_label};
 pub use moss_core::i18n::{Language, use_cjk_numerals, diagram_type_name, hook_strings, sources_headings, t, term_root_title};
 
 /// A folder card's article count as displayed text — `3 articles`, `三篇`.
@@ -72,39 +73,6 @@ pub fn card_count_label(
         count.to_string()
     };
     setting.render(count, &number)
-}
-
-
-/// The `<html lang>` tag for a language CODE — the one canonicalizer, so a
-/// site's declaration and a page's declaration cannot disagree about the same
-/// string. `zh-tw` must emit `zh-Hant`, the edition moss ships, not the region
-/// `zh-TW`; a code with no `Language` variant takes the general rule, and so
-/// does German, whose regional tags (`de-AT`) keep their region in the markup.
-pub fn lang_tag(code: &str) -> String {
-    match Language::from_code(code) {
-        Some(Language::De) | None => canonical_bcp47(code),
-        Some(lang) => lang.as_bcp47_attr().to_string(),
-    }
-}
-
-/// The chip a language switcher shows for a declared tag.
-///
-/// Each edition has its own short label (`EN`, `DE`, `简`, `繁`), so the
-/// chips of a switcher read alike. Every language moss has no interface for
-/// shows its endonym instead, and so does a regional German tag (`de-AT`),
-/// since two German editions side by side need telling apart.
-///
-/// Total for any tag that passed the allowlist, which is every tag that can
-/// reach a switcher.
-pub fn switcher_label(tag: &str) -> &'static str {
-    match Language::from_code(tag) {
-        // Two German editions side by side need telling apart.
-        Some(Language::De) if !tag.eq_ignore_ascii_case("de") => {
-            moss_core::home::endonym(tag).unwrap_or_else(|| Language::De.display_name())
-        }
-        Some(lang) => lang.display_name(),
-        None => moss_core::home::endonym(tag).unwrap_or(""),
-    }
 }
 
 /// A declared tag's language named in `ui`, the reader's interface language
@@ -147,57 +115,6 @@ pub(crate) fn same_language_edition(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b) || prefixes(a, b) || prefixes(b, a)
 }
 
-/// Canonicalize a BCP-47 tag for emission: lowercase language, `Titlecase`
-/// script, `UPPERCASE` region. `zh-hant` → `zh-Hant`, `pt-br` → `pt-BR`.
-///
-/// Browsers accept any case, but the canonical form is what avoids SEO crawler
-/// warnings — the same reason [`Language::as_bcp47_attr`] is title-cased by
-/// hand. This is the general form of that, for the languages moss recognizes
-/// but has no `Language` variant for.
-pub(crate) fn canonical_bcp47(code: &str) -> String {
-    code.split('-')
-        .enumerate()
-        .map(|(i, part)| {
-            let lower = part.to_ascii_lowercase();
-            match (i, part.len()) {
-                (0, _) => lower,
-                // A 4-letter subtag is a script (`hant`), a 2-letter one a
-                // region (`br`). Anything else (a variant like `1901`) is left
-                // as it came.
-                (_, 4) => {
-                    let mut c = lower.chars();
-                    c.next()
-                        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
-                        .unwrap_or(lower)
-                }
-                (_, 2) => lower.to_ascii_uppercase(),
-                _ => lower,
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-")
-}
-/// What this PAGE's language is, canonically — from its own declaration or,
-/// failing that, from the folder it sits in — or `None` when neither says
-/// anything and the SITE default is the answer.
-///
-/// `None` used to mean two different things: "nothing here" and "declares one
-/// of moss's three, so read it off the UI language instead". Every emission
-/// site therefore had to keep a `ui_lang` fallback that could not tell those
-/// apart, which is how a site declaring `fr` served pages saying `en`.
-/// One meaning now: nothing at this page or its folder, use the site's.
-pub fn declared_lang_tag(
-    frontmatter_lang: Option<&str>,
-    filename_stem: &str,
-    file_path: &str,
-    ancestor_lang: Option<Language>,
-) -> Option<String> {
-    declared_only(frontmatter_lang, filename_stem, file_path)
-        // The folder-inferred rung — evidence about this page's
-        // neighbourhood, and the last one that is about the page at all.
-        .or_else(|| ancestor_lang.map(|l| l.as_bcp47_attr().to_string()))
-}
-
 /// The `lang:` a markdown file's frontmatter declares, validated against the
 /// allowlist — the one reader for every rung that asks a FILE what language it
 /// claims to be, whether the answer is about that file's own page (the
@@ -220,39 +137,6 @@ pub fn declared_lang_in_file(
     }
     let content = std::fs::read_to_string(path).ok()?;
     moss_core::page::site_sources::declared_lang_in_text(&content)
-}
-
-/// The tag for a page that declares nothing of its own but sits in a folder
-/// whose language IS known — a synthesized folder index. Total by
-/// construction: an authored page can say "nothing here, ask the site"
-/// (`declared_lang_tag`'s `None`), a synthesized one cannot, because the
-/// folder it is synthesized for is the answer.
-pub fn lang_tag_in_tree(file_path: &str, folder_lang: Language) -> String {
-    declared_only(None, "", file_path)
-        .unwrap_or_else(|| folder_lang.as_bcp47_attr().to_string())
-}
-
-/// The canonical tag this page DECLARES — frontmatter, then filename suffix,
-/// then language-tree directory — with no fallback of any kind.
-fn declared_only(
-    frontmatter_lang: Option<&str>,
-    filename_stem: &str,
-    file_path: &str,
-) -> Option<String> {
-    let declared = frontmatter_lang
-        .map(str::to_string)
-        .or_else(|| moss_core::home::lang_suffix(filename_stem).map(str::to_string))
-        .or_else(|| moss_core::home::lang_tree_prefix(file_path).map(str::to_string));
-
-    if let Some(declared) = declared {
-        // Unrecognized frontmatter (`lang: english`) is not a fourth language,
-        // it is a typo — fall through rather than invent `lang="english"`.
-        if moss_core::home::is_known_language_code(&declared) {
-            return Some(lang_tag(&declared));
-        }
-    }
-
-    None
 }
 
 /// Test fixtures shared across the i18n test suite AND
@@ -823,7 +707,6 @@ impl AppLanguage {
         }
     }
 }
-
 
 /// Process-global app language. **Mutable** so a live language switch (no
 /// restart) takes effect immediately for backend advisory / progress / `Verb`

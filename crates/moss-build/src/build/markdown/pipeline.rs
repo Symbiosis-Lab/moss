@@ -1286,7 +1286,7 @@ pub fn process_markdown_file(
     // body that opens with its own `# Heading`: that heading is the title, so
     // no title is injected above it. `is_nav_page` decides only that rule.
     // `is_index_file && is_root_level` stands in for `url_path == "index.html"`
-    // (the form `is_nav_bar_item_doc` uses at the render sites). It is EXACT for
+    // (the form `is_nav_bar_page` uses at the render sites). It is EXACT for
     // every page this gate can actually affect: the gate below also requires
     // an injected title, which moss-core withholds from all index/folder
     // pages — so only non-index articles reach it, and for an article both this
@@ -1294,8 +1294,8 @@ pub fn process_markdown_file(
     // only disagree on index pages (e.g. a root index with a `url:` override),
     // which this gate never injects for. Keeping the proxy avoids depending on
     // `url_path`, computed a few lines below.
-    let is_nav_page = crate::build::components::nav::is_nav_bar_item(
-        crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
+    let is_nav_page = moss_core::page::nav::is_nav_bar_item(
+        moss_core::page::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
             slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) || frontmatter.search_engines == Some(false) },
         is_root_level,
         is_index_file && is_root_level,

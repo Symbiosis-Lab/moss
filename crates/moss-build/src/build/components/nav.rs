@@ -2,8 +2,8 @@
 //!
 //! Handles the creation of the main site navigation.
 
-use moss_core::frontmatter_typed::BreadcrumbSetting;
 use crate::build::types::ParsedDocument;
+use moss_core::page::nav::{nav_bar_pages, nav_items, sort_nav_items, BreadcrumbSegment, NavItem};
 
 use crate::i18n::Language;
 use crate::i18n::link::TranslationLink;
@@ -17,9 +17,6 @@ mod island;
 /// The search / language / theme cluster, shared by the masthead and the
 /// island of a site with no header.
 mod icons;
-/// The second header level: which nav items group under a folder entry, and
-/// the markup of a group.
-mod submenu;
 /// `generate_footer`, and `strip_empty_footer`, which settles the footer it
 /// emits once slots are resolved. A child module for the same reason as the
 /// two above.
@@ -29,36 +26,6 @@ pub(crate) mod footer;
 /// sibling kept close to its one reader.
 mod header_mode;
 pub use header_mode::{HeaderMode, HeaderScroll};
-
-/// One header entry: its sort keys and its rendered link or group.
-struct NavItem<'a> {
-    weight: Option<i32>,
-    /// Plain-text chrome label, the alphabetical tiebreak.
-    label: &'a str,
-    html: String,
-}
-
-/// Header order, for both levels: weighted entries first by weight, ties and
-/// the unweighted by label. The label tiebreak keeps the order independent of
-/// filesystem walk order (macOS and Linux scan folders differently).
-fn sort_nav_items(items: &mut [NavItem<'_>]) {
-    items.sort_by(|a, b| match (a.weight, b.weight) {
-        (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(b.label)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.label.cmp(b.label),
-    });
-}
-
-/// A single segment of a breadcrumb trail
-pub struct BreadcrumbSegment {
-    /// Display title for this segment
-    pub title: String,
-    /// Relative URL for this segment (empty for current page)
-    pub url: String,
-    /// Whether this is the current (last) page in the trail
-    pub is_current: bool,
-}
 
 /// Builder for generating navigation components
 pub struct NavigationBuilder<'a> {
@@ -191,7 +158,7 @@ impl<'a> NavigationBuilder<'a> {
     /// When set, the site name in `.nav-left` is replaced with a breadcrumb trail.
     ///
     /// `force_current_visible` is the SAME `force` an explorer-root caller
-    /// already passed to [`compute_breadcrumb_segments`] to get `segments`
+    /// already passed to [`breadcrumb_segments`] to get `segments`
     /// in the first place — one switch, not two kept manually in sync. It
     /// used to be a separate chained `.with_breadcrumb_current_visible()`
     /// call every explorer-root call site had to remember to add right
@@ -251,35 +218,12 @@ impl<'a> NavigationBuilder<'a> {
         doc.lang == self.effective_lang() && doc.edition == self.page_edition
     }
 
-    /// The language whose chrome this page shows.
-    ///
-    /// A page's DETECTED language only redirects chrome (home link, nav-item
-    /// scoping) when the page actually lives under a language tree
-    /// (`en/…`, `zh-hans/…`). Content-detection alone must not: an
-    /// English-titled page on a Chinese site with no `en/` tree would get a
-    /// `/en/` home link that 404s and an empty nav (no docs match `En`).
     fn effective_lang(&self) -> Language {
-        let in_lang_tree = self
-            .current_page_url
-            .and_then(moss_core::home::lang_tree_prefix)
-            .is_some();
-        if in_lang_tree { self.current_lang } else { self.lang }
+        moss_core::page::nav::chrome_lang(self.current_page_url, self.current_lang, self.lang)
     }
 
-    /// Where the site-name link points: "/" for the site language,
-    /// "/zh-hans/" for a page in an edition or a language tree.
     fn home_path(&self) -> String {
-        // The tree segment the page ACTUALLY lives under, never a code spelled
-        // back out of the interface enum. `en-us/` and `en-gb/` are language
-        // trees moss accepts but `Language::code()` cannot spell, so their
-        // pages linked home to `/en/` — a path no build emits. The
-        // folder name is the path, by construction.
-        match self.current_page_url.and_then(moss_core::home::lang_tree_prefix) {
-            Some(tree) if !self.page_edition.is_empty() || self.effective_lang() != self.lang => {
-                format!("/{tree}/") // allow:served-path-url-construct (nav href to language-root page, not a framework asset)
-            }
-            _ => "/".to_string(),
-        }
+        moss_core::page::nav::home_path(self.current_page_url, self.page_edition, self.current_lang, self.lang)
     }
 
     /// Logo + site name content (used in both plain and breadcrumb modes).
@@ -343,57 +287,8 @@ impl<'a> NavigationBuilder<'a> {
         // - Organized mode (has content folders): root-level non-index files auto-appear in nav
         // - Flat mode (no content folders): only keyword filenames (about, etc.) auto-appear
         // - nav: true/false always wins (explicit opt-in/out)
-        let mut nav_documents: Vec<&ParsedDocument> = self.documents.iter()
-            .filter(|doc| {
-                // Per-render scope, so it stays outside the predicate.
-                self.in_page_edition(doc) && is_nav_bar_item_doc(doc, self.has_content_folders)
-            })
-            .collect();
-
-        // A header page inside a header folder is listed under that folder.
-        let parents = submenu::parent_indices(&nav_documents);
-        let is_parent: Vec<bool> = (0..nav_documents.len()).map(|i| parents.contains(&Some(i))).collect();
-
-        let items: Vec<NavItem> = nav_documents.iter().enumerate()
-            .map(|(i, doc)| {
-                // Nav link text: `nav_label` if the page set one, else the
-                // chrome label. Both are plain text, so escape at the write.
-                let label = crate::build::features::html_escape(doc.nav_text());
-                let href = match crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter) {
-                    // `external_url:` makes the entry a plain link elsewhere —
-                    // an address, a section anchor, another site.
-                    Some(url) => crate::build::features::html_escape(url),
-                    None => {
-                        let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
-                        format!("/{}", pretty.trim_start_matches('/')) // allow:served-path-url-construct (nav href to user content page, not a framework asset)
-                    }
-                };
-                let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
-                // The exact page is `aria-current="page"` in both modes. The
-                // containing section (`aria-current="true"`) is also marked in
-                // `nav` header mode, which has no breadcrumb trail to say "you
-                // are somewhere under this section", and on a submenu parent,
-                // whose closed list gives the reader no other cue.
-                let attrs = if is_current_page {
-                    r#" class="active" aria-current="page""#
-                } else if (nav_mode || is_parent[i]) && is_current_nav_section(doc, self.current_page_url) {
-                    r#" class="active" aria-current="true""#
-                } else {
-                    ""
-                };
-                // Editor preview: the entry's settings (`nav`, `nav_label`,
-                // `weight`) live in that page's frontmatter, not the open file's.
-                let source = match &doc.source_path {
-                    Some(path) => format!(
-                        r#" data-source-file="{}" data-source-fm="nav""#,
-                        crate::build::features::html_escape(path)
-                    ),
-                    _ => String::new(),
-                };
-                NavItem { weight: doc.weight, label: doc.nav_text(), html: format!(r#"<a href="{}"{attrs}{source}>{}</a>"#, href, label) }
-            })
-            .collect();
-        let mut entries = submenu::nest(items, &parents, self.current_lang);
+        let nav_documents = nav_bar_pages(self.documents, self.effective_lang(), self.page_edition, self.has_content_folders);
+        let mut entries = nav_items(&nav_documents, self.current_page_url, nav_mode, self.current_lang);
 
         // Term kinds that asked for a place in the nav, the page's own
         // edition's. One with a `weight` is ordered among the entries by the
@@ -486,121 +381,6 @@ impl<'a> NavigationBuilder<'a> {
 
 }
 
-/// Filenames that auto-detect as nav pages in flat mode.
-/// Only these keywords cause a root-level file to appear in the nav bar
-/// when the site has no content folders.
-pub fn is_nav_keyword(stem: &str) -> bool {
-    matches!(stem.to_lowercase().as_str(), "about" | "关于" | "關於")
-}
-
-/// True when a doc reads as a navigational/landing page by its position and
-/// name, BEFORE any explicit `nav:` override: a root-level non-index file in
-/// organized mode, or an `about`-keyword root file in flat mode.
-/// `is_root_index` is `url_path == "index.html"` (the site home).
-///
-/// This is the no-override (`None`) case of [`is_nav_bar_item`] — the structural
-/// "should this auto-appear in the nav bar?" detection, extracted so it can be
-/// tested in isolation. It is NOT used for template/layout selection:
-/// `select_shell_type` keys Page-vs-Article off `url_path` depth, a
-/// deliberately different question (every non-index file's `url_path` ends in
-/// `/index.html`, so that test classifies pages differently than this predicate).
-pub fn is_navigational_page(
-    is_root_level: bool,
-    is_root_index: bool,
-    clean_stem: &str,
-    has_content_folders: bool,
-) -> bool {
-    is_root_level && !is_root_index && (has_content_folders || is_nav_keyword(clean_stem))
-}
-
-/// The frontmatter and slot facts that decide nav membership before position
-/// does, named so a new one is a new field rather than another positional bool.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NavFacts {
-    /// Explicit `nav:` opt-in / opt-out.
-    pub nav: Option<bool>,
-    pub draft: bool,
-    pub slot_only: bool,
-    /// `listed: false`.
-    pub unlisted: bool,
-}
-
-/// Does this document render as an item in the top navigation bar?
-///
-/// Single source of truth for "is a top-nav item": `generate_navigation`,
-/// `has_nav_items`, and the nav body-heading rule all consult this. NOT the
-/// same question as `is_listing_nav_item` (article-listing exclusion), which
-/// intentionally diverges in flat mode.
-///
-/// `slot_only` wins over an explicit `nav: true` — slot files (e.g. `footer.md`)
-/// are structural chrome and are excluded here, except a link-only partial,
-/// which only [`is_nav_bar_item_doc`] recognises.
-/// `draft` also wins over an explicit `nav: true` — draft pages are hidden from
-/// all listings, including the top nav bar.
-/// The `None` (no explicit frontmatter) case delegates to `is_navigational_page`,
-/// except that an `unlisted` (`listed: false`) page is never auto-promoted; an
-/// explicit `nav: true` still puts it in the bar.
-///
-/// `is_root_index` is the top-level site index (`url_path == "index.html"`),
-/// never a nav item. A subfolder `index.html` is excluded by the
-/// `!is_root_level` arm instead, not this flag.
-pub fn is_nav_bar_item(
-    facts: NavFacts,
-    is_root_level: bool,
-    is_root_index: bool,
-    clean_stem: &str,
-    has_content_folders: bool,
-) -> bool {
-    let NavFacts { nav, draft, slot_only, unlisted } = facts;
-    // Slot files (footer.md) are chrome; drafts are hidden. Neither is a nav item,
-    // and draft wins even over an explicit `nav: true`.
-    if slot_only || draft {
-        return false;
-    }
-    match nav {
-        Some(v) => v, // explicit opt-in / opt-out
-        // `listed: false` hides a page from listings; promoting it into the
-        // most visible listing of all by position alone would contradict that.
-        None => {
-            !unlisted && is_navigational_page(is_root_level, is_root_index, clean_stem, has_content_folders)
-        }
-    }
-}
-
-/// `ParsedDocument` convenience wrapper over [`is_nav_bar_item`].
-///
-/// Does NOT filter by language — callers that care about the current language
-/// tree must pre-filter or pass a per-language document slice. The language
-/// guard lives in `generate_navigation`, not in the predicate.
-pub fn is_nav_bar_item_doc(
-    doc: &crate::build::types::ParsedDocument,
-    has_content_folders: bool,
-) -> bool {
-    if is_link_only_partial(doc) {
-        return true;
-    }
-    is_nav_bar_item(
-        NavFacts {
-            nav: doc.nav,
-            draft: doc.draft == Some(true),
-            slot_only: doc.slot_only,
-            unlisted: doc.listed == Some(false) || doc.search_engines == Some(false),
-        },
-        doc.is_root_level,
-        crate::build::render::lang_roots::is_language_root(&doc.url_path),
-        &doc.clean_stem,
-        has_content_folders,
-    )
-}
-
-/// A `partial: true` file with `nav: true` and `external_url:` is a header link
-/// to that address (a section anchor, a `mailto:`) with no page behind it.
-fn is_link_only_partial(doc: &crate::build::types::ParsedDocument) -> bool {
-    doc.is_partial()
-        && doc.nav == Some(true)
-        && crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter).is_some()
-}
-
 /// Whether a document should be excluded from article listings because
 /// it's a navigation item (appears in the nav bar instead).
 ///
@@ -621,284 +401,6 @@ pub fn is_listing_nav_item(doc: &crate::build::types::ParsedDocument, has_conten
             }
         }
     }
-}
-
-/// Whether `edition` has any page that the nav bar lists: breadcrumbs turn on
-/// where it has none. Each edition has its own bar, so another edition's
-/// top-level pages must not switch this one's trail off.
-pub fn has_nav_items(docs: &[crate::build::types::ParsedDocument], edition: &str, has_content_folders: bool) -> bool {
-    docs.iter().any(|doc| doc.edition == edition && is_nav_bar_item_doc(doc, has_content_folders))
-}
-
-/// Whether the current page sits inside `doc`'s own section — true for a
-/// page anywhere under a folder-kind nav item's tree, at any depth, false
-/// for an exact match on `doc` itself (that case carries
-/// `aria-current="page"` instead, at the call site) and false for a leaf nav
-/// item, which has no section beyond itself.
-///
-/// `[site] header = "nav"`'s stand-in for the breadcrumb trail it drops: on
-/// a deep page (`essays/2024/some-post/index.html`) the "Essays" nav item is
-/// the one remaining cue for which top-level section the reader is under.
-fn is_current_nav_section(doc: &crate::build::types::ParsedDocument, current_page_url: Option<&str>) -> bool {
-    if doc.kind != moss_core::PageKind::Folder {
-        return false;
-    }
-    let Some(current) = current_page_url else {
-        return false;
-    };
-    if current == doc.url_path {
-        return false;
-    }
-    let Some(folder_prefix) = doc.url_path.strip_suffix("index.html") else {
-        return false;
-    };
-    current.starts_with(folder_prefix)
-}
-
-/// Titlecase a path segment: replace hyphens with spaces, capitalize each word.
-pub fn titlecase_segment(segment: &str) -> String {
-    segment
-        .split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + chars.as_str()
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Compute breadcrumb segments for a given document.
-///
-/// Returns `Some(segments)` when breadcrumbs should be shown, `None` otherwise.
-///
-/// Breadcrumbs are shown when:
-/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR the page's edition has no nav items and
-///    either the homepage sets no `breadcrumb:` or `force` is set
-/// 2. The current page has NOT set `breadcrumb: false` (per-page override)
-/// 3. The page's effective depth > 0 (homepages don't get breadcrumbs)
-///
-/// The first segment is always the site name linking home.
-/// The last segment is the current page as plain text (not a link).
-/// Middle segments link to their folder's index page.
-///
-/// `force`: an explorer root (design decision 7, "the map is the page") draws
-/// its own `<h1>` `.visually-hidden` — with no other visible title anywhere
-/// in the page, a site that otherwise keeps breadcrumbs off (nav items cover
-/// orientation everywhere else) would name the section nowhere at all. `true`
-/// only for that one page shape. Where the page's edition has nav items, that trail is
-/// not drawn: the nav bar orients the reader on every page, the explorer root
-/// included, so the root gets the same header as the rest. Every other rule
-/// above still applies on top (a page-level `breadcrumb: false` still opts out).
-///
-/// **Translation roots**: A folder whose index page is a translation of the site
-/// homepage (linked via `translationKey` or stem convention) is transparent in
-/// breadcrumbs — it doesn't appear as a segment. Instead, the home segment links
-/// to that folder's URL.
-pub fn compute_breadcrumb_segments(
-    doc: &ParsedDocument,
-    all_docs: &[ParsedDocument],
-    site_title: &str,
-    has_content_folders: bool,
-    force: bool,
-) -> Option<Vec<BreadcrumbSegment>> {
-    // Rule 1: the home page's setting decides the header trail. `label` moves
-    // the parent link above the title instead (`parent_label_segment`), so the
-    // trail stays off there.
-    let has_nav = has_nav_items(all_docs, &doc.edition, has_content_folders);
-    let breadcrumb_enabled = match home_breadcrumb_setting(all_docs) {
-        Some(BreadcrumbSetting::On) => true,
-        Some(BreadcrumbSetting::Off | BreadcrumbSetting::Label) => force && !has_nav,
-        None => !has_nav,
-    };
-    if !breadcrumb_enabled {
-        return None;
-    }
-
-    // Rule 2: per-page override — breadcrumb: false disables
-    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
-        return None;
-    }
-
-    trail_segments(doc, all_docs, site_title)
-}
-
-/// The parent-section link shown above `doc`'s title when the home page says
-/// `breadcrumb: label`: the trail's segment just above the current page, which
-/// is the folder that holds it. `None` on the home page, on a top-level page
-/// (the trail has no folder above the current page), and where the page says
-/// `breadcrumb: false`.
-pub fn parent_label_segment(
-    doc: &ParsedDocument,
-    all_docs: &[ParsedDocument],
-    home_setting: Option<BreadcrumbSetting>,
-) -> Option<BreadcrumbSegment> {
-    if home_setting != Some(BreadcrumbSetting::Label) {
-        return None;
-    }
-    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
-        return None;
-    }
-    let (_, mut tail) = trail_tail(doc, all_docs)?;
-    // [parent folder, ..., current page]: a parent exists from two on.
-    if tail.len() < 2 {
-        return None;
-    }
-    let parent = tail.len() - 2;
-    tail.into_iter().nth(parent)
-}
-
-/// The home page's `breadcrumb:` value, which decides the setting for the site.
-/// Read once per build, not per page.
-pub(crate) fn home_breadcrumb_setting(all_docs: &[ParsedDocument]) -> Option<BreadcrumbSetting> {
-    all_docs
-        .iter()
-        .find(|d| d.url_path == "index.html")
-        .and_then(|d| d.breadcrumb)
-}
-
-/// The trail for `doc` before any enable rule: the site name, each folder above
-/// the page, and the page. Callers decide whether it is shown.
-fn trail_segments(
-    doc: &ParsedDocument,
-    all_docs: &[ParsedDocument],
-    site_title: &str,
-) -> Option<Vec<BreadcrumbSegment>> {
-    let (home_url, tail) = trail_tail(doc, all_docs)?;
-    // First segment: site name linking (language-specific) home
-    let mut segments = vec![BreadcrumbSegment {
-        title: site_title.to_string(),
-        url: home_url,
-        is_current: false,
-    }];
-    segments.extend(tail);
-    Some(segments)
-}
-
-/// The trail below the site name — each folder above the page, then the page —
-/// with the URL the site name links to (a translation root, else `/`).
-fn trail_tail(
-    doc: &ParsedDocument,
-    all_docs: &[ParsedDocument],
-) -> Option<(String, Vec<BreadcrumbSegment>)> {
-    // Parse URL path into folder parts
-    let parts: Vec<&str> = doc.url_path.split('/').collect();
-    let folder_parts = &parts[..parts.len() - 1];
-    let filename = parts.last().unwrap_or(&"");
-
-    // Detect translation root: if the first folder's index is a translation of the
-    // root homepage, skip it from breadcrumb segments and use its URL as home.
-    // This reads linked translations (keyed or by path) on purpose: it only
-    // shapes presentation. `FolderIndexPlan` decides from authored keys so the
-    // set of generated pages never moves.
-    let (effective_parts, home_url) = if !folder_parts.is_empty() {
-        let first_folder_index = format!("{}/index.html", folder_parts[0]);
-        let is_translation_root = all_docs.iter()
-            .find(|d| d.url_path == first_folder_index)
-            .map(|d| d.translations.iter().any(|t| t.url_path == "index.html"))
-            .unwrap_or(false);
-        if is_translation_root {
-            (&folder_parts[1..], format!("/{}/", folder_parts[0])) // allow:served-path-url-construct (breadcrumb home href to translation root, not a framework asset)
-        } else {
-            (folder_parts, "/".to_string())
-        }
-    } else {
-        (folder_parts, "/".to_string())
-    };
-
-    // Rule 3: homepages don't get breadcrumbs.
-    // For translation roots, effective depth is after stripping the prefix.
-    // e.g. zh-hans/index.html has effective depth 0 (it IS the translation homepage).
-    if effective_parts.is_empty() && *filename == "index.html" {
-        return None;
-    }
-    if effective_parts.is_empty() {
-        return None;
-    }
-
-    let mut segments = Vec::new();
-
-    // Determine the lang prefix for reconstructing full paths (if translation root was stripped)
-    let lang_prefix = if home_url != "/" {
-        Some(folder_parts[0])
-    } else {
-        None
-    };
-
-    // Build a URL for a folder path, prepending the language prefix if present
-    let folder_url = |effective_path: &str| -> String {
-        if let Some(prefix) = lang_prefix {
-            format!("/{}/{}/", prefix, effective_path) // allow:served-path-url-construct (breadcrumb href to user content folder with language prefix, not a framework asset)
-        } else {
-            format!("/{}/", effective_path) // allow:served-path-url-construct (breadcrumb href to user content folder, not a framework asset)
-        }
-    };
-
-    // Middle and final segments: iterate effective_parts (translation root already excluded)
-    for (i, part) in effective_parts.iter().enumerate() {
-        let is_last = i == effective_parts.len() - 1;
-
-        // Build full path for looking up the folder's index document
-        let effective_path = effective_parts[..=i].join("/");
-        let folder_index_path = if let Some(prefix) = lang_prefix {
-            format!("{}/{}/index.html", prefix, effective_path)
-        } else {
-            format!("{}/index.html", effective_path)
-        };
-
-        // Look up the folder's chrome label (plain text) from all_docs.
-        let folder_doc = all_docs.iter().find(|d| d.url_path == folder_index_path);
-        let title = folder_doc.map(|d| d.label.clone()).unwrap_or_else(|| titlecase_segment(part));
-        // A passthrough folder gets no listing page, so an ancestor inside one
-        // that has no page of its own is left out of the trail.
-        let folder_key = folder_index_path.trim_end_matches("/index.html");
-        let has_page = folder_doc.is_some()
-            || !doc.passthrough_root.as_deref().is_some_and(|root| crate::build::types::folder_within(root, folder_key));
-
-        if is_last {
-            // For the last folder part, check if the file is index.html
-            // If so, this IS the current page
-            if *filename == "index.html" {
-                segments.push(BreadcrumbSegment {
-                    title,
-                    url: String::new(),
-                    is_current: true,
-                });
-            } else {
-                // There's a non-index file, so the folder is a middle segment
-                // and the file itself is the current page
-                if has_page {
-                    segments.push(BreadcrumbSegment {
-                        title,
-                        url: folder_url(&effective_path),
-                        is_current: false,
-                    });
-                }
-                segments.push(BreadcrumbSegment {
-                    // Breadcrumb text is chrome; use the plain-text label.
-                    title: doc.label.clone(),
-                    url: String::new(),
-                    is_current: true,
-                });
-            }
-        } else {
-            // Middle segment: link to the folder index
-            if has_page {
-                segments.push(BreadcrumbSegment {
-                    title,
-                    url: folder_url(&effective_path),
-                    is_current: false,
-                });
-            }
-        }
-    }
-
-    Some((home_url, segments))
 }
 
 #[cfg(test)]

@@ -732,6 +732,12 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Whether `folder` is `root` or a folder inside it. The one test for "at or
+/// under a passthrough root", shared by the listing plan and the breadcrumb.
+pub fn folder_within(root: &str, folder: &str) -> bool {
+    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Extract the parent directory from a `/`-separated path.
 ///
 /// `"posts/hello.md"` -> `"posts"`, `"hello.md"` -> `""`.

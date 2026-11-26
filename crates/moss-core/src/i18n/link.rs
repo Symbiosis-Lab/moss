@@ -113,7 +113,7 @@ pub fn build_translation_links(docs: &[DocumentInfo]) -> Vec<Vec<TranslationLink
         let keyed_tags: Vec<String> = links.iter().zip(from_key)
             .filter(|(_, k)| **k).map(|(l, _)| l.lang_tag.clone()).collect();
         let mut flags = from_key.iter();
-        links.retain(|l| *flags.next().unwrap() || !keyed_tags.contains(&l.lang_tag));
+        links.retain(|l| flags.next().is_some_and(|k| *k) || !keyed_tags.contains(&l.lang_tag));
     }
 
     // Sort each link list by url_path for deterministic output. `all_groups` is

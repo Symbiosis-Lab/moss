@@ -191,3 +191,21 @@ fn preview_draws_the_series_navigation_at_the_folder_s_own_address() {
     assert!(html.contains(r#"href="handbook/one/" rel="prev""#), "{html}");
     assert!(!html.contains(r#"rel="next""#), "{html}");
 }
+
+#[test]
+fn preview_draws_the_trail_and_the_nav_bar() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "about.md": "# About\n",
+        "guide/index.md": "---\ntitle: Guide\n---\n",
+        "guide/one.md": "# One\n",
+    });
+    let files = json!(["index.md", "about.md", "guide/index.md", "guide/one.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = |path: &str| json_value(&site.preview(path, texts[path].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let one = html("guide/one.md");
+    assert!(one.contains(r#"<div class="nav-left"><a href="/" class="site-name">Harbor Notes</a></div>"#), "{one}");
+    assert!(one.contains(r#"<div class="nav-links" id="nav-links"><a href="/about/""#), "{one}");
+    assert!(html("about.md").contains(r#"<a href="/about/" class="active" aria-current="page""#));
+}

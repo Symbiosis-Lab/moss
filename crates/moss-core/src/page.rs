@@ -7,6 +7,7 @@ pub mod site_config;
 pub mod listing_style;
 pub mod series;
 pub mod site_page;
+pub mod nav;
 pub mod page_map;
 pub mod inherit;
 pub mod excerpt;
@@ -392,17 +393,17 @@ fn page_url(raw: &str, source_path: &str, graph: &ContentGraph) -> String {
     format!("{}{suffix}", ast::transform_markdown_link(path.trim_start_matches('/')))
 }
 
-/// Wrap rendered content in the published article shell for a host preview pane. It carries no
-/// stylesheet: the host adds the site's once, since it is the same for every page, before the
-/// document's only `</head>`.
-pub fn preview_document(page: &RenderedPage, lang: &str, base_href: &str) -> String {
+/// Wrap rendered content in the published article shell for a host preview pane, below
+/// `masthead` (empty for none). It carries no stylesheet: the host adds the site's once, since
+/// it is the same for every page, before the document's only `</head>`.
+pub fn preview_document(page: &RenderedPage, masthead: &str, lang: &str, base_href: &str) -> String {
     let title = &page.title;
     let body = match page.title_outcome {
         TitleOutcome::None => page.body_html.clone(),
         outcome => heading::inject_article_title_h1(&page.body_html, title, false, outcome == TitleOutcome::Hidden),
     };
     format!(
-        "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><base href=\"{}\"><title>{}</title></head><body><main id=\"main-content\" tabindex=\"-1\"><article class=\"container\">{}</article></main></body></html>",
+        "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><base href=\"{}\"><title>{}</title></head><body>{masthead}<main id=\"main-content\" tabindex=\"-1\"><article class=\"container\">{}</article></main></body></html>",
         crate::media::html_escape_attr(lang), crate::media::html_escape_attr(base_href),
         crate::media::html_escape_text(title), body,
     )

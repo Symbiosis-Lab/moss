@@ -115,8 +115,8 @@ thread_local! {
 /// fallback cascades (cover + description). Critical for multilingual
 /// sites: a Chinese sub-page should pull from `zh-hans/index.html` (if
 /// present), NOT the English-default `index.html`.
-mod find_homepage_doc_tests {
-    use super::super::find_homepage_doc;
+mod edition_home_tests {
+    use moss_core::page::site_page::edition_home;
     use crate::build::types::ParsedDocument;
     use crate::i18n::Language;
 
@@ -131,7 +131,7 @@ mod find_homepage_doc_tests {
     #[test]
     fn page_in_default_lang_returns_root_index() {
         let docs = vec![doc("index.html", Language::En)];
-        let found = find_homepage_doc(&docs, Language::En, Language::En);
+        let found = edition_home(&docs, Language::En, Language::En);
         assert_eq!(found.map(|d| d.url_path.as_str()), Some("index.html"));
     }
 
@@ -141,7 +141,7 @@ mod find_homepage_doc_tests {
             doc("index.html", Language::En),
             doc("zh-hans/index.html", Language::ZhHans),
         ];
-        let found = find_homepage_doc(&docs, Language::ZhHans, Language::En);
+        let found = edition_home(&docs, Language::ZhHans, Language::En);
         assert_eq!(
             found.map(|d| d.url_path.as_str()),
             Some("zh-hans/index.html"),
@@ -155,20 +155,20 @@ mod find_homepage_doc_tests {
         // fall back to the site-default homepage so the page still gets
         // SOMETHING rather than emitting an empty share card.
         let docs = vec![doc("index.html", Language::En)];
-        let found = find_homepage_doc(&docs, Language::ZhHans, Language::En);
+        let found = edition_home(&docs, Language::ZhHans, Language::En);
         assert_eq!(found.map(|d| d.url_path.as_str()), Some("index.html"));
     }
 
     #[test]
     fn empty_docs_returns_none() {
         let docs: Vec<ParsedDocument> = vec![];
-        assert!(find_homepage_doc(&docs, Language::En, Language::En).is_none());
+        assert!(edition_home(&docs, Language::En, Language::En).is_none());
     }
 
     #[test]
     fn no_homepage_in_docs_returns_none() {
         let docs = vec![doc("about/index.html", Language::En)];
-        assert!(find_homepage_doc(&docs, Language::En, Language::En).is_none());
+        assert!(edition_home(&docs, Language::En, Language::En).is_none());
     }
 }
 

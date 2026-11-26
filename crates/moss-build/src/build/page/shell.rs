@@ -96,7 +96,7 @@ impl ShellRegistry {
                     ShellType::Article
                 } else {
                     // Flat mode: nav keywords = Page, everything else = Article
-                    if doc.is_root_level && crate::build::components::nav::is_nav_keyword(&doc.clean_stem) {
+                    if doc.is_root_level && moss_core::page::nav::is_nav_keyword(&doc.clean_stem) {
                         ShellType::Page
                     } else {
                         ShellType::Article

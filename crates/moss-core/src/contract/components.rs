@@ -115,6 +115,7 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     "site-logo",
     "breadcrumb-segment",
     "breadcrumb-label",
+    "breadcrumb-current",
     "breadcrumb-separator",
     // Article masthead.
     "date-line",
@@ -3176,7 +3177,18 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The final, non-linked breadcrumb segment — the page you are on. `.breadcrumb-segment` is the linked form for ancestors.",
+        description: "The text inside a breadcrumb segment, the part that shortens with an ellipsis when the trail runs out of room.",
+    },
+    ComponentEntry {
+        class: "breadcrumb-current",
+        kind: "instance",
+        parent: "nav-left",
+        data_attrs: &[],
+        example_html: r#"<span class="breadcrumb-segment breadcrumb-current" aria-current="page"><span class="breadcrumb-label">末代女礦工</span></span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "The final, non-linked breadcrumb segment, the page you are on, drawn only where the trail must name it (a places root). `.breadcrumb-segment` is the linked form for ancestors.",
     },
     ComponentEntry {
         class: "breadcrumb-separator",

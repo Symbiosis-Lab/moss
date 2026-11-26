@@ -17,14 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SiteBundle` gains `detected`, `lang_declared`, `derived`, `derivable`, `passthrough` and `math`, the inputs `site_pages` reads beyond the texts. `SiteConfig::math` and `SiteConfig::passthrough` read the last two.
 - `PageContributions::derivations` with `DerivationClaim`: the derivations a plugin's manifest claims.
 - `frontmatter::{typed, read_page, normalize_body}`, `resolve::with_frontmatter_links_resolved`, `resolve::output_url::to_pretty_url`, `slug::{nfc_order, walk_order}`, `sort::{order_match_name, direct_children_sorts}`, `source_edit::policy::{is_excluded_from_pages, verbatim_index_dirs, reserved_home_dirs}`, `page::series::nav` and `resolve::embeds::derived::DerivedRecord`, the pieces `site_pages` shares with the build's page pass.
+- `page::nav`: the navigation bar's and the breadcrumb trail's rules and markup, generic over `SitePage` (`is_nav_bar_page`, `has_nav_items`, `nav_bar_pages`, `nav_items`, `sort_nav_items`, `breadcrumb_segments`, `parent_label_segment`, `home_breadcrumb_setting`, `trail_html`, `has_content_folders`, `nav_link`, `chrome_lang`, `home_path`), so a host draws them as the build does. `page::site_page::{edition_home, localized_site_title}` find a language's home page and the site's name on a page in that language. `SitePage` and `PageFacts` gain the facts they read (source path, language, edition, root level, partial, `nav`, `nav_label`, nav link, `breadcrumb`, whether the page translates the home page, passthrough root), and `SitePages::langs` is folded into `PageFacts::lang`. `i18n::link` (translation links), `i18n::{lang_tag, canonical_bcp47, declared_lang_tag, lang_tag_in_tree, switcher_label}`, `home::is_language_root` and `resolve::folder_within` move here from moss-build.
+- `SitePages::masthead(path)` draws a page's masthead as the build does: the breadcrumb trail or the linked site name, and the nav bar's page items. It leaves out the logo, term-kind entries, the toggles and the other `[site].header` modes. `SitePages::site_title(lang)` is the site's name on a page in that language, and `SitePages` gains `site_lang`, `has_content_folders` and `site_name`. `site_pages` now carries a folder's cascaded `nav` and `breadcrumb` as well as `sort`.
 
 ### Changed
 
 - The released-contract lock test moved to moss-build, which can see the config keys, and `released-contract.txt` now records a `config-key` line for every key the build checks. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-build --test it contract_lock`.
-
 - **BREAKING:** `ast::block_images` returns `Vec<BlockImage>`, each picture's `src` with its `alt`, instead of `Vec<&Url>`.
 - **BREAKING:** `page::preview_document(&RenderedPage, lang, base_href)` takes no stylesheet and the document carries none, so a host adds the site's stylesheet once instead of receiving it inside every preview.
 - `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
+- **BREAKING:** `page::preview_document` takes a `masthead` after the page, drawn above the article; pass `""` for none.
 
 ### Removed
 

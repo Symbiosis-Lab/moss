@@ -927,7 +927,7 @@ fn a_folder_indexs_label_edit_widens_to_its_breadcrumb_descendants_only() {
 
 /// The site-wide (not per-language) shape of the breadcrumb-ENABLE toggle:
 /// flipping the homepage's `breadcrumb:` flag reaches every page's trail,
-/// regardless of language, because `compute_breadcrumb_segments` always
+/// regardless of language, because `breadcrumb_segments` always
 /// reads the literal root `index.html` for this — see
 /// `dependents::home_breadcrumb_globals`'s doc comment.
 #[test]

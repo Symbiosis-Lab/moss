@@ -1235,8 +1235,6 @@ pub fn generate_blocking_content_for_build(
         // inference, and BEFORE any rendering that reads `direct_children_sort`
         // (listing card renderer, series-nav, editor inferred-axis hint).
         populate_direct_children_sorts(&mut documents);
-        #[cfg(test)]
-        crate::build::site_pages_tests::record(root, &documents);
         log::debug!(target: "timing", "[reduce] populate_direct_children_sorts: {:?}", reduce_start.elapsed());
 
         // Term derivation:
@@ -1334,6 +1332,8 @@ pub fn generate_blocking_content_for_build(
                 documents[i].translations = links;
             }
         }
+        #[cfg(test)]
+        crate::build::site_pages_tests::record(root, &documents);
 
         // Inline `:::subscribe` forms get their page's language scope, judged
         // the same way the footer form's is, now that every page has parsed,
@@ -1786,7 +1786,7 @@ pub fn generate_blocking_content_for_build(
                 theme_modules: &shared.theme_modules,
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
-            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
+            home_breadcrumb: moss_core::page::nav::home_breadcrumb_setting(&documents),
             media_lookup: shared.media_lookup,
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,

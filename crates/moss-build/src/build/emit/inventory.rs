@@ -159,7 +159,7 @@ fn resolved_values(
     }
     values.insert("layout".into(), json!(layout));
     values.insert("lang".into(), json!(lang));
-    values.insert("nav".into(), json!(crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders)));
+    values.insert("nav".into(), json!(moss_core::page::nav::is_nav_bar_page(doc, has_content_folders)));
     values.insert("typesetting".into(), json!(typesetting.unwrap_or("horizontal")));
     values.insert("listed".into(), json!(doc.listed != Some(false)));
     values.insert("children".into(), json!(lists));

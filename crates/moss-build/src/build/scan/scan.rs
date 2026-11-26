@@ -1467,13 +1467,7 @@ pub(crate) fn scan_folder_with_dedup_emit_with_error(
         .and_then(|opt| opt.as_ref())
         .map(|mgr| mgr.bin_path().to_string());
 
-    // Detect content folders: root-level non-excluded directories containing .md/.html files.
-    // Uses the same exclusion logic as the directory walk (single source of truth).
-    let has_content_folders = markdown_files.iter().chain(html_files.iter()).any(|f| {
-        let parts: Vec<&str> = f.path.splitn(2, '/').collect();
-        if parts.len() < 2 { return false; }
-        !crate::build::scan::classify::is_excluded_dir_name(parts[0])
-    });
+    let has_content_folders = moss_core::page::nav::has_content_folders(markdown_files.iter().chain(html_files.iter()).map(|f| f.path.as_str()));
 
     // Detect language-prefix subtrees: any content file under a top-level folder
     // named with a known language code (e.g. `en/`, `zh-hans/`). `f.path` is

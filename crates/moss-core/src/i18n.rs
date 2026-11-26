@@ -3,6 +3,7 @@
 //! the build and every host draw the same words.
 
 pub mod filename;
+pub mod link;
 pub mod numerals;
 pub mod path;
 mod strings;
@@ -225,4 +226,116 @@ impl Language {
             Language::De => "DE",
         }
     }
+}
+
+/// The `<html lang>` tag for a language CODE — the one canonicalizer, so a
+/// site's declaration and a page's declaration cannot disagree about the same
+/// string. `zh-tw` must emit `zh-Hant`, the edition moss ships, not the region
+/// `zh-TW`; a code with no `Language` variant takes the general rule, and so
+/// does German, whose regional tags (`de-AT`) keep their region in the markup.
+pub fn lang_tag(code: &str) -> String {
+    match Language::from_code(code) {
+        Some(Language::De) | None => canonical_bcp47(code),
+        Some(lang) => lang.as_bcp47_attr().to_string(),
+    }
+}
+
+/// The chip a language switcher shows for a declared tag.
+///
+/// Each edition has its own short label (`EN`, `DE`, `简`, `繁`), so the
+/// chips of a switcher read alike. Every language moss has no interface for
+/// shows its endonym instead, and so does a regional German tag (`de-AT`),
+/// since two German editions side by side need telling apart.
+///
+/// Total for any tag that passed the allowlist, which is every tag that can
+/// reach a switcher.
+pub fn switcher_label(tag: &str) -> &'static str {
+    match Language::from_code(tag) {
+        // Two German editions side by side need telling apart.
+        Some(Language::De) if !tag.eq_ignore_ascii_case("de") => {
+            crate::home::endonym(tag).unwrap_or_else(|| Language::De.display_name())
+        }
+        Some(lang) => lang.display_name(),
+        None => crate::home::endonym(tag).unwrap_or(""),
+    }
+}
+
+/// Canonicalize a BCP-47 tag for emission: lowercase language, `Titlecase`
+/// script, `UPPERCASE` region. `zh-hant` → `zh-Hant`, `pt-br` → `pt-BR`.
+///
+/// Browsers accept any case, but the canonical form is what avoids SEO crawler
+/// warnings — the same reason [`Language::as_bcp47_attr`] is title-cased by
+/// hand. This is the general form of that, for the languages moss recognizes
+/// but has no `Language` variant for.
+pub fn canonical_bcp47(code: &str) -> String {
+    code.split('-')
+        .enumerate()
+        .map(|(i, part)| {
+            let lower = part.to_ascii_lowercase();
+            match (i, part.len()) {
+                (0, _) => lower,
+                // A 4-letter subtag is a script (`hant`), a 2-letter one a
+                // region (`br`). Anything else (a variant like `1901`) is left
+                // as it came.
+                (_, 4) => {
+                    let mut c = lower.chars();
+                    c.next()
+                        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                        .unwrap_or(lower)
+                }
+                (_, 2) => lower.to_ascii_uppercase(),
+                _ => lower,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+/// What this PAGE's language is, canonically — from its own declaration or,
+/// failing that, from the folder it sits in — or `None` when neither says
+/// anything and the SITE default is the answer.
+///
+/// `None` has one meaning: nothing at this page or its folder, use the site's.
+pub fn declared_lang_tag(
+    frontmatter_lang: Option<&str>,
+    filename_stem: &str,
+    file_path: &str,
+    ancestor_lang: Option<Language>,
+) -> Option<String> {
+    declared_only(frontmatter_lang, filename_stem, file_path)
+        // The folder-inferred rung — evidence about this page's
+        // neighbourhood, and the last one that is about the page at all.
+        .or_else(|| ancestor_lang.map(|l| l.as_bcp47_attr().to_string()))
+}
+
+/// The tag for a page that declares nothing of its own but sits in a folder
+/// whose language IS known — a synthesized folder index. Total by
+/// construction: an authored page can say "nothing here, ask the site"
+/// (`declared_lang_tag`'s `None`), a synthesized one cannot, because the
+/// folder it is synthesized for is the answer.
+pub fn lang_tag_in_tree(file_path: &str, folder_lang: Language) -> String {
+    declared_only(None, "", file_path)
+        .unwrap_or_else(|| folder_lang.as_bcp47_attr().to_string())
+}
+
+/// The canonical tag this page DECLARES — frontmatter, then filename suffix,
+/// then language-tree directory — with no fallback of any kind.
+fn declared_only(
+    frontmatter_lang: Option<&str>,
+    filename_stem: &str,
+    file_path: &str,
+) -> Option<String> {
+    let declared = frontmatter_lang
+        .map(str::to_string)
+        .or_else(|| crate::home::lang_suffix(filename_stem).map(str::to_string))
+        .or_else(|| crate::home::lang_tree_prefix(file_path).map(str::to_string));
+
+    if let Some(declared) = declared {
+        // Unrecognized frontmatter (`lang: english`) is not a fourth language,
+        // it is a typo — fall through rather than invent `lang="english"`.
+        if crate::home::is_known_language_code(&declared) {
+            return Some(lang_tag(&declared));
+        }
+    }
+
+    None
 }

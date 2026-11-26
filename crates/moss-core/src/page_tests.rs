@@ -160,13 +160,13 @@ fn simplified_frontmatter_and_crlf_keep_their_lines() {
 #[test]
 fn preview_uses_the_published_article_wrapper() {
     let page = RenderedPage { title: "A <title>".into(), title_outcome: TitleOutcome::Visible, diagnostics: Vec::new(), body_html: "<p>Body</p>".into() };
-    let html = preview_document(&page, "zh-Hant", "https://example.com/files/");
+    let html = preview_document(&page, "", "zh-Hant", "https://example.com/files/");
     assert!(html.starts_with("<!doctype html>"));
     assert!(html.contains("<html lang=\"zh-Hant\">"));
     assert!(html.contains("<base href=\"https://example.com/files/\">"));
     assert!(!html.contains("<style"));
     assert!(html.contains("<article class=\"container\"><h1 class=\"moss-article-title\">A &lt;title&gt;</h1>\n<p>Body</p></article>"));
-    let escaped = preview_document(&page, "en\"", "files/?a=1&b=2\"");
+    let escaped = preview_document(&page, "", "en\"", "files/?a=1&b=2\"");
     assert!(escaped.contains("lang=\"en&quot;\""));
     assert!(escaped.contains("href=\"files/?a=1&amp;b=2&quot;\""));
 }
@@ -265,19 +265,19 @@ fn rendering_with_exactly_the_discovered_notes_never_misses_one() {
 fn preview_title_uses_the_publication_heading_decision() {
     let inputs = site(&[]);
     let page = render_page("a.md", "---\ntitle: Custom\n---\n# Custom\n\nBody", &inputs);
-    let html = preview_document(&page, "en", "");
+    let html = preview_document(&page, "", "en", "");
     assert_eq!(page.title_outcome, TitleOutcome::None);
     assert_eq!(html.matches("<h1").count(), 1);
     let page = render_page("my-note.md", "Body", &inputs);
     assert_eq!(page.title, "my note");
     assert_eq!(page.title_outcome, TitleOutcome::Visible);
-    assert!(preview_document(&page, "en", "").contains("<h1 class=\"moss-article-title\">my note</h1>"));
+    assert!(preview_document(&page, "", "en", "").contains("<h1 class=\"moss-article-title\">my note</h1>"));
     let index = render_page("notes/index.md", "Body", &inputs);
     assert_eq!(index.title, "notes");
     assert_eq!(index.title_outcome, TitleOutcome::None);
     let hero = render_page("a.md", ":::hero\nOverlay words\n:::", &inputs);
     assert_eq!(hero.title_outcome, TitleOutcome::Hidden);
-    assert!(preview_document(&hero, "en", "").contains("moss-article-title visually-hidden"));
+    assert!(preview_document(&hero, "", "en", "").contains("moss-article-title visually-hidden"));
 }
 
 #[test]
