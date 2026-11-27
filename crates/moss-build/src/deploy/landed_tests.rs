@@ -374,9 +374,16 @@ fn stamped_vault(
     let mp = MossPaths::new(vault.path());
     std::fs::create_dir_all(mp.build_dir()).unwrap();
     std::fs::write(mp.article_map(), serde_json::to_vec(&map).unwrap()).unwrap();
+    let sealed = seal(vault.path(), articles, folders, published);
+    (vault, sealed)
+}
+
+/// A seal of the `published` pages of `vault` as they are now, built under the
+/// uids `articles` and `folders` name.
+fn seal(vault: &std::path::Path, articles: &[(&str, &str)], folders: &[(&str, &str)], published: &[&str]) -> SealedManifest {
     let mut pending = PendingManifest::new(SiteHashes::default());
     for src in published {
-        let bytes = std::fs::read(vault.path().join(src)).unwrap();
+        let bytes = std::fs::read(vault.join(src)).unwrap();
         let sp = ServedPath::from_source(&format!("{}/index.html", src.trim_end_matches(".md"))).unwrap();
         // A uid builds to the same page, so the output stays put.
         pending.register(&sp, src.as_bytes(), crate::build::manifest::HashBucket::Files);
@@ -387,7 +394,7 @@ fn stamped_vault(
             pending.register_page_meta(src.to_string(), meta);
         }
     }
-    (vault, pending.seal())
+    pending.seal()
 }
 
 pub(crate) async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> PublishedSnapshot {
@@ -395,6 +402,41 @@ pub(crate) async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> Pu
     let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
     super::record_landed(vault, sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await;
     published_record::load_for(&MossPaths::new(vault), Some(TARGET)).expect("a record")
+}
+
+/// The version a publish keeps holds a page as the publish left it, stamped,
+/// so the page can be shown and restored from it.
+#[tokio::test]
+async fn a_publish_keeps_each_new_pages_stamped_bytes() {
+    let (vault, sealed) = stamped_vault(&[("posts/a.md", "---\ntitle: A\n---\nBody\n")], &[("posts/a.md", "aabbccdd")], &[], &["posts/a.md"]);
+    let history = crate::deploy::history::HistoryStore::in_vault(vault.path());
+    super::record_landed(vault.path(), &sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await;
+    let (id, _) = history.list_records().pop().expect("a version");
+    let kept = history.read_version(&id, "posts/a.md").expect("the page is kept");
+    assert_eq!(String::from_utf8(kept).unwrap(), read(vault.path(), "posts/a.md"));
+    assert_eq!(uid_in(vault.path(), "posts/a.md").as_deref(), Some("aabbccdd"));
+}
+
+/// A copy that lost its stamp is published, and that publish stamps it again:
+/// the stamped page matches an earlier version, and is still not older content.
+#[tokio::test]
+async fn a_page_stamped_again_after_its_publish_redeploys() {
+    let unstamped = "---\ntitle: A\n---\nBody\n";
+    let articles = [("posts/a.md", "aabbccdd")];
+    let stamped = super::with_uid_stamp(unstamped, "aabbccdd").unwrap().unwrap();
+    let (vault, sealed) = stamped_vault(&[("posts/a.md", &stamped)], &articles, &[], &["posts/a.md"]);
+    let history = crate::deploy::history::HistoryStore::in_vault(vault.path());
+    let land = |sealed: SealedManifest| {
+        let history = history.clone();
+        let vault = vault.path().to_path_buf();
+        async move { super::record_landed(&vault, &sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await }
+    };
+    land(sealed).await;
+    std::fs::write(vault.path().join("posts/a.md"), unstamped).unwrap();
+    land(seal(vault.path(), &articles, &[], &["posts/a.md"])).await;
+    assert_eq!(read(vault.path(), "posts/a.md"), stamped);
+    let again = seal(vault.path(), &articles, &[], &["posts/a.md"]);
+    assert!(crate::deploy::removal_gate::refuse_stale_generation(vault.path(), &again).is_ok());
 }
 
 fn read(vault: &std::path::Path, path: &str) -> String {

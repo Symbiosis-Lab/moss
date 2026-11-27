@@ -247,7 +247,7 @@ pub(crate) fn stale_content(
     for (src, hash) in crate::build::manifest::change_set::page_source_hashes(sealed.site_hashes_view()) {
         let Some(previous) = latest.entries.get(&src) else { continue };
         if previous.hash == hash { continue; }
-        if uids.get(src.as_str()).is_some_and(|uid| lacks_only_the_stamp(folder, &src, &hash, uid, &previous.hash)) { continue; }
+        if uids.get(src.as_str()).is_some_and(|uid| differs_only_by_the_stamp(folder, &src, &hash, uid, &previous.hash)) { continue; }
         let mtime = sealed.sources().get(&src).and_then(|m| m.stat.mtime_nanos.map(|n| (m.stat.mtime, n)));
         let older_time = mtime.zip(previous.source_mtime).is_some_and(|(now, before)| now < before);
         let older_hash = publishes.iter().any(|r| r.target == latest.target
@@ -260,14 +260,27 @@ pub(crate) fn stale_content(
     stale
 }
 
-/// Whether the source is the published page minus the note ID moss wrote into
-/// it after that publish, as a copy from a checkout or a sync has it.
-fn lacks_only_the_stamp(folder: &std::path::Path, src: &str, hash: &str, uid: &str, published: &str) -> bool {
+/// Whether the source is the published page give or take the note ID moss
+/// writes into it after a publish: without it, as a copy from a checkout or a
+/// sync has it, or with it, for history written before a publish recorded the
+/// stamped bytes.
+fn differs_only_by_the_stamp(folder: &std::path::Path, src: &str, hash: &str, uid: &str, published: &str) -> bool {
     let digest = |text: &str| crate::build::render::blocking::source_metadata(None, text.as_bytes()).hash;
     let path = crate::build::scan::path_collision::on_disk(folder, src);
     let Ok(Some(text)) = crate::build::cloud_readiness::read_input_if_present(&path) else { return false };
-    digest(&text) == hash
-        && matches!(super::landed::with_uid_stamp(&text, uid), Ok(Some(stamped)) if digest(&stamped) == published)
+    if digest(&text) != hash {
+        return false;
+    }
+    let other = match super::landed::with_uid_stamp(&text, uid) {
+        Ok(Some(stamped)) => stamped,
+        _ if crate::build::markdown::parse_typed_frontmatter(&text).uid.as_deref() == Some(uid) => {
+            let remove = moss_core::frontmatter::FieldEdit::Remove { key: "uid".into() };
+            let Ok(unstamped) = moss_core::frontmatter::edit_fields(&text, &[remove]) else { return false };
+            unstamped
+        }
+        _ => return false,
+    };
+    digest(&other) == published
 }
 
 fn stale_refusal_text(pages: &[String]) -> Option<String> {

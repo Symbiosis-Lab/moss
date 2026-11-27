@@ -224,7 +224,7 @@ async fn record_what_is_live(
     // Rebuilt rather than moved: `MossPaths` is a path wrapper, and this keeps
     // the borrow out of the blocking task.
     let root = mp.project_root().to_path_buf();
-    let tree = crate::deploy::history::SourceTree::from_sealed(sealed);
+    let tree = crate::deploy::history::SourceTree::from_sealed(sealed).with_hashes(stamped);
     let target_owned = target.to_string();
     let history_owned = history.clone();
     let written = tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {

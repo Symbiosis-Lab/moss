@@ -487,6 +487,28 @@ fn a_source_lacking_only_the_note_id_stamped_after_its_publish_is_not_older_cont
 }
 
 #[test]
+fn a_source_carrying_only_the_note_id_stamped_after_its_publish_is_not_older_content() {
+    // A checkout that dropped the stamp was published; moss stamped it again after that publish,
+    // so the stamped bytes match an earlier publish.
+    let dir = tempfile::tempdir().unwrap();
+    let hash = |text: &str| crate::build::render::blocking::source_metadata(None, text.as_bytes()).hash;
+    let unstamped = "---\ntitle: Note\n---\nFinal words.\n";
+    let stamped = super::landed::with_uid_stamp(unstamped, "a1b2c3d4").unwrap().unwrap();
+    publish_version(dir.path(), &hash(&stamped), Some((100, 0)), 1);
+    publish_version(dir.path(), &hash(unstamped), Some((200, 0)), 2);
+    let check = |text: &str| {
+        std::fs::write(dir.path().join("note.md"), text).unwrap();
+        super::removal_gate::refuse_stale_generation(dir.path(), &source_version_of(&hash(text), Some((300, 0)), Some("a1b2c3d4")))
+    };
+    assert!(check(&stamped).is_ok(), "the published page with moss's own stamp");
+    let other = super::landed::with_uid_stamp(unstamped, "ffff0000").unwrap().unwrap();
+    std::fs::write(dir.path().join("note.md"), &other).unwrap();
+    publish_version(dir.path(), &hash(&other), Some((50, 0)), 3);
+    publish_version(dir.path(), &hash(unstamped), Some((200, 0)), 4);
+    assert!(check(&other).is_err(), "a stamp naming another uid is not this publish's");
+}
+
+#[test]
 fn stale_content_first_publish_new_pages_and_legacy_records_have_no_timestamp_opinion() {
     let dir = tempfile::tempdir().unwrap();
     assert!(check_version(dir.path(), "first", Some((1, 0))).is_ok());
