@@ -44,6 +44,7 @@ All notable changes to moss will be documented here.
 - `moss doctor --surface` also names the `{.class}` text and raw HTML blocks pages write, and exits 1 when it finds anything, so a script or a hook can hold a site to plain pages.
 - A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links.
 - Security: a plugin that lists a loopback address (`127.0.0.1`, `::1`, `localhost` or a name under it) in `network.hosts` reaches only the port it names there (`127.0.0.1:5001`), not every program listening on the computer. An entry may carry a port for any host; a loopback entry without one reaches nothing.
+- A site on moss hosting that has not been published yet is shown at `<name>.mosspub.page`, where new sites are now made. A site already published keeps the address the hosting service gave it.
 
 ### Fixed
 

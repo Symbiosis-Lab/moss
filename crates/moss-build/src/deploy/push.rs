@@ -1496,8 +1496,8 @@ mod tests {
     #[tokio::test]
     async fn a_hosted_publish_stores_the_address_hosting_answered_and_the_next_build_bakes_it() {
         let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
-        let (dir, reported) = hosted_publish_answered_with("https://her-blog.mosspub.page").await;
-        let page = "https://her-blog.mosspub.page".to_string();
+        let (dir, reported) = hosted_publish_answered_with("https://her-blog.mosspub.com").await;
+        let page = "https://her-blog.mosspub.com".to_string();
         assert_eq!(reported, page);
         assert_eq!(recorded_and_built_address(dir.path()), (Some(page.clone()), Some(page.clone()), page));
     }
@@ -1510,13 +1510,13 @@ mod tests {
         let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
         for answered in [
             "https://evil.example",
-            "https://other-site.mosspub.page",
+            "https://other-site.mosspub.com",
             "https://her-blog-test.mosspub.page",
-            "https://her-blog.mosspub.page.evil.example",
-            "http://her-blog.mosspub.page",
+            "https://her-blog.mosspub.com.evil.example",
+            "http://her-blog.mosspub.com",
         ] {
             let (dir, reported) = hosted_publish_answered_with(answered).await;
-            let assumed = "https://her-blog.mosspub.com".to_string();
+            let assumed = "https://her-blog.mosspub.page".to_string();
             assert_eq!(reported, assumed, "{answered}");
             assert_eq!(recorded_and_built_address(dir.path()), (None, Some(assumed.clone()), assumed), "{answered}");
         }
@@ -1529,8 +1529,8 @@ mod tests {
         let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _env = crate::PinnedEnvironment::pin(HostingEnvironment::Production);
         for (answered, stored, serving) in [
-            ("https://behind-test.mosspub.page", Some("https://behind-test.mosspub.page"), "https://behind-test.mosspub.page"),
-            ("https://evil.example", None, "https://behind-test.mosspub.com"),
+            ("https://behind-test.mosspub.com", Some("https://behind-test.mosspub.com"), "https://behind-test.mosspub.com"),
+            ("https://evil.example", None, "https://behind-test.mosspub.page"),
         ] {
             let folder = folder_that_last_published(true);
             let site = prebuilt_site();

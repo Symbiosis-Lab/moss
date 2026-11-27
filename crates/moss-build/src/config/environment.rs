@@ -38,7 +38,7 @@ impl HostingEnvironment {
     /// `-test.mosspub.page` makes `<site_id>-test` one label.
     pub fn site_suffixes(&self) -> &'static [&'static str] {
         match self {
-            Self::Production => &[".mosspub.com", ".mosspub.page"],
+            Self::Production => &[".mosspub.page", ".mosspub.com"],
             Self::Staging => &[".staging.mosspub.com", "-test.mosspub.page"],
             Self::Local => &[".localhost"],
         }
@@ -61,7 +61,7 @@ impl HostingEnvironment {
         !site_id.is_empty() && suffix.is_some_and(|suffix| self.site_suffixes().contains(&suffix))
     }
 
-    /// The host sites are published under, as a person reads it: `mosspub.com`.
+    /// The host sites are published under, as a person reads it: `mosspub.page`.
     pub fn host(&self) -> &'static str {
         domain_of(self.site_suffix())
     }
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn the_host_is_the_domain_sites_are_under_whether_or_not_the_suffix_starts_a_label() {
-        assert_eq!(HostingEnvironment::Production.host(), "mosspub.com");
+        assert_eq!(HostingEnvironment::Production.host(), "mosspub.page");
         assert_eq!(HostingEnvironment::Staging.host(), "staging.mosspub.com");
         assert_eq!(HostingEnvironment::Local.host(), "localhost");
         assert_eq!(domain_of("-test.mosspub.page"), "mosspub.page");

@@ -308,13 +308,13 @@ mod view_site_url_tests {
     fn prefers_the_address_hosting_gave_over_the_assumed_one() {
         let dir = folder_with(None, false);
         let path = dir.path().to_str().unwrap();
-        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.page".to_string())).unwrap();
-        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.com".to_string())).unwrap();
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.com");
         assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog.staging.mosspub.com");
         crate::vault::deployment_state::set_site_url(path, Some("https://her-blog-test.mosspub.page".to_string())).unwrap();
         assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog-test.mosspub.page");
-        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.com");
-        assert_eq!(view_site_url(path, "other-site", HostingEnvironment::Production), "https://other-site.mosspub.com");
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        assert_eq!(view_site_url(path, "other-site", HostingEnvironment::Production), "https://other-site.mosspub.page");
 
         let dir = folder_with(Some("example.com"), true);
         let path = dir.path().to_str().unwrap();
@@ -331,7 +331,7 @@ mod view_site_url_tests {
                 "her-blog",
                 HostingEnvironment::Production
             ),
-            "https://her-blog.mosspub.com"
+            "https://her-blog.mosspub.page"
         );
     }
 
@@ -344,7 +344,7 @@ mod view_site_url_tests {
                 "her-blog",
                 HostingEnvironment::Production
             ),
-            "https://her-blog.mosspub.com"
+            "https://her-blog.mosspub.page"
         );
     }
 

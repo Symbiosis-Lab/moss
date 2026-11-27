@@ -122,13 +122,13 @@ fn root_names_the_address_a_published_site_is_live_at() {
     assert_eq!(address_of(home.path(), &site), serde_json::Value::Null);
 
     let published = "schema_version = 1\n\n[deployment]\nsite_id = \"her-blog\"\n\n\
-        [deployment.targets.\"moss:her-blog\"]\nlast_deployment_url = \"https://her-blog.mosspub.com\"\n";
+        [deployment.targets.\"moss:her-blog\"]\nlast_deployment_url = \"https://her-blog.mosspub.page\"\n";
     std::fs::write(&state, published).unwrap();
-    assert_eq!(address_of(home.path(), &site), "her-blog.mosspub.com");
+    assert_eq!(address_of(home.path(), &site), "her-blog.mosspub.page");
 
     // A custom domain is the address once its DNS is verified, not before.
     std::fs::write(site.join(".moss/config.toml"), "[site]\ndomain = \"her.example\"\n").unwrap();
-    assert_eq!(address_of(home.path(), &site), "her-blog.mosspub.com");
+    assert_eq!(address_of(home.path(), &site), "her-blog.mosspub.page");
     std::fs::write(&state, format!("{published}\n[deployment.observed]\nchecked_at = \"2026-01-01T00:00:00Z\"\ndns_configured = true\n")).unwrap();
     assert_eq!(address_of(home.path(), &site), "her.example");
 }
