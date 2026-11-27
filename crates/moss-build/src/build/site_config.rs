@@ -401,6 +401,35 @@ pub fn site_id_for_folder(folder: &Path) -> Result<String, String> {
         .ok_or_else(|| "no site_id — deploy this folder first (moss deploy <folder>)".to_string())
 }
 
+/// The seta a build's forms post to, and the site's id there when it is on the moss host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetaSite {
+    pub url: &'static str,
+    /// `None` unpublished, or published elsewhere: forms that post to seta render pending.
+    pub site_id: Option<String>,
+}
+
+impl Default for SetaSite {
+    fn default() -> Self {
+        SetaSite { url: HostingEnvironment::Production.seta_url(), site_id: None }
+    }
+}
+
+impl SetaSite {
+    /// Read once per build, for the subscribe and request forms alike.
+    pub fn read(project_path: &str) -> Self {
+        let deploy = get_domain_config(project_path).unwrap_or_default();
+        SetaSite {
+            url: resolve_environment(project_path).seta_url(),
+            site_id: crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string),
+        }
+    }
+
+    pub fn hosted(&self) -> Option<(&str, &str)> {
+        self.site_id.as_deref().map(|id| (self.url, id))
+    }
+}
+
 /// Resolve the hosting environment for a project.
 ///
 /// Precedence (highest first):

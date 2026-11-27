@@ -764,14 +764,16 @@ A `:::form` block is a form written as a list, in the page where its words are. 
 
 A field's name is its label in lowercase with words joined by `_` (`Your name` is `your_name`). Set it with `{name=…}` when the label has no Latin letters, or when the label is long or starts with a digit. A name is a lowercase letter then up to 39 lowercase letters, digits or `_`, and `_next` and `_hp` are reserved for the form itself. Anything wrong with a form is a build warning, and `--strict` fails on it: a repeated form name, a bad name, an unknown type, too few choices, a nested list on a type that takes none, a `next=` that is not a path of the site.
 
-The form posts to `<endpoint>/<form name>`, where the endpoint is set in `.moss/config.toml`:
+On a site published to mosspub.com the form needs no setting: entries go to the host, and `moss data pull` (and every publish) brings them into the folder, one row per entry in `.moss/data/forms/<form name>.csv`, beside `entries.jsonl`, where they are kept. Elsewhere, the form posts to `<endpoint>/<form name>`, where the endpoint is set in `.moss/config.toml`, and an endpoint set on a mosspub.com site wins over the host's:
 
 ```toml
 [services.forms]
 endpoint = "https://forms.example/f"
 ```
 
-The post is `application/x-www-form-urlencoded`, with the fields plus `_next` (the `next=` path). With no script the browser checks `required` and each type, and the service answers with a redirect to `next`; with script the form stays on the page, goes to `next` when the post is accepted, marks each refused field and moves focus to the first, and keeps everything typed. A link can fill visible fields from the address (`/booking/?session=Family` selects that choice); it never sets `_next` or any hidden field. With no endpoint the build warns naming `[services.forms] endpoint`, published pages do not show the form, and the preview shows it with sending simulated. The build also writes `/_moss/commerce.json`, the site's forms (names, types, required, choices, `next`) for the service to read; labels and help text stay in the page, and who receives a form is set in the service, never in the folder.
+`enabled = false` under `[services.forms]` turns the site's forms off.
+
+The post is `application/x-www-form-urlencoded`, with the fields plus `_next` (the `next=` path). With no script the browser checks `required` and each type, and the service answers with a redirect to `next`; with script the form stays on the page, goes to `next` when the post is accepted, marks each refused field and moves focus to the first, and keeps everything typed. A link can fill visible fields from the address (`/booking/?session=Family` selects that choice); it never sets `_next` or any hidden field. Off mosspub.com, with no endpoint the build warns naming `[services.forms] endpoint`, published pages do not show the form, and the preview shows it with sending simulated. The build also writes `/_moss/commerce.json`, the site's forms (names, types, required, choices, `next`) for the service to read; labels and help text stay in the page, and who receives a form is set in the service, never in the folder.
 
 A site that takes bookings describes what it offers in `[services.booking]`, and the build publishes it as the `booking` object of `/_moss/commerce.json` for a booking service to read. Amounts are integer cents; a service is hourly (`per_hour` and `hours = { min, max }`) or fixed (`minutes` and `price`, where `0` books with no payment); `fields` names what it asks beyond name, email and mobile, each `"required"` or `"optional"`, and `labels` gives a field the words to show for it:
 

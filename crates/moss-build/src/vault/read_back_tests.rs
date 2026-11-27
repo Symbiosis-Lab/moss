@@ -14,6 +14,12 @@ async fn page(server: &mut ServerGuard, path: &str, since: u64, body: Value) -> 
         .await
 }
 
+/// A seta whose site has no request form entries.
+async fn no_requests(server: &mut ServerGuard) {
+    server.mock("GET", Matcher::Regex("^/api/sites/s1/form-entries".into())).with_header("content-type", "application/json")
+        .with_body(r#"{"records":[],"cursor":0,"more":false}"#).create_async().await;
+}
+
 fn client(server: &ServerGuard) -> MossSetaClient {
     let identity = crate::identity::Identity::generate().unwrap();
     MossSetaClient::with_identity_and_url(&identity, &server.url())
@@ -52,15 +58,16 @@ async fn a_subscriber_event_reaches_the_folder_once() {
 #[tokio::test]
 async fn a_form_entry_reaches_its_scope_view_once() {
     let mut server = Server::new_async().await;
+    no_requests(&mut server).await;
     let entry = json!({"seq": 4, "recordedAt": 1700000000, "email": "b@example.org",
-        "fact": {"type": "response_submitted", "scope": "rsvp", "answers": {"guests": 2, "note": "a, b"}}});
+        "fact": {"type": "response_submitted", "scope": "rsvp", "answers": {"guests": 2, "note": "a, b", "topics": ["Print", "Web"]}}});
     twice(&mut server, "/api/sites/s1/subscriber-events", "seq", json!([entry])).await;
     let (dir, seta) = (TempDir::new().unwrap(), client(&server));
 
     assert_eq!(pull_parts(&seta, dir.path(), &[Part::Forms]).await, [1]);
     assert_eq!(pull_parts(&seta, dir.path(), &[Part::Forms]).await, [0]);
     let csv = fs::read_to_string(dir.path().join(".moss/data/forms/rsvp.csv")).unwrap();
-    assert_eq!(csv, "recordedAt,email,guests,note\n1700000000,b@example.org,2,\"a, b\"\n");
+    assert_eq!(csv, "recordedAt,email,guests,note,topics\n1700000000,b@example.org,2,\"a, b\",Print; Web\n");
 }
 
 #[tokio::test]
@@ -204,12 +211,38 @@ async fn pending_batches_ride_on_the_stream_pages() {
     assert_eq!(lines(dir.path(), COMMENT_ANSWERS).len(), 3);
 }
 
+#[tokio::test]
+async fn a_request_form_entry_reaches_its_form_view_once_in_the_form_order() {
+    let mut server = Server::new_async().await;
+    page(&mut server, "/api/sites/s1/subscriber-events", 0, json!({"records": [], "cursor": 0, "more": false})).await;
+    let entry = json!({"seq": 3, "form": "report", "page": "/add/", "receivedAt": 1700000000,
+        "fields": ["program", "outcome", "topics"], "answers": {"program": "=HYPERLINK(\"x\")", "outcome": "\t=1+1", "topics": ["Culture", "Youth"]}});
+    twice(&mut server, "/api/sites/s1/form-entries", "seq", json!([entry])).await;
+    let (dir, seta) = (TempDir::new().unwrap(), client(&server));
+
+    assert_eq!(pull_parts(&seta, dir.path(), &[Part::Forms]).await, [1]);
+    assert_eq!(pull_parts(&seta, dir.path(), &[Part::Forms]).await, [0]);
+    assert_eq!(lines(dir.path(), FORM_ENTRIES.file), [entry]);
+    let csv = fs::read_to_string(dir.path().join(".moss/data/forms/report.csv")).unwrap();
+    assert_eq!(csv, "receivedAt,page,program,outcome,topics\n1700000000,/add/,\"'=HYPERLINK(\"\"x\"\")\",'\t=1+1,Culture; Youth\n");
+}
+
+#[tokio::test]
+async fn a_seta_without_request_forms_has_no_entries() {
+    let mut server = Server::new_async().await;
+    page(&mut server, "/api/sites/s1/subscriber-events", 0, json!({"records": [], "cursor": 0, "more": false})).await;
+    server.mock("GET", Matcher::Regex("^/api/sites/s1/form-entries".into())).with_status(404).with_body("404 Not Found").create_async().await;
+    let (dir, seta) = (TempDir::new().unwrap(), client(&server));
+    assert_eq!(pull_parts(&seta, dir.path(), &[Part::Forms]).await, [0]);
+}
+
 /// A pull that brings no form entry leaves the view as the owner left it, and
 /// one that brings an entry rewrites only its own scope's file: each write is a
 /// change the folder syncs.
 #[tokio::test]
 async fn the_forms_view_is_written_only_when_it_changes() {
     let mut server = Server::new_async().await;
+    no_requests(&mut server).await;
     let path = "/api/sites/s1/subscriber-events";
     let entry = |seq: u64, scope: &str| json!({"seq": seq, "email": "e@example.org", "fact": {"type": "response_submitted", "scope": scope, "answers": {"q": seq}}});
     let consent = json!({"seq": 4, "fact": {"type": "subscribed"}});

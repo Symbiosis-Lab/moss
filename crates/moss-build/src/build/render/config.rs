@@ -152,9 +152,11 @@ pub struct SiteConfig {
     /// The `[fields.<name>]` declarations, read once per build; the markdown
     /// pipeline checks each page's frontmatter against them.
     pub field_decls: Vec<moss_core::fields::FieldDecl>,
-    /// `[services.forms] endpoint`, without a trailing slash: where request
-    /// forms post. `None` leaves forms pending.
-    pub forms_endpoint: Option<String>,
+    /// Where request forms post, without a trailing slash: `[services.forms]
+    /// endpoint`, else seta on the moss host; with neither, forms are pending.
+    pub forms: Result<String, crate::config::services::FormsOff>,
+    /// The seta this build's subscribe and request forms post to.
+    pub seta: crate::build::site_config::SetaSite,
     /// `[channels.email]` is installed: every page carries the subscribe form's script.
     pub email_installed: bool,
     /// The blocks the enabled plugins declare, resolved once per build.
@@ -194,7 +196,7 @@ impl SiteConfig {
             typesetting: self.typesetting.as_deref(),
             fields: &self.field_decls,
             lang: &self.lang,
-            forms_endpoint: self.forms_endpoint.as_deref(),
+            forms_endpoint: self.forms.as_deref().ok(),
             blocks: Some(&self.blocks),
         }
     }
@@ -239,7 +241,8 @@ impl Default for SiteConfig {
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
             field_decls: Vec::new(),
-            forms_endpoint: None,
+            forms: Err(crate::config::services::FormsOff::NoEndpoint),
+            seta: Default::default(),
             email_installed: false,
             booking: None,
             newsletter: None,

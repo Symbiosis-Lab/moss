@@ -31,13 +31,21 @@ fn a_site_on_the_moss_host_asks_for_the_subscribe_bot_check() {
 
 #[test]
 fn a_repeated_form_name_and_a_missing_endpoint_are_problems() {
-    assert!(problems(&[booking()], Some("https://f.example"), None, None).is_empty());
-    let dup = problems(&[booking(), booking()], Some("https://f.example"), None, None);
+    assert!(problems(&[booking()], &HashSet::new(), Ok("https://f.example"), None, None).is_empty());
+    let dup = problems(&[booking(), booking()], &HashSet::new(), Ok("https://f.example"), None, None);
     assert_eq!(dup.len(), 1, "{dup:?}");
     assert!(dup[0].contains("more than one") && dup[0].contains("booking"));
-    let none = problems(&[booking()], None, None, None);
+    let none = problems(&[booking()], &HashSet::new(), Err(FormsOff::NoEndpoint), None, None);
     assert!(none.len() == 1 && none[0].contains("[services.forms] endpoint"), "{none:?}");
-    assert!(problems(&[], None, None, None).is_empty());
+    assert!(problems(&[], &HashSet::new(), Err(FormsOff::NoEndpoint), None, None).is_empty());
+}
+
+#[test]
+fn a_form_named_like_a_subscribe_edition_is_a_problem_once() {
+    let scopes = HashSet::from(["booking"]);
+    let shared = problems(&[booking(), booking()], &scopes, Ok("https://f.example"), None, None);
+    assert_eq!(shared.iter().filter(|p| p.contains("forms/booking.csv")).count(), 1, "{shared:?}");
+    assert!(problems(&[booking()], &HashSet::from(["de"]), Ok("https://f.example"), None, None).is_empty());
 }
 
 #[test]
@@ -49,8 +57,8 @@ fn a_booking_offer_sits_beside_the_forms() {
          [services.intro]\nname = \"Intro call\"\nminutes = 30\nprice = 0\n",
     )
     .unwrap();
-    assert!(problems(&[], None, Some(&Ok(offer.clone())), None).is_empty(), "a valid offer is no problem");
-    assert!(problems(&[], None, Some(&Err("[services.booking]: unknown field `pagez`".into())), None)[0].contains("pagez"));
+    assert!(problems(&[], &HashSet::new(), Err(FormsOff::NoEndpoint), Some(&Ok(offer.clone())), None).is_empty(), "a valid offer is no problem");
+    assert!(problems(&[], &HashSet::new(), Err(FormsOff::NoEndpoint), Some(&Err("[services.booking]: unknown field `pagez`".into())), None)[0].contains("pagez"));
     let v: serde_json::Value = serde_json::from_str(&json(&[booking()], serde_json::json!({}), None, Some(&offer), false)).unwrap();
     assert_eq!(v["booking"]["services"]["intro"]["minutes"], 30);
     assert_eq!(v["booking"]["open"]["mon"][0], "09:00-17:00");
@@ -100,6 +108,6 @@ fn a_hosted_site_publishes_its_newsletter_service_and_a_refused_one_is_a_problem
     let v: serde_json::Value = serde_json::from_str(&json(&[], serde_json::json!({}), Some(dest), None, true)).unwrap();
     assert_eq!(v["subscribe"]["newsletter"], serde_json::json!({"provider": "sendgrid"}));
     assert!(destination(&Ok("sendgrid".into()), false).unwrap_err().contains("only by the moss host"));
-    let refused = problems(&[], None, None, Some(&Err("[channels.email] provider \"x\" is not known".into())));
+    let refused = problems(&[], &HashSet::new(), Err(FormsOff::NoEndpoint), None, Some(&Err("[channels.email] provider \"x\" is not known".into())));
     assert!(refused[0].contains("newsletter service is left out"), "{refused:?}");
 }

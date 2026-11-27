@@ -535,18 +535,11 @@ pub fn generate_blocking_content_for_build(
     let site_lang: crate::i18n::Language =
         crate::i18n::Language::from_code(&site_config.lang).unwrap_or(crate::i18n::Language::En);
 
-    // The site id inline `:::subscribe` forms post with, read once per build.
-    // None (unpublished, or published elsewhere) renders the pending form.
     let deploy = crate::build::site_config::get_domain_config(source_path)
         .unwrap_or_default();
-    let site_id = crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string);
-
-    // Resolve the seta base URL once per build from the project environment.
-    // Passed into `process_markdown_file` so inline `:::subscribe` shortcodes
-    // emit the correct action URL for staging/local environments.
-    let seta_url_for_build: String = crate::build::site_config::resolve_environment(source_path)
-        .seta_url()
-        .to_string();
+    // Inline `:::subscribe` forms post to this seta with this site id; no id renders the pending form.
+    let site_id = site_config.seta.site_id.clone();
+    let seta_url_for_build: String = site_config.seta.url.to_string();
 
     // Open the Loop A parse cache. Eligibility is
     // `site_config.incremental.parse_cache` — a SIBLING of the render
@@ -2488,7 +2481,7 @@ pub fn generate_blocking_content_for_build(
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; crate::build::emit::members::emit_sender(&site_config.members, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
-    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), site_config.newsletter.as_ref(), on_moss_host, output_dir, pending)?;
+    crate::build::emit::commerce::emit(&documents, site_config.forms.as_deref().map_err(|off| *off), site_config.booking.as_ref(), site_config.newsletter.as_ref(), on_moss_host, output_dir, pending)?;
     crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
     crate::build::features::comment::link_block::emit(site_config.comment_moderation.as_ref(), output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });

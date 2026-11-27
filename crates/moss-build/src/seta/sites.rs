@@ -290,6 +290,11 @@ impl MossSetaClient {
         self.get_json(&format!("/api/sites/{}/subscriber-events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
     }
 
+    /// A page of the site's request form entries after `since`.
+    pub async fn pull_form_entries(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/api/sites/{}/form-entries?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
     /// A page of the site's comments after `since`, with each commenter's
     /// email, and the answers for the `pending` ids (at most 200).
     pub async fn pull_comment_records(&self, site_id: &str, since: u64, limit: u32, pending: &[u64]) -> Result<RecordsPage, SetaError> {

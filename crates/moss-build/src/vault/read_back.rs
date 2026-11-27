@@ -16,7 +16,9 @@
 //! .moss/data/
 //!   events.jsonl                 analytics, by `id`
 //!   email/events.jsonl           newsletter and forms: the subscriber stream, by `seq`
-//!   forms/<scope>.csv            a view of the form entries in that stream, rewritten when one arrives
+//!   forms/<scope>.csv            a view of the subscribe-form answers in that stream, rewritten when one arrives
+//!   forms/entries.jsonl          request form entries, by `seq`
+//!   forms/<form name>.csv        a view of one request form's entries, rewritten when one arrives
 //!   comments/comment.jsonl       comments with their commenter's email, by `id`
 //!   comments/approved.jsonl      what became of a comment held as pending
 //!   booking/bookings.jsonl       every change to a booking, by `changeSeq`; the newest line per `id` is the booking
@@ -80,6 +82,7 @@ const SUBSCRIBER: Stream = Stream { file: ".moss/data/email/events.jsonl", key: 
 // and these lines carry commenters' emails.
 const COMMENTS: Stream = Stream { file: ".moss/data/comments/comment.jsonl", key: "id" };
 const BOOKINGS: Stream = Stream { file: ".moss/data/booking/bookings.jsonl", key: "changeSeq" };
+const FORM_ENTRIES: Stream = Stream { file: ".moss/data/forms/entries.jsonl", key: "seq" };
 const COMMENT_ANSWERS: &str = ".moss/data/comments/approved.jsonl";
 const FORMS_DIR: &str = ".moss/data/forms";
 /// Where analytics kept its cursor before the stream's tail became it.
@@ -114,7 +117,7 @@ struct SubscriberPull {
 }
 
 /// Pull each named part into `root`. One part's failure never stops another's.
-/// Newsletter and forms share one stream, read once.
+/// Newsletter and subscribe forms share one stream, read once; forms adds the request form entries.
 pub async fn pull(sources: &Sources<'_>, root: &Path, parts: &[Part]) -> Vec<Outcome> {
     let lock_root = root.to_path_buf();
     let _held = match blocking(move || {
@@ -140,7 +143,14 @@ pub async fn pull(sources: &Sources<'_>, root: &Path, parts: &[Part]) -> Vec<Out
                         read
                     }
                 };
-                read.map(|r| if part == Part::Forms { r.entries } else { r.added }).map_err(SetaError::Io)
+                let read = read.map_err(SetaError::Io);
+                match part {
+                    Part::Forms => match (read, pull_requests(sources, root).await) {
+                        (Ok(r), Ok(n)) => Ok(r.entries + n),
+                        (Err(e), _) | (_, Err(e)) => Err(e),
+                    },
+                    _ => read.map(|r| r.added),
+                }
             }
             Part::Comments => pull_comments(sources, root).await,
             Part::Bookings => match &sources.commerce {
@@ -178,6 +188,22 @@ async fn pull_subscriber(sources: &Sources<'_>, root: &Path) -> Result<Subscribe
         blocking(move || write_forms_view(&r)).await?;
     }
     Ok(SubscriberPull { added, entries })
+}
+
+/// Request form entries, then their views when any arrived.
+async fn pull_requests(sources: &Sources<'_>, root: &Path) -> Result<usize, SetaError> {
+    let fetch = |since: u64, _: usize| sources.seta.pull_form_entries(sources.site_id, since, PAGE_LIMIT);
+    let added = match pull_stream(root, &FORM_ENTRIES, 1, fetch, |_| {}).await {
+        Ok((n, _)) => n,
+        // A seta from before request forms has no such route, and so no entries.
+        Err(SetaError::Api { status: 404, .. }) => 0,
+        Err(e) => return Err(e),
+    };
+    if added > 0 {
+        let r = root.to_path_buf();
+        blocking(move || write_request_views(&r)).await?;
+    }
+    Ok(added)
 }
 
 fn is_form_entry(event: &Value) -> bool {
@@ -342,9 +368,8 @@ fn append_answers(root: &Path, answers: Vec<Value>) -> std::io::Result<()> {
 
 /// Regenerate `forms/<scope>.csv` from the form entries in the subscriber
 /// stream: one row per entry, one column per question asked in that scope.
-/// A scope's file is written only when its bytes change, since each write is
-/// a change the folder syncs. It runs only when form entries arrive, so a view
-/// the person deletes comes back with the next entry.
+/// It runs only when form entries arrive, so a view the person deletes comes
+/// back with the next entry.
 fn write_forms_view(root: &Path) -> Result<(), SetaError> {
     let io = |e: std::io::Error| SetaError::Io(e.to_string());
     let mut scopes: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
@@ -363,22 +388,61 @@ fn write_forms_view(root: &Path) -> Result<(), SetaError> {
         let header = ["recordedAt", "email"].into_iter().chain(questions.iter().copied());
         push_row(&mut csv, header.map(str::to_string));
         for entry in entries {
-            let cell = |v: &Value| match v {
-                Value::Null => String::new(),
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
             let answers = &entry["fact"]["answers"];
             let row = [cell(&entry["recordedAt"]), cell(&entry["email"])]
                 .into_iter()
                 .chain(questions.iter().map(|q| cell(&answers[*q])));
             push_row(&mut csv, row);
         }
-        let path = forms_view_path(root, scope);
-        // allow:raw_read moss's own regenerated view; a copy that cannot be read is rewritten
-        if fs::read(&path).ok().as_deref() != Some(csv.as_bytes()) {
-            crate::infra::atomic_write::write_atomic(&path, csv).map_err(SetaError::Io)?;
+        write_view(root, scope, csv)?;
+    }
+    Ok(())
+}
+
+/// Regenerate `forms/<form>.csv` for each request form: one row per entry, the
+/// form's fields in the order it declared them.
+fn write_request_views(root: &Path) -> Result<(), SetaError> {
+    let entries = read_lines(&root.join(FORM_ENTRIES.file)).map_err(|e| SetaError::Io(e.to_string()))?;
+    let mut forms: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+    for entry in &entries {
+        if let Some(form) = entry["form"].as_str() {
+            forms.entry(form).or_default().push(entry);
         }
+    }
+    for (form, entries) in forms {
+        let mut fields: Vec<&str> = Vec::new();
+        for name in entries.iter().flat_map(|e| e["fields"].as_array().into_iter().flatten()).filter_map(Value::as_str) {
+            if !fields.contains(&name) {
+                fields.push(name);
+            }
+        }
+        let mut csv = String::new();
+        push_row(&mut csv, ["receivedAt", "page"].into_iter().chain(fields.iter().copied()).map(str::to_string));
+        for entry in entries {
+            let answers = &entry["answers"];
+            push_row(&mut csv, [cell(&entry["receivedAt"]), cell(&entry["page"])].into_iter().chain(fields.iter().map(|f| cell(&answers[*f]))));
+        }
+        write_view(root, form, csv)?;
+    }
+    Ok(())
+}
+
+/// One answer as a spreadsheet cell: a pick-several answer joined by `; `.
+fn cell(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "),
+        other => other.to_string(),
+    }
+}
+
+/// A view is written only when its bytes change, since each write is a change the folder syncs.
+fn write_view(root: &Path, name: &str, csv: String) -> Result<(), SetaError> {
+    let path = forms_view_path(root, name);
+    // allow:raw_read moss's own regenerated view; a copy that cannot be read is rewritten
+    if fs::read(&path).ok().as_deref() != Some(csv.as_bytes()) {
+        crate::infra::atomic_write::write_atomic(&path, csv).map_err(SetaError::Io)?;
     }
     Ok(())
 }
@@ -389,8 +453,11 @@ fn forms_view_path(root: &Path, scope: &str) -> PathBuf {
     root.join(FORMS_DIR).join(format!("{name}.csv"))
 }
 
+/// Strangers write these cells and a person opens them in a spreadsheet, so a
+/// cell that would read as a formula is prefixed with `'`.
 fn push_row(csv: &mut String, cells: impl Iterator<Item = String>) {
     let quoted: Vec<String> = cells
+        .map(|c| if c.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{c}") } else { c })
         .map(|c| if c.contains([',', '"', '\n', '\r']) { format!("\"{}\"", c.replace('"', "\"\"")) } else { c })
         .collect();
     csv.push_str(&quoted.join(","));

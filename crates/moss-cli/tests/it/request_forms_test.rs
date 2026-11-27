@@ -94,6 +94,31 @@ fn a_site_on_the_moss_host_tells_it_the_subscribe_form_passes_its_bot_check() {
     assert_eq!(json["subscribe"], serde_json::json!({"turnstile": true}));
 }
 
+const HOSTED: &str = "[deployment]\nsite_id = \"harbor-notes\"\ndeploy_method = \"moss\"\n";
+
+#[test]
+fn a_site_on_the_moss_host_with_no_setting_posts_its_forms_to_seta() {
+    let (_t, dir) = site("", BOOKING);
+    write(&dir, ".moss/state.toml", HOSTED);
+    let (ok, stderr) = run(&dir, true);
+    assert!(ok, "{stderr}");
+    let html = built(&dir, "booking/index.html");
+    assert!(html.contains(r#"action="https://api.mosspub.com/sites/harbor-notes/forms/booking""#), "{html}");
+    let json: serde_json::Value = serde_json::from_str(&built(&dir, "_moss/commerce.json")).unwrap();
+    assert_eq!(json["forms"]["booking"]["turnstile"], true, "its page can pass the host's bot check");
+}
+
+#[test]
+fn a_site_on_the_moss_host_can_switch_its_forms_off() {
+    let (_t, dir) = site("[services.forms]\nenabled = false\n", BOOKING);
+    write(&dir, ".moss/state.toml", HOSTED);
+    let (ok, stderr) = run(&dir, false);
+    assert!(ok, "{stderr}");
+    assert!(stderr.contains("Request forms are switched off"), "{stderr}");
+    assert!(!stderr.contains("[services.forms] endpoint"), "a site that switched forms off is not told to add an endpoint: {stderr}");
+    assert!(!built(&dir, "booking/index.html").contains("api.mosspub.com/sites/harbor-notes/forms"));
+}
+
 #[test]
 fn no_endpoint_warns_naming_the_setting_fails_strict_and_leaves_a_pending_form_for_the_preview() {
     let (_t, dir) = site("", BOOKING);

@@ -1352,7 +1352,9 @@ fn build_inner(
             None
         }
     });
-    let forms_endpoint = services_config.as_ref().and_then(|s| s.forms_endpoint());
+    let seta = crate::build::site_config::SetaSite::read(folder_path);
+    // A site with no `[services]` still gets the moss host's default.
+    let forms = services_config.as_ref().unwrap_or(&Default::default()).forms_endpoint(seta.hosted());
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1527,7 +1529,8 @@ fn build_inner(
         term_kinds: kinds,
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
-        forms_endpoint,
+        forms,
+        seta,
         email_installed: cfg.as_ref().is_some_and(|c| c.channels().is_installed("email")),
         blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,

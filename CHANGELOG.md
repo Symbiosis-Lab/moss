@@ -25,6 +25,7 @@ All notable changes to moss will be documented here.
 - A plugin can mark a `string` setting `"at_sign_in": true`: moss's sign-in row asks for it before the plugin's `login` runs, writes the answer to the plugin's `config.toml`, and the settings page does not draw it again. `login` and `logout` receive the plugin's settings as `ctx.config`.
 - A folder embed takes `repeat:none` to leave out the pages a listing higher on the same page already shows, with `limit:` counted after, so a wall of past events under a "next event" lead no longer repeats the event the lead fell back to once nothing is upcoming.
 - A Han font a theme hosts whole (one `@font-face`, a `.ttf` or `.otf` file, no `unicode-range`) is published in about a hundred slices, each with its own `unicode-range`, cut by the site's language, so a page downloads only the slices its text uses. Slices are encoded after the pages are written and kept on the computer for every site that uses the same font.
+- A `:::form` on a site published to mosspub.com works with no setting: entries go to the host, and `moss data pull` and every publish bring them into `.moss/data/forms/<form name>.csv`, one row per entry. An `endpoint` under `[services.forms]` still sends them elsewhere, and `enabled = false` turns forms off.
 
 ### Changed
 
@@ -87,6 +88,7 @@ All notable changes to moss will be documented here.
 - A German form marks an optional field "freiwillig" instead of "Optional".
 - A declared field, term kind or role with no label reads its name with spaces for underscores: `angabe_ort` shows as "Angabe ort", not "Angabe_ort".
 - A `style:map` embed at phone width no longer hides most of its map under the row of cards: a collapsed map under 20rem tall leaves the row out, and expanding it brings the row back.
+- In `.moss/data/forms/<scope>.csv`, an answer that picks several choices reads "Print; Web" instead of `["Print","Web"]`, and a cell starting with a tab or carriage return is quoted against spreadsheet formulas like one starting with `=`.
 
 ### Removed
 

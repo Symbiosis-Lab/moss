@@ -22,7 +22,7 @@ use crate::build::context::BuildContext;
 use crate::build::manifest::{link_audit, HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::types::ParsedDocument;
-use crate::config::services::BookingService;
+use crate::config::services::{BookingService, FormsOff};
 
 pub const COMMERCE_PATH: &str = "_moss/commerce.json";
 
@@ -115,7 +115,7 @@ fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, newsletter
         .filter_map(|f| f.name.as_ref().filter(|n| seen.insert((*n).clone())).map(|n| (n, f)))
         .map(|(name, f)| {
             let fields = described(&f.fields.iter().collect::<Vec<_>>());
-            (name.clone(), serde_json::json!({"fields": fields, "next": f.next, "turnstile": false}))
+            (name.clone(), serde_json::json!({"fields": fields, "next": f.next, "turnstile": hosted}))
         })
         .collect();
     let mut out = serde_json::json!({ "forms": described });
@@ -134,9 +134,10 @@ fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, newsletter
     out.to_string()
 }
 
-/// The problems only the whole site can see: a name used by two forms, forms
-/// with nowhere to post, and a booking offer or newsletter service that cannot be published.
-fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Result<BookingService, String>>, newsletter: Option<&Result<serde_json::Value, String>>) -> Vec<String> {
+/// The problems only the whole site can see: a name used by two forms or by a
+/// subscribe form's edition (their entries would share one file in the folder),
+/// forms with nowhere to post, and a booking offer or newsletter service that cannot be published.
+fn problems(forms: &[FormShortcode], scopes: &HashSet<&str>, endpoint: Result<&str, FormsOff>, booking: Option<&Result<BookingService, String>>, newsletter: Option<&Result<serde_json::Value, String>>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out: Vec<String> = forms
         .iter()
@@ -144,8 +145,14 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Re
         .filter(|n| !seen.insert(*n))
         .map(|n| format!("`:::form {{#{n}}}` is used by more than one form; a form name must be unique in the site."))
         .collect();
-    if !forms.is_empty() && endpoint.is_none() {
-        out.push("The site has request forms but no `[services.forms] endpoint` in .moss/config.toml, so they cannot send: published pages do not show them, and the preview simulates sending.".to_string());
+    let mut reported = HashSet::new();
+    let shared = forms.iter().filter_map(|f| f.name.as_deref()).filter(|n| scopes.contains(n) && reported.insert(*n));
+    out.extend(shared.map(|n| format!("`:::form {{#{n}}}` has the name of the `{n}` edition's subscribe form, and both keep their entries in .moss/data/forms/{n}.csv; rename the form.")));
+    match endpoint {
+        _ if forms.is_empty() => {}
+        Ok(_) => {}
+        Err(FormsOff::SwitchedOff) => out.push("Request forms are switched off (`[services.forms] enabled = false`): published pages do not show them.".to_string()),
+        Err(FormsOff::NoEndpoint) => out.push("The site has request forms but no `[services.forms] endpoint` in .moss/config.toml, so they cannot send: published pages do not show them, and the preview simulates sending.".to_string()),
     }
     if let Some(Err(problem)) = booking {
         out.push(format!("{problem}; the offer is left out of {COMMERCE_PATH} until it is fixed."));
@@ -167,7 +174,7 @@ fn destination(service: &Result<String, String>, hosted: bool) -> Result<serde_j
 /// The stage hook: reports the site's form problems and writes the description.
 pub fn emit(
     documents: &[ParsedDocument],
-    endpoint: Option<&str>,
+    endpoint: Result<&str, FormsOff>,
     booking: Option<&Result<BookingService, String>>,
     newsletter: Option<&Result<String, String>>,
     hosted: bool,
@@ -177,11 +184,12 @@ pub fn emit(
     let (forms, subscribes) = site_forms(documents);
     let (subscribe_fields, disagreements) = subscribe_fields(&subscribes);
     let newsletter = newsletter.map(|n| destination(n, hosted));
-    for problem in problems(&forms, endpoint, booking, newsletter.as_ref()).into_iter().chain(disagreements) {
+    let scopes: HashSet<&str> = subscribes.iter().map(|(scope, _, _)| scope.as_str()).collect();
+    for problem in problems(&forms, &scopes, endpoint, booking, newsletter.as_ref()).into_iter().chain(disagreements) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
     let booking = booking.and_then(|b| b.as_ref().ok());
-    if forms.is_empty() && endpoint.is_none() && booking.is_none() && !hosted {
+    if forms.is_empty() && endpoint.is_err() && booking.is_none() && !hosted {
         return Ok(());
     }
     BuildContext::for_render(output_dir, pending)

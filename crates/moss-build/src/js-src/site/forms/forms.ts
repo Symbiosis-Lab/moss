@@ -1,11 +1,14 @@
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from '../subscribe/hosted-form.js';
 import { hydrateSubscribeForm } from '../subscribe/subscribe.js';
+import { solveCaptcha } from '../subscribe/captcha.js';
 import { clearField, controls, copy, markField } from './fields.js';
 
 type Answer = {
   ok?: boolean;
   error?: string;
   fields?: Record<string, string>;
+  need_captcha?: boolean;
+  captcha_url?: string;
 };
 
 /** Seam for tests: jsdom cannot navigate. */
@@ -62,13 +65,24 @@ async function send(form: HTMLFormElement): Promise<void> {
     return;
   }
 
-  try {
+  const post = async (): Promise<[Response, Answer]> => {
     const res = await fetch(form.action, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: body(form),
     });
-    const answer: Answer = await res.json().catch(() => ({}));
+    return [res, await res.json().catch(() => ({}))];
+  };
+  try {
+    let [res, answer] = await post();
+    // The service asks for its bot check only when posts look like abuse. Two checks a press at most.
+    for (let checks = 0; res.status === 403 && answer.need_captcha && answer.captcha_url && checks < 2; checks++) {
+      if (!(await solveCaptcha(answer.captcha_url))) {
+        setState(root(form), 'idle');
+        return;
+      }
+      [res, answer] = await post();
+    }
     if (res.ok && answer.ok !== false) {
       navigation.to(next);
       return;

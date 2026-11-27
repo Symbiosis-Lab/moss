@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { hydrateForm, navigation, prefill } from '../forms.js';
 
+const { solveCaptcha } = vi.hoisted(() => ({ solveCaptcha: vi.fn(async () => true) }));
+vi.mock('../../subscribe/captcha.js', () => ({ solveCaptcha }));
+
 const COPY = `<div hidden>
   <span data-copy="required">This field is required.</span>
   <span data-copy="format">Check this value.</span>
@@ -102,6 +105,28 @@ describe('forms', () => {
       await submit(form);
       expect(go).toHaveBeenLastCalledWith('/booking/received/');
     }
+  });
+
+  test('a bot check asked for is solved and the post sent again; cancelled, the form waits', async () => {
+    const form = mount();
+    const asked = { need_captcha: true, captcha_url: 'https://seta.example/captcha/' };
+    fetchSpy.mockReturnValueOnce(reply(403, asked)).mockReturnValueOnce(reply(200, { ok: true }));
+    hydrateForm(form, '');
+    await submit(form);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(solveCaptcha).toHaveBeenCalledWith('https://seta.example/captcha/');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(go).toHaveBeenLastCalledWith('/booking/received/');
+
+    const again = mount();
+    solveCaptcha.mockResolvedValueOnce(false);
+    fetchSpy.mockReturnValueOnce(reply(403, asked));
+    go.mockClear();
+    hydrateForm(again, '');
+    await submit(again);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(go).not.toHaveBeenCalled();
+    expect(again.closest<HTMLElement>('.moss-form')!.dataset.state).toBe('idle');
   });
 
   test('422 marks each named field invalid, ties its message, focuses the first, keeps values', async () => {
