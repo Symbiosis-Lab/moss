@@ -119,11 +119,18 @@ impl Transfer<'_> {
         heal_cap: usize,
     ) -> Result<HashMap<String, String>, String> {
         let at_once = std::thread::available_parallelism().map_or(4, |n| n.get());
-        let settled: Vec<Result<Option<(&Need, String)>, String>> = futures::stream::iter(needed.iter().filter(|n| parse_entry(&n.entry).0 == MODE_FILE))
+        // Built before the stream: iterator adapters held across the await
+        // leave the publish future `Send` for one borrow lifetime only, and a
+        // shell that spawns it needs every one.
+        let hashes: Vec<_> = needed
+            .iter()
+            .filter(|n| parse_entry(&n.entry).0 == MODE_FILE)
             .map(|need| async move {
                 let at = contained(base, &need.path).await?;
                 Ok(upload::settled_hash(&need.path, &at, parse_entry(&need.entry).1, throughput, heal_cap).await?.map(|hash| (need, hash)))
             })
+            .collect();
+        let settled: Vec<Result<Option<(&Need, String)>, String>> = futures::stream::iter(hashes)
             .buffer_unordered(at_once)
             .collect()
             .await;

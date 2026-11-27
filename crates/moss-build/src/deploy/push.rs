@@ -497,6 +497,26 @@ mod tests {
     use super::deploy_resource_tests::{DeployStandIn, Seta};
     use crate::deploy::progress::DeploySink;
 
+    /// A shell spawns the publish on a multithreaded runtime, which borrows
+    /// its inputs inside the task: the future must be `Send` for every
+    /// lifetime of those borrows, not only for one.
+    #[allow(dead_code)]
+    fn a_publish_can_be_spawned(
+        sealed: SealedManifest,
+        identity: Identity,
+        sink: std::sync::Arc<dyn DeploySink>,
+        ports: Box<dyn crate::build::ports::deploy::DeployPorts>,
+    ) {
+        fn spawnable<F: std::future::Future + Send + 'static>(_: F) {}
+        spawnable(async move {
+            let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+            let folder = std::path::PathBuf::new();
+            let site_id = String::new();
+            let cx = PushContext { folder_path: &folder, identity: &identity, site_id: &site_id, sink: &sink, ports: &*ports, events_lock: &events_lock };
+            let _ = push_site_inner(&sealed, &cx).await;
+        });
+    }
+
     /// The upload phase's byte credit is a liveness bump. If this stops being
     /// true, a publish that is uploading steadily for longer than STALL_TIMEOUT
     /// gets cancelled while healthy — the 2026-08-04 failure, reintroduced.
