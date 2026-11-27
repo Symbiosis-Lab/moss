@@ -19,6 +19,11 @@
 //!   an import's source address out of `syndicated:` into `origin:`
 //!   (`--import-sources`, `import_sources.rs`): the page stops showing it as
 //!   a copy.
+//!
+//! The run without `--lift` also undoes what a release changed on purpose,
+//! so the site keeps the look it had: `series: true` where a folder's order
+//! alone drew previous and next links (`series.rs`), and bare `:::` lines that
+//! close nothing deleted (`stray_fences.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +33,8 @@ mod import_sources;
 mod landscape;
 mod lift;
 mod list;
+mod series;
+mod stray_fences;
 mod translation_keys;
 
 /// One file's text before and after.
@@ -132,6 +139,12 @@ output.
 It compares the built site only: the scratch builds run the site's plugins as
 a build does, but a tool that reads translationKey from the files themselves is
 not checked, and a page renamed later pairs by key and not by path.
+
+It keeps what moss 0.15.30 changed on purpose looking as it did: a folder
+ordered by weight: or a sort: list, whose home page sets no series:, gets
+`series: true`, so its pages keep their previous and next links; and a bare
+`:::` line that closes nothing is deleted (it once turned the paragraph above
+it into a definition list).
 
 It also gives a place-typed kind without one `landscape = \"detail\"` and
 copies moss's place-map pack into .moss/maps/, so the site's maps stay as they
@@ -317,17 +330,34 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
             (changes, plan.skipped, Check::NotNeeded)
         }
         _ => {
-            let (changes, skipped) = translation_keys::redundant(&pages);
-            let check = if changes.is_empty() {
-                Check::NotNeeded
-            } else if output_unchanged(folder, &changes)? {
-                Check::SameOutput
-            } else {
-                Check::DifferentOutput
+            let (mut changes, mut skipped) = translation_keys::redundant(&pages);
+            // Only a page that orders a folder can unlink one, so this must cover every
+            // input of `linked_by_order`: a weight, a sort, or a cascade carrying either.
+            let orders = pages.iter().any(|(_, text)| {
+                let fm = moss_core::frontmatter::typed(text);
+                fm.weight.is_some() || fm.sort.is_some() || fm.cascade.is_some()
+            });
+            let scratch = if orders || !changes.is_empty() { Some(ScratchBuild::of(folder)?) } else { None };
+            let check = match &scratch {
+                Some(scratch) if !changes.is_empty() => {
+                    if scratch.builds_the_same_with(&changes)? { Check::SameOutput } else { Check::DifferentOutput }
+                }
+                _ => Check::NotNeeded,
             };
-            if !changes.is_empty() {
+            if check == Check::DifferentOutput {
+                changes.clear();
+                notes.push("Removing the translationKey lines the paths already imply would change the built site, so they stay as written.".to_string());
+            } else if !changes.is_empty() {
                 notes.push("A tool that reads translationKey from the files themselves is not part of this check, and a page renamed later pairs by key and not by path.".to_string());
             }
+            let (series, series_skipped) = series::plan(&texts_after(&pages, &changes), scratch.as_ref().map_or(&[], |s| s.before.unlinked_folders()));
+            if !series.is_empty() {
+                notes.push("`series: true` keeps the previous and next links these folders had before moss 0.15.30; delete it where the pages are not read in order.".to_string());
+            }
+            fold(&mut changes, series);
+            skipped.extend(series_skipped);
+            let fences = stray_fences::plan(&texts_after(&pages, &changes));
+            fold(&mut changes, fences);
             (changes, skipped, check)
         }
     };
@@ -343,10 +373,25 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
             report.notes.push("Copies moss's place-map pack into .moss/maps/.".to_string());
         }
     }
-    if report.check == Check::DifferentOutput {
-        report.notes.push("Removing these would change the built site, so they stay as written.".to_string());
-    }
     Ok(report)
+}
+
+/// `pages` with each text a planned change leaves.
+fn texts_after(pages: &[(String, String)], changes: &[FileChange]) -> Vec<(String, String)> {
+    pages
+        .iter()
+        .map(|(path, text)| (path.clone(), changes.iter().find(|c| &c.path == path).map_or_else(|| text.clone(), |c| c.after.clone())))
+        .collect()
+}
+
+/// Fold `more`, planned on [`texts_after`] `changes`, into `changes`: one change per file.
+fn fold(changes: &mut Vec<FileChange>, more: Vec<FileChange>) {
+    for change in more {
+        match changes.iter_mut().find(|c| c.path == change.path) {
+            Some(earlier) => earlier.after = change.after,
+            None => changes.push(change),
+        }
+    }
 }
 
 fn plan_import_sources(folder: &Path, pages: &[(String, String)], list: &str) -> Result<Report, String> {
@@ -384,23 +429,32 @@ fn write_all(folder: &Path, changes: &mut Vec<FileChange>, skipped: &mut Vec<Ski
     *changes = written;
 }
 
-/// Whether building a scratch copy of the site with `changes` gives the same
-/// output as building it without them.
-fn output_unchanged(folder: &Path, changes: &[FileChange]) -> Result<bool, String> {
-    let scratch = tempfile::tempdir().map_err(|e| format!("could not make a scratch copy: {e}"))?;
-    copy_site(folder, scratch.path())?;
-    let root = VaultRoot::resolve(scratch.path());
-    let build = |what: &str| {
-        headless_build_sealed(&root)
-            .map(|sealed| sealed.generation_id().to_string())
-            .map_err(|e| format!("could not build the scratch copy {what}: {e}"))
-    };
-    let before = build("as it is")?;
-    for change in changes {
-        // allow:raw_write a scratch copy in the system temp folder
-        std::fs::write(scratch.path().join(&change.path), &change.after).map_err(|e| format!("could not write the scratch copy: {e}"))?;
+/// A scratch copy of the site and its build as it is, which every rule reads
+/// the build's decisions from without writing in the folder.
+struct ScratchBuild {
+    dir: tempfile::TempDir,
+    root: VaultRoot,
+    before: crate::build::manifest::SealedManifest,
+}
+
+impl ScratchBuild {
+    fn of(folder: &Path) -> Result<Self, String> {
+        let dir = tempfile::tempdir().map_err(|e| format!("could not make a scratch copy: {e}"))?;
+        copy_site(folder, dir.path())?;
+        let root = VaultRoot::resolve(dir.path());
+        let before = headless_build_sealed(&root).map_err(|e| format!("could not build the scratch copy as it is: {e}"))?;
+        Ok(ScratchBuild { dir, root, before })
     }
-    Ok(build("with the changes")? == before)
+
+    /// Whether the copy builds to the same output with `changes` written.
+    fn builds_the_same_with(&self, changes: &[FileChange]) -> Result<bool, String> {
+        for change in changes {
+            // allow:raw_write a scratch copy in the system temp folder
+            std::fs::write(self.dir.path().join(&change.path), &change.after).map_err(|e| format!("could not write the scratch copy: {e}"))?;
+        }
+        let after = headless_build_sealed(&self.root).map_err(|e| format!("could not build the scratch copy with the changes: {e}"))?;
+        Ok(after.generation_id() == self.before.generation_id())
+    }
 }
 
 /// A real headless build of `root` and the manifest it sealed, with the setup
@@ -420,7 +474,13 @@ fn headless_build_sealed(root: &VaultRoot) -> Result<crate::build::manifest::Sea
         crate::system::folder_session::register_session(root.as_str())
     };
 
-    runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
+    // The copy's own notes and progress are not the author's to read here; errors still show.
+    let _quiet = crate::build::cli_output::quiet();
+    let level = log::max_level();
+    log::set_max_level(log::LevelFilter::Error);
+    let sealed = runtime.block_on(crate::deploy::one_shot::build_sealed_now(root));
+    log::set_max_level(level);
+    sealed
 }
 
 /// The site's files, without its build output, version history and git
@@ -471,7 +531,7 @@ fn site_relative(folder: &Path, file: &Path) -> String {
 
 impl Report {
     fn writable(&self) -> bool {
-        self.check != Check::DifferentOutput && (!self.changes.is_empty() || self.pack)
+        !self.changes.is_empty() || self.pack
     }
 
     fn to_text(&self) -> String {
@@ -493,7 +553,6 @@ impl Report {
         out.push('\n');
         out.push_str(&match (&self.saved, self.changes.len() + usize::from(self.pack), &self.check) {
             (_, 0, _) if self.skipped.is_empty() && self.notes.is_empty() => "Nothing to rewrite.\n".to_string(),
-            (_, _, Check::DifferentOutput) => "Nothing was written.\n".to_string(),
             (Some(id), n, _) if self.applied => format!(
                 "Wrote {}. A version of the site from before was saved as {id}; undo with `moss history --restore --at {id} --yes`.\n",
                 files(n)

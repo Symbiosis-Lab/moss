@@ -615,7 +615,7 @@ subtitle: Saturday, 7pm
 ---
 ```
 
-A fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block; the number of colons does not matter, so use more only if you like the look. `::: {.intro}` around `::: {.figure}` nests, every closer can be `:::`, and `::::grid 2` around `::: {.note}` reads the same way. An opener nothing closes, or a closer with nothing left to close, is a build warning that names the line.
+A fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block; the number of colons does not matter, so use more only if you like the look. `::: {.intro}` around `::: {.figure}` nests, every closer can be `:::`, and `::::grid 2` around `::: {.note}` reads the same way. An opener nothing closes, or a closer with nothing left to close, is a build warning that names the line, and the line shows on the page as written. `moss migrate --apply` deletes each closer with nothing left to close; before moss 0.15.30 one right under a paragraph turned that paragraph into a definition list.
 
 A fenced div's `key=value` pairs are written onto the `<div>` by the rule pandoc's HTML5 output uses. A key that is a standard HTML attribute (`title`, `lang`, `dir`, `style`, `width`, `hidden`, `tabindex`, the `on…` event handlers and the rest of pandoc's list), starts with `aria-` or `data-`, or contains a `:`, is written as it is; any other key gets a `data-` prefix. So `::: {.figure fig=teapot title="A teapot" aria-label="Legend"}` emits `<div class="figure" data-fig="teapot" title="A teapot" aria-label="Legend">`. `id=` and `class=` written as pairs are not the fence's id and class (use `#id` and `.class`): they become `data-id` and `data-class`. The `data-` ones are hooks for your own CSS and script (`[data-fig="teapot"]`). Pairs come out in source order, with the value escaped.
 
@@ -1216,7 +1216,7 @@ sort: [intro, setup, advanced]
 
 The order is the same whichever `children_style` draws it, so changing rows to cards moves nothing. Subfolders lead the pages, including one that holds only subfolders (a folder of pictures alone lists as a page); on a date order without year sections, a subfolder whose own page has a date takes its place by that date instead. A typed list is drawn as typed, subfolders where you put them, and draws no year sections unless the folder asks for them with `children_group: year`, which keeps its subfolders above the sections.
 
-Ordering a folder, by `weight:` or by a typed list, arranges its listing and nothing else. Previous and next links between its pages come only from `series:` on the folder's home page (below).
+Ordering a folder, by `weight:` or by a typed list, arranges its listing and nothing else. Previous and next links between its pages come only from `series:` on the folder's home page (below). A site made before moss 0.15.30, when that order alone drew them, keeps them with `moss migrate --apply`, which adds `series: true` to each such folder's home page; the first build after an older moss names the folders.
 
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem. Under `sort: date` or `date-asc`, `weight:` also settles pages with the same date, lower first and weighted before unweighted, so two articles of one year stay in the order you number them; pages without one keep the order of their addresses. A feed keeps pure date order.
 

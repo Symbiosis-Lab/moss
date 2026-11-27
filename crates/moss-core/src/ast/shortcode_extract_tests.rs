@@ -2050,6 +2050,13 @@ fn a_stray_closer_warns_and_names_its_line_and_the_block_before_it() {
     assert!(w.contains("closed on line 3") && w.contains("started on line 1"), "{w}");
     // Escaped, so it still shows as text.
     assert!(result.markdown_with_placeholders.contains("\n\\:::\n"));
+    assert!(w.ends_with("`moss migrate --apply` deletes it."), "{w}");
+}
+
+#[test]
+fn stray_closer_lines_name_the_warned_closers_only() {
+    let md = "Para.\n:::\n\n:::grid 2\na\n+++\nb\n:::\n\n<div>\n:::\n</div>\n\nEnd.\n:::\n";
+    assert_eq!(stray_closer_lines(md), vec![1, 14]);
 }
 
 #[test]

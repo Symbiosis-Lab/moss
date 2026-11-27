@@ -88,3 +88,79 @@ fn lift_apply_on_a_page_without_a_uid_writes_no_uid() {
     let page = std::fs::read_to_string(root.join("Piers/p1.md")).unwrap();
     assert!(!page.contains("uid:") && page.contains("\nstage: Pier 1\n") && !page.contains(":::"), "{page}");
 }
+
+#[test]
+fn a_folder_ordered_by_weight_keeps_its_previous_and_next_links() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, home) = (tmp.path().join("site"), tmp.path().join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    write(&root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
+    write(&root, "Journal/Journal.md", "---\ntitle: Journal\nsort: weight\n---\n\nEntries.\n");
+    write(&root, "Journal/one.md", "---\ntitle: One\nweight: 1\n---\n\nFirst.\n");
+    write(&root, "Journal/two.md", "---\ntitle: Two\nweight: 2\n---\n\nSecond.\n");
+    let o = migrate(&root, &home, &["--apply"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let journal = std::fs::read_to_string(root.join("Journal/Journal.md")).unwrap();
+    assert_eq!(journal, "---\ntitle: Journal\nsort: weight\nseries: true\n---\n\nEntries.\n");
+    let again = migrate(&root, &home, &["--json"]);
+    let report: serde_json::Value = serde_json::from_str(&stdout(&again)).expect("stdout is one JSON value");
+    assert_eq!(report["changes"].as_array().unwrap().len(), 0, "{report}");
+}
+
+#[test]
+fn a_stray_closer_is_deleted_in_the_same_change_as_the_page_s_other_rewrites() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, home) = (tmp.path().join("site"), tmp.path().join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    write(&root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
+    write(&root, "Talks/index.md", "---\ntitle: Talks\nsort: [b, a]\n---\n\nPoster.\n10/25 · Hall\n:::\n");
+    write(&root, "Talks/a.md", "---\ntitle: A\n---\n\nA.\n");
+    write(&root, "Talks/b.md", "---\ntitle: B\n---\n\nB.\n");
+    let o = migrate(&root, &home, &["--apply", "--json"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&o)).expect("stdout is one JSON value");
+    assert_eq!(report["changes"].as_array().unwrap().len(), 1, "{report}");
+    let talks = std::fs::read_to_string(root.join("Talks/index.md")).unwrap();
+    assert_eq!(talks, "---\ntitle: Talks\nsort: [b, a]\nseries: true\n---\n\nPoster.\n10/25 · Hall\n");
+}
+
+#[test]
+fn the_first_build_after_an_older_moss_names_the_folder_migrate_then_links() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, home) = (tmp.path().join("site"), tmp.path().join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    write(&root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
+    write(&root, "Shelf/Shelf.md", "---\ntitle: Shelf\ncascade:\n  sort: weight\n---\n\nShelf.\n");
+    write(&root, "Shelf/Books/Books.md", "---\ntitle: Books\n---\n\nBooks.\n");
+    write(&root, "Shelf/Books/a.md", "---\ntitle: A\n---\n\nA.\n");
+    write(&root, "Shelf/Books/b.md", "---\ntitle: B\n---\n\nB.\n");
+    // Only the cascade orders the folder. Each build reads a changed page, so none ends at the generation it already has.
+    let build = |n: usize| {
+        write(&root, "Shelf/Books/a.md", &format!("---\ntitle: A\n---\n\nA, take {n}.\n"));
+        let o = Command::new(MOSS)
+            .args(["build", root.to_str().unwrap(), "--no-plugins"])
+            .env("MOSS_HOME", &home)
+            .env("HOME", &home)
+            .env("XDG_CACHE_HOME", home.join(".cache"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stderr).into_owned()
+    };
+    let note = "Pages in `Shelf/Books` no longer link to the previous and next page";
+    let first = build(1);
+    assert!(!first.contains("no longer link"), "a folder never built before is not told");
+
+    // The profile sits beside the build's output, wherever the folder's store is.
+    let current = first.lines().find_map(|l| l.split("Site generated at ").nth(1)).expect("the build names its output");
+    let profile = Path::new(current.trim()).parent().unwrap().join("profile.jsonl");
+    let mut records = std::fs::read_to_string(&profile).unwrap();
+    records.push_str("{\"kind\":\"build\",\"moss_version\":\"0.15.29\"}\n");
+    std::fs::write(&profile, records).unwrap();
+    assert!(build(2).contains(note), "the first build after 0.15.29 names the folder");
+    assert!(!build(3).contains("no longer link"), "the next build does not repeat it");
+
+    let o = Command::new(MOSS).arg("migrate").arg(&root).arg("--apply").env("MOSS_HOME", &home).env("HOME", &home).env("XDG_CACHE_HOME", home.join(".cache")).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read_to_string(root.join("Shelf/Books/Books.md")).unwrap(), "---\ntitle: Books\nseries: true\n---\n\nBooks.\n");
+}

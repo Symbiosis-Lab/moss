@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ast::shortcode_extract::stray_closer_lines` gives the lines of the bare `:::` closers that close nothing, the ones the extractor warns about; the warning now ends by naming `moss migrate --apply`.
+
 ## [0.30.0] - 2026-11-27
 
 ### Added

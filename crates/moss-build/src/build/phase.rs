@@ -532,6 +532,20 @@ fn profile_path(source: &std::path::Path) -> Option<std::path::PathBuf> {
     source.is_dir().then(|| crate::moss_paths::MossPaths::new(source).profile())
 }
 
+/// The moss that wrote the last record in `source`'s profile: the one that
+/// built the folder before this build, which appends its own record last.
+pub(crate) fn previous_moss_version(source: &std::path::Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(profile_path(source)?).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(64 * 1024))).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let line = String::from_utf8_lossy(&tail).lines().rev().find(|l| !l.trim().is_empty())?.to_string();
+    let record: serde_json::Value = serde_json::from_str(&line).ok()?;
+    record["moss_version"].as_str().map(str::to_string)
+}
+
 /// Logs one `run_pipeline` call's `build.summary` line and appends its
 /// profile record, both from one record of the build.
 pub(crate) fn finish_build(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) {

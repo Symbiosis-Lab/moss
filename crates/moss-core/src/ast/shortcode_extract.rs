@@ -1617,6 +1617,14 @@ pub fn extract_shortcodes_with_config(
     }
 }
 
+/// The lines (0-based) of `markdown` holding a bare `:::` that closes
+/// nothing, as the extractor warns about them: the ones `moss migrate` deletes.
+pub fn stray_closer_lines(markdown: &str) -> Vec<usize> {
+    let mut collected = Collected::default();
+    extract_with_state(markdown, &compute_nonce(markdown), &mut collected, &ParseConfig::default());
+    collected.stray_closers
+}
+
 /// What one extraction pass accumulates across every nesting level. The
 /// levels share one instance, so placeholder indices, the nonce-indexed
 /// `extracted` list and every diagnostic come out flat.
@@ -1626,6 +1634,8 @@ struct Collected {
     warnings: Vec<String>,
     advisories: Vec<String>,
     css_regions: Vec<CssRegionSpan>,
+    /// Lines (0-based, `warning_line_offset` added) of bare `:::` closers that close nothing.
+    stray_closers: Vec<usize>,
 }
 
 /// Recursive worker for [`extract_shortcodes`]. Walks `markdown`
@@ -1851,6 +1861,7 @@ fn extract_with_state(
             let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
             if !quiet.get(i).copied().unwrap_or(false) {
                 shown = Some(line.replacen(':', "\\:", 1));
+                collected.stray_closers.push(config.warning_line_offset + i);
                 collected.warnings.push(stray_closer_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
@@ -1919,7 +1930,7 @@ fn stray_closer_warning(closer: &str, line: usize, last_closed: Option<(usize, u
         None => String::new(),
     };
     format!(
-        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint}",
+        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint} `moss migrate --apply` deletes it.",
         clip_for_warning(closer)
     )
 }

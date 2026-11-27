@@ -179,6 +179,7 @@ pub struct PendingManifest {
     page_stubs: std::collections::BTreeMap<String, String>,
     /// Link cards this build showed with no entry in the folder.
     waiting_link_cards: std::collections::BTreeSet<String>,
+    unlinked_folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -406,6 +407,7 @@ impl PendingManifest {
             problems_at_entry: Default::default(),
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
+            unlinked_folders: Vec::new(),
             preview_originals: std::collections::BTreeMap::new(),
             never_made: std::collections::BTreeSet::new(),
             blocking_keys: HashSet::new(),
@@ -461,6 +463,10 @@ impl PendingManifest {
     /// Record the link cards this build showed with no entry in the folder.
     pub(crate) fn note_waiting_link_cards(&mut self, urls: Vec<String>) {
         self.waiting_link_cards.extend(urls);
+    }
+
+    pub(crate) fn note_unlinked_folders(&mut self, folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>) {
+        self.unlinked_folders = folders;
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -1092,6 +1098,7 @@ impl PendingManifest {
             problems_at_entry: self.problems_at_entry,
             page_stubs: self.page_stubs,
             waiting_link_cards: self.waiting_link_cards,
+            unlinked_folders: self.unlinked_folders,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified,
@@ -1125,6 +1132,7 @@ pub struct SealedManifest {
     problems_at_entry: crate::build::cli_output::ProblemMark,
     page_stubs: std::collections::BTreeMap<String, String>,
     waiting_link_cards: std::collections::BTreeSet<String>,
+    unlinked_folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1174,6 +1182,12 @@ impl SealedManifest {
     /// Whether this generation restricted at least one page to members.
     pub fn restricts_pages(&self) -> bool {
         self.restricts_pages
+    }
+
+    /// The folders this build found without the previous and next links an
+    /// older moss drew from their order: what `moss migrate` gives `series: true`.
+    pub(crate) fn unlinked_folders(&self) -> &[crate::build::scan::sort_inference::UnlinkedFolder] {
+        &self.unlinked_folders
     }
 
     /// Redirect stubs this build serves for old addresses of the author's
@@ -1458,6 +1472,7 @@ impl SealedManifest {
             problems_at_entry: Default::default(),
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
+            unlinked_folders: Vec::new(),
             blocking_keys: Default::default(),
             generation_id,
             unverified: Default::default(),

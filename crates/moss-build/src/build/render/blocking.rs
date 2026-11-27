@@ -1228,6 +1228,11 @@ pub fn generate_blocking_content_for_build(
         // inference, and BEFORE any rendering that reads `direct_children_sort`
         // (listing card renderer, series-nav, editor inferred-axis hint).
         populate_direct_children_sorts(&mut documents);
+        let unlinked = crate::build::scan::sort_inference::unlinked_folders(&documents);
+        if let Some(note) = crate::build::scan::sort_inference::unlinked_note(&unlinked, crate::build::phase::previous_moss_version(source_path_buf).as_deref()) {
+            crate::build::cli_output::log_note!("{note}");
+        }
+        pending.note_unlinked_folders(unlinked);
         log::debug!(target: "timing", "[reduce] populate_direct_children_sorts: {:?}", reduce_start.elapsed());
 
         // Term derivation:

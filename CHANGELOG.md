@@ -4,6 +4,11 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links, or run `moss migrate --apply`, which adds it to each such folder; the first build after an older moss names them.
+- A bare `:::` line with nothing left to close shows as written. Right under a paragraph it used to turn that paragraph into a definition list holding `::`. `moss migrate --apply` deletes each such line, and the build's warning about it says so.
+
 ## [0.15.30] - 2026-11-27
 
 ### New
