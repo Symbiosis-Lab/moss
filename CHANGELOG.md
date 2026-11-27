@@ -84,6 +84,8 @@ All notable changes to moss will be documented here.
 - Search on a Chinese site finds every page with the words you type. The index split Chinese text into words with a different dictionary from the search box's, so a search for 酷兒 missed a page whose only 兒 was in 酷兒性.
 - A term kind of one field with `cards = true` credits its names on a card without a role: `fields = ["stage"]` reads "Approved", not "Approved, stage".
 - A place in `.moss/places.toml` without coordinates that other places name as `parent` (a region its towns roll up to) no longer gets a "will not appear on a map" note on every build; a place no other names keeps the note.
+- A German form marks an optional field "freiwillig" instead of "Optional".
+- A declared field, term kind or role with no label reads its name with spaces for underscores: `angabe_ort` shows as "Angabe ort", not "Angabe_ort".
 
 ### Removed
 

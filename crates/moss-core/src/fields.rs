@@ -82,18 +82,22 @@ pub struct FieldDecl {
 }
 
 impl FieldDecl {
-    /// The row label for a page in `lang`: its own, else the `en` one, else the field name with its first letter capitalised.
+    /// The row label for a page in `lang`: its own, else the `en` one, else [`name_label`].
     pub fn label_for(&self, lang: &str) -> String {
-        label_in(&self.label, lang).map(str::to_string).unwrap_or_else(|| {
-            let mut chars = self.name.chars();
-            chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
-        })
+        label_in(&self.label, lang).map_or_else(|| name_label(&self.name), str::to_string)
     }
 
     /// The link text a url field draws in `lang`, when the declaration names one.
     pub fn text_for(&self, lang: &str) -> Option<&str> {
         label_in(&self.text, lang)
     }
+}
+
+/// A declared name drawn as a label when it has none: `_` read as a space, first letter capitalised (`angabe_ort` → "Angabe ort").
+pub fn name_label(name: &str) -> String {
+    let spaced = name.replace('_', " ");
+    let mut chars = spaced.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
 /// The label for `lang` (matched ignoring case), else the `en` one.

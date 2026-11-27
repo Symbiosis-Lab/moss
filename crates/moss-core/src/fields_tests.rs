@@ -308,6 +308,8 @@ fn field_label_is_a_string_a_language_table_or_the_capitalised_name() {
     assert_eq!(table.label_for("zh-hans"), "Architect", "no zh-hans label: falls back to en");
     let only_de = named(vec![("de".into(), "Architektin".into())]);
     assert_eq!(only_de.label_for("fr"), "Architect", "no en label either: the capitalised name");
+    let snake = FieldDecl { name: "angabe_ort".into(), ..decl(FieldKind::Text) };
+    assert_eq!(snake.label_for("de"), "Angabe ort", "underscores in the name read as spaces");
 }
 
 #[test]

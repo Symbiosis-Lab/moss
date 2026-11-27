@@ -26,11 +26,7 @@ pub fn term_role_label(lang: crate::i18n::Language, field: &str) -> String {
         "author" | "tags" | "editor" | "jury" | "location" => {
             crate::i18n::t(lang, &format!("term_role_{}", field)).to_string()
         }
-        // A declared field has no translated label: its name, capitalized.
-        declared => {
-            let mut chars = declared.chars();
-            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
-        }
+        declared => moss_core::fields::name_label(declared),
     }
 }
 

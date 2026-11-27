@@ -149,7 +149,7 @@ impl TermKind {
 
 /// A kind's name in `lang`: its config `title` for that language by the rule a
 /// declared field's labels follow, else a built-in's translated title, else
-/// its key capitalized.
+/// its key as a label.
 fn kind_title(key: &str, titles: &[(String, String)], lang: &str) -> String {
     if let Some(label) = moss_core::fields::label_in(titles, lang) {
         return label.to_string();
@@ -158,8 +158,7 @@ fn kind_title(key: &str, titles: &[(String, String)], lang: &str) -> String {
         let lang = crate::i18n::Language::from_code(lang).unwrap_or_default();
         return crate::i18n::term_root_title(lang, key).to_string();
     }
-    let mut chars = key.chars();
-    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    moss_core::fields::name_label(key)
 }
 
 /// The name-list fields a config declares beyond the built-in five, in
@@ -278,6 +277,12 @@ mod tests {
         assert!(authors.fields.is_empty(), "author moved into people: {:?}", authors.fields);
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(people.fields, vec!["author".to_string(), "editor".to_string()]);
+    }
+
+    #[test]
+    fn a_kind_and_a_role_with_no_title_read_their_name_with_spaces() {
+        assert_eq!(kind_title("angabe_ort", &[], "de"), "Angabe ort");
+        assert_eq!(super::super::term_role_label(crate::i18n::Language::De, "angabe_ort"), "Angabe ort");
     }
 
     #[test]

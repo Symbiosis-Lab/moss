@@ -59,6 +59,8 @@ fn a_required_field_has_required_and_an_optional_one_says_optional() {
     assert!(!h.contains(r#"id="booking-phone" name="phone" required"#));
     assert_eq!(h.matches(r#"moss-form__optional">Optional<"#).count(), 6, "{h}");
     assert!(!h.contains("Your name *") && !h.contains(">*<"));
+    let de = render_form(&booking(), Language::De, Some("https://f.example"));
+    assert_eq!(de.matches(r#"moss-form__optional">freiwillig<"#).count(), 6, "German marks an optional field freiwillig: {de}");
 }
 
 #[test]
