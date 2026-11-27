@@ -26,10 +26,8 @@ pub enum Precision {
 /// never a coordinate of its own.
 #[derive(Debug, Clone)]
 pub struct PlaceRecord {
-    /// `None` when `lat`/`lng` were missing or non-numeric — the entry is
-    /// still kept, with a diagnostic, so its `parent` and `precision` still
-    /// drive the breadcrumb and roll-up. A map generator is the only reader
-    /// that would need to skip a `None` here, and none exists this slice.
+    /// `None` when `lat`/`lng` were missing or non-numeric; the entry is kept,
+    /// so its `parent` and `precision` still drive the breadcrumb and roll-up.
     pub coords: Option<(f64, f64)>,
     pub precision: Precision,
     /// Another place's display name, exactly as written in
@@ -126,12 +124,7 @@ pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
         let lng = entry.get("lng").and_then(toml_as_f64);
         let coords = match (lat, lng) {
             (Some(lat), Some(lng)) => Some((lat, lng)),
-            _ => {
-                crate::build::cli_output::log_note!(
-                    "place '{name}' in .moss/places.toml has no coordinates (lat/lng); its parent and precision still apply, but it will not appear on a map"
-                );
-                None
-            }
+            _ => None,
         };
         let precision = match entry.get("precision").and_then(|v| v.as_str()) {
             Some("exact") => Precision::Exact,
@@ -150,8 +143,24 @@ pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
         let slug = entry.get("slug").and_then(|v| v.as_str()).map(str::to_string);
         out.insert(name.clone(), PlaceRecord { coords, precision, parent, slug });
     }
+    for name in unmapped(&out) {
+        crate::build::cli_output::log_note!(
+            "place '{name}' in .moss/places.toml has no coordinates (lat/lng); its parent and precision still apply, but it will not appear on a map"
+        );
+    }
     let slugs = check_slugs(&mut out);
     Gazetteer { places: out, slugs }
+}
+
+/// The places without coordinates that no other place names as its parent. A
+/// parent without a point is a grouping on purpose (a region its towns roll up
+/// to), so only a leaf without one is worth a note.
+fn unmapped(rows: &std::collections::BTreeMap<String, PlaceRecord>) -> Vec<&str> {
+    let parents: std::collections::BTreeSet<&str> = rows.values().filter_map(|r| r.parent.as_deref()).collect();
+    rows.iter()
+        .filter(|(name, record)| record.coords.is_none() && !parents.contains(name.as_str()))
+        .map(|(name, _)| name.as_str())
+        .collect()
 }
 
 /// Whether `slug` is one URL segment of lowercase ASCII letters, digits and
@@ -268,6 +277,15 @@ mod tests {
         assert_eq!(kyoto.precision, Precision::City);
         assert_eq!(kyoto.parent.as_deref(), Some("Japan"));
         assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a place without coordinates is a note, not a --strict problem");
+    }
+
+    #[test]
+    fn only_a_place_without_coordinates_that_is_nobody_s_parent_is_unmapped() {
+        let rows = parse_gazetteer(&table(
+            "[\"Japan\"]\nprecision = \"country\"\n\n[\"Kansai\"]\nprecision = \"region\"\nparent = \"Japan\"\n\n[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nparent = \"Kansai\"\n\n[\"Nara\"]\nparent = \"Kansai\"\n",
+        ))
+        .places;
+        assert_eq!(unmapped(&rows), vec!["Nara"], "Japan and Kansai group other places; Nara is a town missing its point");
     }
 
     #[test]

@@ -83,6 +83,7 @@ All notable changes to moss will be documented here.
 - After you rename a folder, its old address forwards to the new one when you publish, whether or not the folder has an `index.md`. Before, publishing reported the folder's page deleted, and old links to it broke.
 - Search on a Chinese site finds every page with the words you type. The index split Chinese text into words with a different dictionary from the search box's, so a search for 酷兒 missed a page whose only 兒 was in 酷兒性.
 - A term kind of one field with `cards = true` credits its names on a card without a role: `fields = ["stage"]` reads "Approved", not "Approved, stage".
+- A place in `.moss/places.toml` without coordinates that other places name as `parent` (a region its towns roll up to) no longer gets a "will not appear on a map" note on every build; a place no other names keeps the note.
 
 ### Removed
 
