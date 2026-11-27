@@ -859,7 +859,9 @@ property --moss-nav-island-display
 property --moss-nav-island-edge
 property --moss-nav-island-pad-block
 property --moss-nav-island-pad-end
+property --moss-nav-phone
 property --moss-nav-title-line
+property --moss-nav-toggle-size
 property --moss-nav-width
 property --moss-page-inline
 property --moss-place-figure-top

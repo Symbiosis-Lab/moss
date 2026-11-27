@@ -15,24 +15,24 @@ release heading.
 
 ### Added
 
-- `CopyJob.site` (`url`, `name`): the site the post lives on; `post.url` is built on `site.url`.
 - `CopyJob.site.icon`: the absolute URL of the site's own icon as a square PNG of at least 256 px; absent when the site has none.
 - `CopyOutcome.verify` (`page_link`, `site_file`): what the site should carry so the network can tie a copy back to it. moss writes it on the next build.
-- `CopyJob.article.text`: the page as written, in plain text, with no title and no link back.
-- `LoginResult`: what a channel's `login` answers, `completed` with the account's stable `id` (and a `name` to show), `cancelled` or `failed`. moss records a completed sign-in as the folder's account, so a plugin no longer writes `boundUserName` into its config. A `login` that returns nothing is read the old way. Needs moss 0.15.29.
-- `LoginResult.account.host`: the account's own server, for a channel whose accounts live on many servers. moss records it with the account and takes a `syndicated:` address on it as the channel's copy. Needs moss 0.15.29.
-- `SignInCancelled`: `BrowserSignIn.open` rejects with it when the person closes the sign-in or another one starts, so `login` can answer `cancelled` rather than fail.
-- `EditorFill.editor.upload`: a file field for a network whose post starts from pictures. moss gives the pictures to it first, as many as it allows and of the kinds it accepts, naming the rest in `missing`, then fills the editor once it appears.
 - `update_copy` may answer `absent: true` (the draft or post is gone) and refuse with `refused.cause: "locked"` (the network will not take the edit, which leaves the copy as posted). A retry on a handed-off draft now calls `update_copy` on the draft named by `previous`, instead of making a second draft.
 
 ### Removed
 
 - `HookResult.offer`. moss drops it at run time, so a plugin that still returns it keeps working; a typed `HookResult` literal that sets it fails its type check from this version.
 
-## [0.22.0] - 2026-11-20
+## [0.22.0] - 2026-11-22
 
 ### Added
 
+- `CopyJob.site` (`url`, `name`): the site the post lives on; `post.url` is built on `site.url`.
+- `CopyJob.article.text`: the page as written, in plain text, with no title and no link back.
+- `LoginResult`: what a channel's `login` answers, `completed` with the account's stable `id` (and a `name` to show), `cancelled` or `failed`. moss records a completed sign-in as the folder's account, so a plugin no longer writes `boundUserName` into its config. A `login` that returns nothing is read the old way. Needs moss 0.15.29.
+- `LoginResult.account.host`: the account's own server, for a channel whose accounts live on many servers. moss records it with the account and takes a `syndicated:` address on it as the channel's copy. Needs moss 0.15.29.
+- `SignInCancelled`: `BrowserSignIn.open` rejects with it when the person closes the sign-in or another one starts, so `login` can answer `cancelled` rather than fail.
+- `EditorFill.editor.upload`: a file field for a network whose post starts from pictures. moss gives the pictures to it first, as many as it allows and of the kinds it accepts, naming the rest in `missing`, then fills the editor once it appears.
 - `fillEditor`: puts a long article into the network's editor a plugin opened in the panel, as the author would paste it. The plugin gives data only (the editor's elements, the article in parts, and which of moss's fixed reshapings the editor needs: two heading levels, table rows as paragraphs, code lines as paragraphs). moss runs its own script on a page of the plugin's declared domains and answers whether the editor took it.
 - `CopyJob.article.blocks`: the article split at its pictures in reading order, cleaned for an editor (head elements, a leading h1 repeating the title and footnote back-links removed; embeds as links; a heading over the notes). `html` is unchanged.
 

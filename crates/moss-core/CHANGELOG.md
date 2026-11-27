@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `frontmatter_typed::project_typed` sets `children_source` from a `children: "[[Folder]]"` value, which the lenient `children` field alone cannot carry.
 - `heading::folder_title` and `heading::folder_heading` draw a folder home's `<h1 class="moss-folder-title">`: none when the body's own `# Heading` or an opening hero's heading stands in, hidden behind a hero, and hidden on a site or edition home whose header names the site. `SitePages::folder_heading` gives it for a page of the site, so a host's preview of a folder home carries the title the build draws.
 - `FolderEmbedParams::skip_repeats`, from the embed option `repeat:none` (written `repeat=none` in the listing marker): the listing leaves out the pages a listing earlier on the same page already shows, before `limit` counts. Any other `repeat:` value is reported with the unknown keys.
-- `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
 - `page::site_page::site_pages` derives every page's whole-site facts from the site's texts and its `SiteBundle`: each page's URL, language, order, label, layout, series and visibility as a `PageFacts`, and `SitePages::series_nav` draws a page's series navigation. It is the pass the build runs, so a host holding only the texts gets the same pages.
 - `page::page_map` (the page map, folder homes, cascading folder overrides and duplicate-slug resolution), `page::inherit` (the cascade plan and hidden folder homes) and `page::excerpt` (descriptions, excerpts and previews) move here from moss-build.
 - `i18n::filename`, `i18n::path`, `i18n::clean_stem_only`, `i18n::folder_language` and `i18n::resolve_document_language` settle a page's language from its field, filename and folders. `i18n::vote::{language_vote, folder_languages, Detected}` settle a folder's language from what a host detects in each page; a declared site language holds over the vote.
@@ -31,7 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The released-contract lock test moved to moss-build, which can see the config keys, and `released-contract.txt` now records a `config-key` line for every key the build checks. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-build --test it contract_lock`.
 - **BREAKING:** `ast::block_images` returns `Vec<BlockImage>`, each picture's `src` with its `alt`, instead of `Vec<&Url>`.
 - **BREAKING:** `page::preview_document(&RenderedPage, lang, base_href)` takes no stylesheet and the document carries none, so a host adds the site's stylesheet once instead of receiving it inside every preview.
-- `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 - **BREAKING:** `page::preview_document` takes a `masthead` after the page, drawn above the article; pass `""` for none.
 - **BREAKING:** `ResolvedSort` loses `series_default`: ordering a folder no longer implies a series, and only the folder's own `series:` turns previous and next on. A struct literal must drop the field.
 
@@ -41,10 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `PageKind::is_listable_at_depth_all` and `PageKind::is_listable_at_depth_direct` are gone. `page::listing::select` was their one caller: a flattened listing leaves out folder homes, and a direct one keeps every kind.
 - **BREAKING:** `page::site_sources::resolve_site_default_lang` is gone; read `.code` off `resolve_site_lang`, which also says whether the language was declared.
 
-## [0.29.0] - 2026-11-20
+## [0.29.0] - 2026-11-22
 
 ### Added
 
+- `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
 - `contract::retired`: every class, `data-*` value and `--moss-*` property moss released and no longer writes, with the release it went in, what replaces it (`replaced_by`) and whether moss still writes it beside its replacement (`aliased`). From `ALIAS_FLOOR` on, a retired name with a replacement must stay aliased.
 - `src/contract/released-contract.txt` lists every contract name a release has shipped. A test fails when one is neither live nor retired, and the pre-push hook keeps the file unchanged outside a `release/v*` branch and never lets it lose a line. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-core --test it contract_lock`.
 - `fields::LinkTarget` names what a page field points at: a page of this site by its wiki-link name (`Page`) or a page elsewhere by its http(s) address (`Outside`), with `as_str` and `page`.
@@ -54,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 - **BREAKING:** `PageLink::target` is a `LinkTarget` instead of a `String`. It serializes as `target` for a page of the site and as `url` for an outside address.
 - **BREAKING:** `apply_sidebar_alias` returns `Option<SidebarAlias>` instead of a `Vec<String>` of warnings.
 - The `cols=` alias and the `---` grid cell divider are reported as advisories instead of warnings, since both still render.
