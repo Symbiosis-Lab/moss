@@ -2918,6 +2918,12 @@ pub(crate) fn logged_count(level: log::Level, about: &str) -> usize {
     LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m, _)| *l == level && m.contains(about)).count()
 }
 
+/// The lines of `level` that mention `about`.
+pub(crate) fn logged_lines(level: log::Level, about: &str) -> Vec<String> {
+    install_capture();
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m, _)| *l == level && m.contains(about)).map(|(_, m, _)| m.clone()).collect()
+}
+
 /// Whether a line about `about` went out through `log_note!` (the `#note` target).
 fn logged_as_note(about: &str) -> bool {
     LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(_, m, t)| t.ends_with("#note") && m.contains(about))

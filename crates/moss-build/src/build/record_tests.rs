@@ -34,7 +34,7 @@ fn a_record_with_one_foreign_token_does_not_parse() {
     for extra in ["site_id=4", "outcome=ok", "trigger=Garden", "scan=12", "total=12", "changed=-1", "reason=setting:Garden", "loose"] {
         assert!(parse(&format!("{line} {extra}")).is_none(), "{extra}");
     }
-    assert!(parse("deploy.summary total=1ms").is_none(), "a kind the table lacks");
+    assert!(parse("publish.summary total=1ms").is_none(), "a kind the table lacks");
     assert!(parse(&line.replacen("build.summary", "build.summary ", 1)).is_none(), "an empty token");
 }
 

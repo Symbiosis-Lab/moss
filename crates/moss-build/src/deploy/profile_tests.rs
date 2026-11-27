@@ -145,6 +145,41 @@ async fn deploy_profile_prebuilt_error_is_recorded() {
     assert_eq!(rows[0]["edge"], "none");
 }
 
+/// The `deploy.summary` line is the profile's record in the table's grammar:
+/// one logged line parses and carries the profile's words, total and counts.
+fn assert_the_line_says_what_the_profile_says(profile: &Value) {
+    let lines = crate::build::cache::tests::logged_lines(log::Level::Info, "deploy.summary ");
+    let says = |line: &str| {
+        let Some((kind, fields)) = record::parse(line) else { return false };
+        let field = |name: &str| fields.iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
+        std::ptr::eq(kind, &record::DEPLOY)
+            && ["outcome", "target"].iter().all(|w| field(w) == profile[*w].as_str().map(|s| record::Value::Word(s.into())))
+            && field("total") == profile["total_ms"].as_i64().map(record::Value::Ms)
+            && profile["counts"].as_object().unwrap().iter().all(|(k, n)| field(k) == n.as_u64().map(record::Value::Count))
+    };
+    assert!(lines.iter().any(|l| says(l)), "no deploy.summary line matches {profile}: {lines:?}");
+}
+
+/// Every refusal a publish can carry is a word the record writes, so the
+/// profile and the line keep it.
+#[test]
+fn every_refusal_kind_is_a_listed_word() {
+    use crate::deploy::RefusalKind as K;
+    // A new kind fails to compile here until it is listed below.
+    let every = |k: K| match k {
+        K::UnresolvedInputs | K::MissingReferences | K::DraftsLinked | K::LinksInCloud | K::LinksInFlight
+        | K::PendingDerivations | K::BuildUnfinished | K::Removals | K::StaleContent | K::OutputCollision
+        | K::NoEnvironment | K::ForeignInputs | K::NotOwner | K::StaleCopy | K::NotSignedIn
+        | K::ModerationUnverified => k,
+    };
+    for k in [K::UnresolvedInputs, K::MissingReferences, K::DraftsLinked, K::LinksInCloud, K::LinksInFlight,
+        K::PendingDerivations, K::BuildUnfinished, K::Removals, K::StaleContent, K::OutputCollision,
+        K::NoEnvironment, K::ForeignInputs, K::NotOwner, K::StaleCopy, K::NotSignedIn, K::ModerationUnverified] {
+        let word = serde_json::to_value(every(k)).unwrap();
+        assert!(record::REFUSALS.contains(&word.as_str().unwrap()), "{word}");
+    }
+}
+
 /// A key is a count of digits no longer than a terabyte in KB, a unit, or a word.
 fn longest_digit_run(text: &str) -> usize {
     text.split(|c: char| !c.is_ascii_digit()).map(str::len).max().unwrap_or(0)
@@ -162,6 +197,7 @@ async fn deploy_profile_counts_requests_resends_and_edge_without_leaking_inputs(
     let seta = mock_seta(Some(ray), true).await;
     let previous = std::env::var("MOSS_SETA_URL").ok();
     std::env::set_var("MOSS_SETA_URL", &seta.url);
+    crate::build::cache::tests::install_capture();
     let identity = crate::identity::Identity::generate().unwrap();
     let site_id = "../evil/host.example.com-1234567890123456";
     let result = prebuilt::push_prebuilt(dir.path(), &output, site_id, &identity, false, &progress::silent()).await;
@@ -170,6 +206,7 @@ async fn deploy_profile_counts_requests_resends_and_edge_without_leaking_inputs(
 
     let rows = records(dir.path());
     let record = rows.iter().find(|r| r["kind"] == "deploy").unwrap();
+    assert_the_line_says_what_the_profile_says(record);
     let c = &record["counts"];
     let seen = seta.requests();
     assert_eq!(c["requests"], seen.len() as u64, "every request the server saw was counted");

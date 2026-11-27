@@ -251,7 +251,49 @@ pub static VIDEO_ENCODE: Kind = Kind {
     keys: &[key("outcome", Type::Word(Words::Fixed(&["ok", "abandoned"]))), TOTAL, UNATTRIBUTED, VIDEO[0], VIDEO[1], VIDEO[2], VIDEO[3]],
 };
 
-pub static KINDS: &[&Kind] = &[&BUILD];
+/// Which rule refused a publish: every `RefusalKind` in snake case, then the
+/// checks that refuse before one is built.
+pub const REFUSALS: &[&str] = &[
+    "unresolved_inputs", "missing_references", "drafts_linked", "links_in_cloud", "links_in_flight",
+    "pending_derivations", "build_unfinished", "removals", "stale_content", "output_collision",
+    "no_environment", "foreign_inputs", "not_owner", "stale_copy", "not_signed_in", "moderation_unverified",
+    "access", "conflict", "in_progress", "incomplete_generation", "mass_removal", "missing_plugin",
+    "needs_setup", "output_collisions", "place_map_pack", "plugin_setup", "site_limit",
+    "size_limit", "stale_generation", "subpath_hosting", "unsealed",
+];
+
+/// Where a deploy sends the site, as `deploy::profile::target` names it.
+pub const DEPLOY_TARGETS: &[&str] = &["seta", "prebuilt", "plugin", "direct"];
+
+/// The deploy's phases, written as 0 in the profile when not entered.
+pub const DEPLOY_PHASES: [&str; 10] = ["build", "local_checks", "manifest", "whoami",
+    "live_generation", "sync", "upload", "publish", "after_publish", "history_snapshot"];
+
+/// One deploy. The CDN edge and the start times stay in the local profile.
+pub static DEPLOY: Kind = Kind {
+    name: "deploy",
+    keys: &[
+        key("outcome", Type::Word(Words::Fixed(&["ok", "refused", "error"]))),
+        key("target", Type::Word(Words::Fixed(DEPLOY_TARGETS))),
+        key("refusal_kind", Type::Word(Words::Fixed(REFUSALS))),
+        TOTAL,
+        count("cpu_ms"), count("footprint_mb"), count("unlisted"),
+        // Seta uploads; a plugin or dry-run deploy leaves them 0.
+        always("manifest_files"), always("files_needed"), always("files_uploaded"), always("bytes_uploaded"),
+        always("body_requests"), always("retries"), always("chunked_files"), always("final_concurrency"),
+        always("achieved_bytes_per_s"), always("server_files_updated"), always("removed_files"), always("manifest_kb"),
+        // The seal's change set; `pages_classified` 0 means no baseline to compare.
+        always("pages_added"), always("pages_edited"), always("pages_deleted"), always("pages_restyled"),
+        always("pages_classified"),
+        // Every request of the deploy, from the seta client's tally.
+        always("requests"), always("requests_failed"), always("sent_kb"), always("resent_kb"),
+        phase(DEPLOY_PHASES[0]), phase(DEPLOY_PHASES[1]), phase(DEPLOY_PHASES[2]), phase(DEPLOY_PHASES[3]),
+        phase(DEPLOY_PHASES[4]), phase(DEPLOY_PHASES[5]), phase(DEPLOY_PHASES[6]), phase(DEPLOY_PHASES[7]),
+        phase(DEPLOY_PHASES[8]), phase(DEPLOY_PHASES[9]),
+    ],
+};
+
+pub static KINDS: &[&Kind] = &[&BUILD, &DEPLOY];
 
 /// A phase's budget, from whichever kind names it.
 pub fn budget_ms(phase: &str) -> Option<u64> {

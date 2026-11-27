@@ -9,7 +9,7 @@
 //! of the deploy. Unentered phases have zero milliseconds.
 
 use std::{collections::BTreeMap, future::Future, path::Path, sync::{Arc, Mutex}, time::Instant};
-use crate::build::phase::{self, PhaseTrace};
+use crate::build::{phase::{self, PhaseTrace}, record::{self, Record}};
 use super::{DeployReport, PublishError, PushResult};
 
 /// Why the deploy was refused, if it was; its counts and phases live in the
@@ -27,6 +27,7 @@ pub(crate) fn count(name: &'static str, value: u64) {
 pub(crate) fn begin_attempt() { set_refusal(None); }
 
 pub(crate) fn refusal(kind: &'static str) {
+    debug_assert!(record::REFUSALS.contains(&kind), "{kind} is not in record::REFUSALS");
     set_refusal(Some(serde_json::json!(kind)));
 }
 
@@ -89,6 +90,7 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
         if REFUSAL.try_with(|_| ()).is_ok() { return body.await; }
         let started_at = chrono::Utc::now();
         let started = Instant::now();
+        let cpu_at_start = record::usage().map(|u| u.cpu_ms);
         let refusal = Arc::new(Mutex::new(None));
         let wire = Arc::new(crate::seta::wire::WireCounters::default());
         let (result, collector) = REFUSAL.scope(refusal.clone(), crate::seta::wire::WireCounters::scope(wire.clone(), phase::with_collector(async {
@@ -97,36 +99,35 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
             result
         }))).await;
         let refusal = refusal.lock().unwrap_or_else(|e| e.into_inner()).take();
-        let mut counts: BTreeMap<&str, usize> = ["manifest_files", "files_needed", "files_uploaded",
-            "bytes_uploaded", "body_requests", "retries", "chunked_files",
-            "final_concurrency", "achieved_bytes_per_s", "server_files_updated", "removed_files",
-            "pages_added", "pages_edited", "pages_deleted", "pages_restyled", "pages_classified",
-            "manifest_kb"]
-            .into_iter().map(|key| (key, 0)).collect();
-        let mut timings: BTreeMap<&str, u128> = ["build", "local_checks", "manifest", "whoami",
-            "live_generation", "sync", "upload", "publish", "after_publish", "history_snapshot"]
-            .into_iter().map(|key| (key, 0)).collect();
+        let outcome = if refusal.is_some() { "refused" } else if result.is_ok() { "ok" } else { "error" };
+        let mut summary = Record::new(&record::DEPLOY);
+        summary.word("outcome", outcome);
+        summary.word("target", target);
+        if let Some(kind) = refusal.as_ref().and_then(|r| r.as_str()) { summary.word("refusal_kind", kind); }
+        summary.ms("total", i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX));
+        if let (Some(start), Some(now)) = (cpu_at_start, record::usage()) { summary.count("cpu_ms", now.cpu_ms.saturating_sub(start)); }
+        if let Some(mb) = record::footprint_mb() { summary.count("footprint_mb", mb); }
+        let mut timings: BTreeMap<&str, u128> = record::DEPLOY_PHASES.into_iter().map(|key| (key, 0)).collect();
         let mut build_started_at = None;
         if let Ok(t) = collector.lock() {
-            counts.extend(t.counts.iter().copied());
+            for &(name, n) in &t.counts { summary.count(name, n as u64); }
             for p in &t.phases { *timings.entry(p.name).or_default() += p.ms; }
             build_started_at = t.nested_started_at.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         }
-        counts.extend(wire.counts().map(|(name, n)| (name, n as usize)));
+        for (name, n) in wire.counts() { summary.count(name, n); }
         // History runs inside the landing tail; report it separately from that tail.
         let history = timings["history_snapshot"];
         if let Some(after) = timings.get_mut("after_publish") { *after = after.saturating_sub(history); }
-        let outcome = if refusal.is_some() { "refused" } else if result.is_ok() { "ok" } else { "error" };
-        let record = crate::build::phase::profile_record_of("deploy", serde_json::json!({
-            "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "total_ms": started.elapsed().as_millis(), "outcome": outcome,
-            "refusal_kind": refusal, "edge": wire.edge(), "target": target, "dry_run": dry_run,
-            "build_started_at": build_started_at,
-            "phases": timings.iter().map(|(name, ms)| serde_json::json!({"name": name, "ms": ms})).collect::<Vec<_>>(),
-            "counts": counts,
-            "transfer_counts_available": target != "plugin" && !dry_run,
-        }));
-        log::info!(target: "deploy", "deploy.summary {}", record);
+        for (name, ms) in timings.iter().filter(|(_, ms)| **ms > 0) { summary.ms(name, i64::try_from(*ms).unwrap_or(i64::MAX)); }
+        let mut fields = summary.json();
+        fields.insert("started_at".into(), started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true).into());
+        fields.insert("edge".into(), wire.edge().into());
+        fields.insert("dry_run".into(), dry_run.into());
+        fields.insert("build_started_at".into(), build_started_at.into());
+        fields.insert("phases".into(), timings.iter().map(|(name, ms)| serde_json::json!({"name": name, "ms": ms})).collect());
+        fields.insert("transfer_counts_available".into(), (target != "plugin" && !dry_run).into());
+        let record = crate::build::phase::profile_record_of("deploy", fields.into());
+        log::info!(target: "deploy", "{}", summary.line());
         if let Err(e) = phase::append_record(&crate::moss_paths::MossPaths::new(folder).profile(), &record) {
             log::debug!("could not append deploy profile: {e}");
         }
