@@ -56,6 +56,15 @@ describe("pointsForWorks", () => {
     expect(scoped.map((p) => p.id)).toEqual(["lisbon-work"]);
   });
 
+  test("a place scope plots the work's first place under that scope, not its first place overall", () => {
+    const north = { id: "places/north", name: "North" } satisfies Place;
+    const porto = { ...PORTO, parent: "places/north" };
+    const works = [work("a", ["places/lisbon", "places/porto"])];
+    const points = pointsForWorks(works, [LISBON, porto, north], { kind: "place", id: "places/north" });
+    const expected = project(PORTO.lat, PORTO.lng);
+    expect(points).toEqual([{ id: "a", x: expected.x, y: expected.y, precision: "city" }]);
+  });
+
   test("carries each work's own precision through for marker sizing", () => {
     const works = [work("a", ["places/lisbon"]), work("b", ["places/portugal"])];
     const points = pointsForWorks(works, PLACES, { kind: "all" });

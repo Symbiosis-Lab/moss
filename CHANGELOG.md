@@ -89,6 +89,7 @@ All notable changes to moss will be documented here.
 - A declared field, term kind or role with no label reads its name with spaces for underscores: `angabe_ort` shows as "Angabe ort", not "Angabe_ort".
 - A `style:map` embed at phone width no longer hides most of its map under the row of cards: a collapsed map under 20rem tall leaves the row out, and expanding it brings the row back.
 - In `.moss/data/forms/<scope>.csv`, an answer that picks several choices reads "Print; Web" instead of `["Print","Web"]`, and a cell starting with a tab or carriage return is quoted against spreadsheet formulas like one starting with `=`.
+- A place page's map pins a work with several places at its place inside that region, instead of at its first place, which could lie in another region.
 
 ### Removed
 
