@@ -399,6 +399,21 @@ test.describe("style:map embed", () => {
     return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
   }
 
+  test("a collapsed map keeps its card row on a desktop, leaves it out on a phone, and expanding brings it back", async ({ page, browserName }) => {
+    const cards = page.frameLocator(IFRAME).locator(".moss-places-cards");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await expect(cards).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
+    await waitForSettled(page);
+    await expect(cards.locator(".moss-card").first()).toBeAttached();
+    await expect(cards).toBeHidden();
+    await clickAndWaitForFullscreen(page, browserName);
+    await expect(cards).toBeVisible();
+  });
+
   // The open-in-new-tab control is declined entirely for a places embed
   // (`embed.ts`'s `setupImmersiveIframe(iframe, cb, false)`) — never
   // emitted, so there is no second control left to overlap with anything;

@@ -86,6 +86,7 @@ All notable changes to moss will be documented here.
 - A place in `.moss/places.toml` without coordinates that other places name as `parent` (a region its towns roll up to) no longer gets a "will not appear on a map" note on every build; a place no other names keeps the note.
 - A German form marks an optional field "freiwillig" instead of "Optional".
 - A declared field, term kind or role with no label reads its name with spaces for underscores: `angabe_ort` shows as "Angabe ort", not "Angabe_ort".
+- A `style:map` embed at phone width no longer hides most of its map under the row of cards: a collapsed map under 20rem tall leaves the row out, and expanding it brings the row back.
 
 ### Removed
 
