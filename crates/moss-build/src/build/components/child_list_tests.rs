@@ -1,5 +1,7 @@
 use super::*;
 use crate::i18n::Language;
+use moss_core::page::card::{props_for, CardHost};
+use moss_core::page::site_page::PageFacts;
 
 #[test]
 fn test_render_basic_article() {
@@ -181,8 +183,7 @@ fn test_render_child_article() {
     let props = ChildItemProps {
         title: "My Article".to_string(),
         url: Some("/blog/my-article/".to_string()),
-        date_display: Some("2025 · 11".to_string()),
-        date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
+        date_display: dated("2025-11-17T00:50:43.135Z", Language::ZhHans),
         ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
@@ -201,7 +202,7 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
         title: "Lecture".to_string(),
         url: Some("/lectures/1924.html".to_string()),
-        date_raw: Some("1924-10-01".to_string()),
+        date_display: dated("1924-10-01", Language::En),
         place: Some("Cambridge".to_string()),
         ..Default::default()
     };
@@ -229,7 +230,7 @@ fn render_child_puts_the_listed_names_after_the_date_and_place() {
         credits: Some(credits.to_string()),
         title: "Lecture".to_string(),
         url: Some("/lectures/1924.html".to_string()),
-        date_raw: Some("1924-10-01".to_string()),
+        date_display: dated("1924-10-01", Language::En),
         place: Some("Cambridge".to_string()),
         ..Default::default()
     };
@@ -253,7 +254,7 @@ fn leaf_meta_separates_credits_from_an_event_time_with_a_span() {
 /// behind a separator span; a non-event row keeps the bare text.
 #[test]
 fn render_child_wraps_an_event_place_in_its_own_span() {
-    let when = crate::build::components::event_meta::render_when(
+    let when = moss_core::event::when::render_when(
         moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
         None,
         crate::i18n::Language::En,
@@ -321,7 +322,7 @@ fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
         title: "June Entry".to_string(),
         url: Some("/writings/journal/june.html".to_string()),
-        date_raw: Some("1793-06".to_string()),
+        date_display: dated("1793-06", Language::En),
         ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
@@ -332,7 +333,7 @@ fn flat_row_shows_year_for_month_precision_date() {
 }
 
 /// When only `date_display` is set (no raw date), it is already the compact
-/// "year · month" form `props_for_document` produced — `render_child` must
+/// "year · month" form `props_for` produced — `render_child` must
 /// pass it through, not re-derive a month-only string from it.
 #[test]
 fn flat_row_passes_through_display_only_date_as_is() {
@@ -355,7 +356,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
         title: "1793 Entry".to_string(),
         url: Some("/writings/journal/year.html".to_string()),
-        date_raw: Some("1793".to_string()),
+        date_display: dated("1793", Language::En),
         ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
@@ -474,7 +475,7 @@ fn test_render_no_date_ignores_minimal_flag() {
     );
 }
 
-// ── props_for_document ─────────────────────────────────────────────────
+// ── props_for ─────────────────────────────────────────────────
 //
 // These behaviours all existed before the hoist, reachable only through
 // `folder_embed::generate_children`. Testing them directly is half of what the
@@ -495,8 +496,49 @@ fn doc(url_path: &str, label: &str) -> ParsedDocument {
     }
 }
 
+/// The build's pass results on a page, handed to the page's `PageFacts` by url path.
+struct FactsHost<'a> {
+    docs: &'a [ParsedDocument],
+    cards: BuildCards<'a>,
+}
+
+impl FactsHost<'_> {
+    fn doc(&self, page: &PageFacts) -> &ParsedDocument {
+        self.docs.iter().find(|d| d.url_path == page.url_path).unwrap()
+    }
+}
+
+impl CardHost<PageFacts> for FactsHost<'_> {
+    fn resolve_url(&self, path: &str) -> String { self.cards.resolve_url(path) }
+    fn typesetting(&self) -> Option<&str> { self.cards.typesetting() }
+    fn now(&self) -> &str { self.cards.now() }
+    fn term_card(&self, page: &PageFacts) -> Option<moss_core::page::card::TermCardFacts> { self.cards.term_card(self.doc(page)) }
+    fn body_cover(&self, page: &PageFacts) -> Option<String> { self.cards.body_cover(self.doc(page)) }
+    fn place_names(&self, page: &PageFacts) -> Option<String> { self.cards.place_names(self.doc(page)) }
+    fn credits(&self, page: &PageFacts) -> Option<String> { self.cards.credits(self.doc(page)) }
+    fn section(&self, page: &PageFacts) -> Option<crate::build::types::SectionAccent> { self.cards.section(self.doc(page)) }
+    fn pictures_after_cover(&self, page: &PageFacts, n: usize) -> Vec<String> { self.cards.pictures_after_cover(self.doc(page), n) }
+}
+
+/// A card's props read from the build's document and from its `PageFacts`,
+/// which must be the same card.
+fn props_at(d: &ParsedDocument, all: &[ParsedDocument], overrides: &HashMap<String, String>, now: chrono::NaiveDateTime) -> ChildItemProps {
+    let built = props_for(d, all, &BuildCards::new(overrides, None, now), None);
+    let facts: Vec<PageFacts> = all.iter().map(PageFacts::from_page).collect();
+    let host = FactsHost { docs: all, cards: BuildCards::new(overrides, None, now) };
+    let from_facts = props_for(&PageFacts::from_page(d), &facts, &host, None);
+    assert_eq!(format!("{built:?}"), format!("{from_facts:?}"));
+    built
+}
+
+/// A dated leaf's `date_display`, as the build's `props_for` writes it.
+fn dated(raw: &str, lang: Language) -> Option<String> {
+    let d = ParsedDocument { date: Some(raw.into()), lang, ..doc("p.html", "P") };
+    props(&d, std::slice::from_ref(&d)).date_display
+}
+
 fn props(d: &ParsedDocument, all: &[ParsedDocument]) -> ChildItemProps {
-    props_for_document(d, all, "", &HashMap::new(), None, chrono::NaiveDateTime::default(), None)
+    props_at(d, all, &HashMap::new(), chrono::NaiveDateTime::default())
 }
 
 #[test]
@@ -584,9 +626,9 @@ fn a_pipe_encoded_cover_resolves_only_its_path_and_keeps_its_attrs() {
     }];
     let mut overrides = HashMap::new();
     overrides.insert("images".to_string(), "media".to_string());
-    let p = props_for_document(&docs[0], &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None);
+    let p = props_at(&docs[0], &docs, &overrides, chrono::NaiveDateTime::default());
     assert_eq!(p.cover.as_deref(), Some("/media/plate.png|crop:top"));
-    assert_eq!(p.cover_type, Some(CoverType::Image));
+    assert_eq!(p.cover_type, Some(moss_core::page::card::CoverType::Image));
 }
 
 #[test]
@@ -660,11 +702,11 @@ fn an_event_card_keeps_its_meta_line_and_takes_the_byline_only_as_description() 
     assert_eq!(a.title, b.title);
 }
 
-/// `props_for_document` reads the page's resolved place straight off
+/// `props_for` reads the page's resolved place straight off
 /// `ParsedDocument::place_names` — the same field `build::terms::set_term_lines`
 /// fills — rather than re-deriving it.
 #[test]
-fn props_for_document_carries_the_resolved_place() {
+fn props_for_carries_the_resolved_place() {
     let docs = vec![ParsedDocument {
         place_names: Some("Kyoto, Osaka".to_string()),
         ..doc("posts/a/index.html", "A")
@@ -673,7 +715,7 @@ fn props_for_document_carries_the_resolved_place() {
 }
 
 #[test]
-fn props_for_document_has_no_place_when_the_page_names_none() {
+fn props_for_has_no_place_when_the_page_names_none() {
     let docs = vec![doc("posts/a/index.html", "A")];
     assert_eq!(props(&docs[0], &docs).place, None);
 }
@@ -781,7 +823,7 @@ fn a_past_event_card_carries_no_tickets_link() {
         ..doc("a/index.html", "A")
     }];
     let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
-    let props_at = |now| props_for_document(&d[0], &d, "", &HashMap::new(), None, now, None);
+    let props_at = |now| props_at(&d[0], &d, &HashMap::new(), now);
     assert!(props_at(at("2026-11-21 23:59")).tickets.is_some());
     assert_eq!(props_at(at("2026-11-22 00:00")).tickets, None);
 }
@@ -833,4 +875,21 @@ fn every_card_style_names_the_file_it_stands_for() {
         None,
     );
     assert!(year_row.starts_with(&format!(r#"<p class="moss-card" {attr}>"#)), "{year_row}");
+}
+
+#[test]
+fn a_listing_date_rejects_a_filename_month_or_day_out_of_range() {
+    use moss_core::page::card::listing_date;
+    assert_eq!(listing_date(&doc("posts/2021-99-09-spring.html", "A")), None);
+    assert_eq!(listing_date(&doc("posts/2021-04-40-spring.html", "B")), None);
+}
+
+#[test]
+fn a_listing_date_takes_an_events_start_over_its_date_over_its_filename() {
+    use moss_core::page::card::listing_date;
+    let mut d = ParsedDocument { date: Some("2020-01-01".into()), ..doc("posts/2021-04-09-spring.html", "A") };
+    assert_eq!(listing_date(&d).as_deref(), Some("2020-01-01"));
+    let start = moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap();
+    d.event = Some(crate::build::types::EventFields { start, end: None, when: "2026-11-01 14:00".into(), timezone: None, status: None, tickets: None, online: None });
+    assert_eq!(listing_date(&d).as_deref(), Some("2026-11-01 14:00"));
 }

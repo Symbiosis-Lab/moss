@@ -181,7 +181,6 @@ pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocume
 /// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
 pub struct EndCards<'a> {
     pub graph: Option<&'a ContentGraph>,
-    pub root_path: &'a str,
     pub dir_overrides: &'a std::collections::HashMap<String, String>,
     pub typesetting: Option<&'a str>,
     pub now: chrono::NaiveDateTime,
@@ -194,7 +193,7 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
     let card = |decl: &FieldDecl, link: &PageLink| {
         let target = linked_page(doc, all_docs, cards.graph, link.target.page()?)?;
         let strip = Some(decl.pictures).filter(|n| *n >= 2);
-        let mut props = child_list::props_for_document(target, all_docs, cards.root_path, cards.dir_overrides, cards.typesetting, cards.now, strip);
+        let mut props = moss_core::page::card::props_for(target, all_docs, &child_list::BuildCards::new(cards.dir_overrides, cards.typesetting, cards.now), strip);
         if let Some(headline) = &target.opening_heading {
             props.title = headline.clone();
         }

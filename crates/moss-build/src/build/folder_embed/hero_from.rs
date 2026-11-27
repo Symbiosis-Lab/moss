@@ -190,7 +190,7 @@ fn draw(
     // An event not yet over is drawn for now; `event-ends.js` swaps in the
     // fallback, kept inert in a template, once a visitor opens the page after
     // the end. The page is rebuilt with the next event at the next build.
-    let ends = page.event.as_ref().and_then(|ev| super::upcoming::ends_if_upcoming(ev.start, ev.end, now));
+    let ends = page.event.as_ref().and_then(|ev| ev.span().ends_if_upcoming(&super::upcoming::minute(now)));
     let html = match ends {
         Some(ends) => format!("{drawn}<template data-hero-ends=\"{ends}\">{}</template>", plan.fallback_html.as_deref().unwrap_or_default()),
         None => drawn,

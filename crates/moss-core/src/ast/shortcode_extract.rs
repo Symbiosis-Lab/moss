@@ -1432,8 +1432,8 @@ fn parse_markdown_image(s: &str) -> Option<(String, String, usize)> {
 
 /// The CommonMark title of a line that starts with a markdown image, if any.
 fn markdown_image_title(line: &str) -> Option<String> {
-    use pulldown_cmark::{Event, Parser, Tag};
-    Parser::new(line).find_map(|e| {
+    use pulldown_cmark::{Event, Options, Tag};
+    super::pulldown(line, Options::empty()).find_map(|e| {
         if let Event::Start(Tag::Image { title, .. }) = e {
             Some(title.to_string()).filter(|t| !t.is_empty())
         } else {

@@ -126,6 +126,12 @@ fn test_format_date_string_standard() {
 }
 
 #[test]
+fn test_format_date_string_invalid() {
+    assert_eq!(format_date_string("invalid"), "invalid");
+    assert_eq!(format_date_string(""), "");
+}
+
+#[test]
 fn test_format_date_string_with_slashes() {
     assert_eq!(format_date_string("2025/09/02"), "2025 · 09");
 }
@@ -135,139 +141,6 @@ fn test_format_date_string_single_digit_month() {
     assert_eq!(format_date_string("2025-9-02"), "2025 · 09");
 }
 
-#[test]
-fn test_format_date_string_invalid() {
-    assert_eq!(format_date_string("invalid"), "invalid");
-    assert_eq!(format_date_string(""), "");
-}
-
-// Tests for extract_raw_date_from_filename
-#[test]
-fn extract_raw_date_from_filename_rejects_out_of_range_month_and_day() {
-    // The hand-rolled version only checked year/month length and digit-ness,
-    // never the numeric range — "99" as a month or "40" as a day slipped
-    // through. Routed through parse_partial_date, both are rejected.
-    assert_eq!(
-        extract_raw_date_from_filename("posts/2021-99-09-spring.html"),
-        None
-    );
-    assert_eq!(
-        extract_raw_date_from_filename("posts/2021-04-40-spring.html"),
-        None
-    );
-}
-
-#[test]
-fn extract_raw_date_from_filename_keeps_full_stem_for_a_slugged_filename() {
-    // The function's contract is the whole pre-".html" stem, not just the
-    // date — a leaf page's filename carries its slug after the date, and
-    // downstream (format_date_string -> parse_partial_date) already ignores
-    // the trailing segment. Routing through the shared parser must not
-    // truncate this.
-    assert_eq!(
-        extract_raw_date_from_filename("posts/2021-04-09-spring.html"),
-        Some("2021-04-09-spring".to_string())
-    );
-}
-
-#[test]
-fn test_extract_date_from_doc_ignores_file_creation_time() {
-    // A file's creation time is not a date the author gave the page: with no
-    // `start`, no `date` and no date in the filename the page is undated.
-    let dir = std::env::temp_dir().join("moss_date_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("友链.md"), "# Friends").unwrap();
-
-    let doc = ParsedDocument {
-        url_path: "you-lian/index.html".to_string(),
-        source_path: Some("友链.md".to_string()),
-        ..Default::default()
-    };
-
-    let (display, raw, explicit) = extract_date_from_doc(&doc, dir.to_str().unwrap());
-    assert_eq!((display.as_str(), raw, explicit), ("Unknown", None, false));
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn test_extract_date_from_doc_frontmatter_takes_priority() {
-    let root_path = "/tmp".to_string();
-
-    let doc = ParsedDocument {
-        title: "Test".to_string(),
-        label: "Test".to_string(),
-        url_path: "test/index.html".to_string(),
-        date: Some("2025-03-11".to_string()),
-        reading_time: 1,
-        slug: "test".to_string(),
-        permalink: "/test/".to_string(),
-        clean_stem: "test".to_string(),
-        kind: moss_core::PageKind::Article,
-        source_path: Some("test.md".to_string()),
-        ..Default::default()
-    };
-
-    let (display, raw, _explicit) = extract_date_from_doc(&doc, &root_path);
-    assert_eq!(
-        display, "2025 · 03",
-        "Frontmatter date should take priority"
-    );
-    assert_eq!(
-        raw,
-        Some("2025-03-11".to_string()),
-        "date_raw should contain the original frontmatter date"
-    );
-}
-
-#[test]
-fn test_extract_date_from_doc_frontmatter_is_explicit() {
-    let root_path = "/tmp".to_string();
-    let doc = ParsedDocument {
-        title: "Test".to_string(),
-        label: "Test".to_string(),
-        url_path: "test/index.html".to_string(),
-        date: Some("2025-03-11".to_string()),
-        reading_time: 1,
-        slug: "test".to_string(),
-        permalink: "/test/".to_string(),
-        clean_stem: "test".to_string(),
-        kind: moss_core::PageKind::Article,
-        source_path: Some("test.md".to_string()),
-        ..Default::default()
-    };
-    let (_display, _raw, is_explicit) = extract_date_from_doc(&doc, &root_path);
-    assert!(is_explicit, "Frontmatter date should be explicit");
-}
-
-#[test]
-fn test_extract_date_from_doc_filesystem_not_explicit() {
-    let dir = std::env::temp_dir().join("moss_explicit_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file_path = dir.join("no-date.md");
-    std::fs::write(&file_path, "# No Date").unwrap();
-    let root_path = dir.to_str().unwrap().to_string();
-    let doc = ParsedDocument {
-        title: "No Date".to_string(),
-        label: "No Date".to_string(),
-        url_path: "no-date/index.html".to_string(),
-        reading_time: 1,
-        slug: "no-date".to_string(),
-        permalink: "/no-date/".to_string(),
-        clean_stem: "no-date".to_string(),
-        kind: moss_core::PageKind::Article,
-        source_path: Some("no-date.md".to_string()),
-        ..Default::default()
-    };
-    let (_display, _raw, is_explicit) = extract_date_from_doc(&doc, &root_path);
-    assert!(
-        !is_explicit,
-        "Filesystem fallback date should NOT be explicit"
-    );
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-// Tests for vertical CJK date formatting
 #[test]
 fn test_format_vertical_cjk_date_full() {
     assert_eq!(

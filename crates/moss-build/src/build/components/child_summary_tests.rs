@@ -23,7 +23,7 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
 /// time, the same as a listing row does.
 #[test]
 fn an_event_card_wraps_its_place_after_the_time() {
-    let when = crate::build::components::event_meta::render_when(
+    let when = moss_core::event::when::render_when(
         moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
         None,
         crate::i18n::Language::En,
@@ -820,7 +820,7 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
 
 fn event_when(start: &str) -> String {
     let start = moss_core::event::EventTime::parse(start).unwrap();
-    crate::build::components::event_meta::render_when(start, None, crate::i18n::Language::En)
+    moss_core::event::when::render_when(start, None, crate::i18n::Language::En)
 }
 
 #[test]
@@ -925,7 +925,7 @@ fn event_summary_card_without_tickets_keeps_its_whole_card_anchor() {
 #[test]
 fn a_card_date_is_a_time_element_carrying_the_full_date() {
     let props = ChildItemProps {
-        date_display: Some(crate::build::components::time_html("March 2026", "2026-03-04")),
+        date_display: Some(moss_core::i18n::dates::time_html("March 2026", "2026-03-04")),
         date_raw: Some("2026-03-04".to_string()),
         ..article_props("Note", "/notes/note/")
     };

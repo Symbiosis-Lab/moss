@@ -1,4 +1,5 @@
 use super::*;
+use moss_core::event::EventTime;
 use crate::build::types::EventFields;
 
 fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
@@ -46,24 +47,6 @@ fn the_page_time_carries_the_listing_date_parts() {
     assert!(element.contains(r#"<span class="moss-when-day">1</span>"#), "{element}");
     assert!(element.contains(r#"<span class="moss-when-time">2:00–4:00 PM</span>"#), "{element}");
     assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00–4:00 PM");
-}
-
-#[test]
-fn clock_collapses_the_meridiem_only_when_shared() {
-    let d = doc("2026-11-01 11:00", Some("2026-11-01 13:00"));
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 11:00 AM–1:00 PM");
-}
-
-#[test]
-fn midnight_and_noon_read_as_twelve() {
-    let d = doc("2026-11-01 00:30", None);
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 12:30 AM");
-}
-
-#[test]
-fn chinese_uses_a_24_hour_clock_and_weekday_after_the_date() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
-    assert_eq!(time_text(&d, Language::ZhHans), "2026年11月1日 星期日 14:00–16:00");
 }
 
 #[test]
@@ -126,41 +109,4 @@ fn an_event_page_prints_its_place_only_when_no_place_line_names_it() {
 #[test]
 fn a_page_without_an_event_renders_nothing() {
     assert!(render(&ParsedDocument::default(), Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).is_none());
-}
-
-#[test]
-fn end_before_start_is_treated_as_no_end() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 09:00"));
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00 PM");
-}
-
-#[test]
-fn the_separator_before_a_clock_time_is_its_own_span() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
-    let element = time_element(&d, Language::En);
-    assert!(
-        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">"#),
-        "{element}"
-    );
-}
-
-#[test]
-fn a_date_only_event_has_no_separator_span() {
-    let d = doc("2026-11-01", None);
-    assert!(!time_element(&d, Language::En).contains("moss-when-sep"));
-}
-
-#[test]
-fn both_date_to_time_separators_of_a_timed_multi_day_range_are_spans() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-03 16:00"));
-    let element = time_element(&d, Language::En);
-    assert_eq!(element.matches(r#"<span class="moss-when-sep">"#).count(), 2, "{element}");
-    assert!(
-        element.contains(r#"<span class="moss-when-time">2:00 PM</span> – <span class="moss-when-weekday">Tuesday</span>"#),
-        "{element}"
-    );
-    assert!(
-        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">4:00 PM</span>"#),
-        "{element}"
-    );
 }

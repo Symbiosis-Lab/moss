@@ -25,10 +25,6 @@
 
 use std::collections::BTreeMap;
 
-use moss_core::content_graph::generate_slug;
-use moss_core::home::is_index_stem_any_lang;
-use moss_core::PageKind;
-
 use crate::build::types::ParsedDocument;
 
 /// Fill in a blank `location:` on every companion page that shares its
@@ -54,99 +50,20 @@ use crate::build::types::ParsedDocument;
 /// fills blanks, never overwrites. The home page's own `location:` is never
 /// touched either way.
 pub fn inherit_work_locations(documents: &mut [ParsedDocument]) {
-    for group in group_by_work(documents).into_values() {
-        let home_location = documents[group.home_idx].location.clone();
-        for i in group.companions {
-            if documents[i].location.is_empty() {
-                documents[i].location = home_location.clone();
-            }
-        }
-    }
+    moss_core::page::inherit::inherit_work_locations(documents, |d| &d.location, |d| &mut d.location);
 }
 
-/// One folder's work grouping: the index (into the caller's `documents`
-/// slice) of the self-named home page, and every other document sharing its
-/// folder — in document order, which is source-path order.
-pub(crate) struct WorkGroup {
-    pub home_idx: usize,
-    pub companions: Vec<usize>,
-}
 
-/// Group `documents` by folder and pick out each folder's work home, using
-/// the design's test verbatim: the folder's real home (`PageKind::Folder`,
-/// the build's own election result) must be self-named to its folder, not
-/// an index-stem winner and not a `home: true` override that landed on a
-/// differently-named file, and the home must name a place. A folder that
-/// fails any of those — including a lone document with no companion, or no
-/// home at all — is simply absent
-/// from the result; every caller's "is this a work" question is answered by
-/// `.contains_key` on the returned map.
-///
-/// The single grouping implementation [`inherit_work_locations`] and the
-/// places-explorer data emitter both build on — see this module's forward
-/// contract above for why the emitter needs the exact same folder/home
-/// election this pass already performs.
+pub(crate) use moss_core::page::inherit::WorkGroup;
+
 pub(crate) fn group_by_work(documents: &[ParsedDocument]) -> BTreeMap<String, WorkGroup> {
-    let mut by_folder: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, doc) in documents.iter().enumerate() {
-        let Some(path) = doc.source_path.as_deref() else { continue };
-        let folder = path.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default();
-        by_folder.entry(folder).or_default().push(i);
-    }
-
-    let mut works = BTreeMap::new();
-    for (folder, indices) in by_folder {
-        // A lone document has no companion to inherit anything.
-        if indices.len() < 2 {
-            continue;
-        }
-        // A folder name is required for the self-named identity check
-        // below (`is_home_file`'s own invariant); root-level documents
-        // (`folder` is empty) can never form a work.
-        let folder_name = folder.rsplit('/').next().unwrap_or("");
-        if folder_name.is_empty() {
-            continue;
-        }
-
-        let Some(home_idx) = indices.iter().copied().find(|&i| documents[i].kind == PageKind::Folder)
-        else {
-            continue;
-        };
-
-        // A home that names no place makes the folder a section for every
-        // caller: nothing to inherit, nothing to group under.
-        if documents[home_idx].location.is_empty() {
-            continue;
-        }
-
-        let home_stem = documents[home_idx]
-            .source_path
-            .as_deref()
-            .and_then(|p| p.rsplit('/').next())
-            .and_then(|f| std::path::Path::new(f).file_stem())
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        // Index-stem winner (`index.md`, `readme.md`, a language-suffixed
-        // form, ...): this folder is a section, not a work.
-        if is_index_stem_any_lang(home_stem) {
-            continue;
-        }
-        // Not index-stem and not self-named means a `home: true` marker
-        // promoted a file that shares neither name with its folder — also
-        // not a work.
-        if generate_slug(home_stem) != generate_slug(folder_name) {
-            continue;
-        }
-
-        let companions = indices.into_iter().filter(|&i| i != home_idx).collect();
-        works.insert(folder, WorkGroup { home_idx, companions });
-    }
-    works
+    moss_core::page::inherit::work_groups(documents, |d| &d.location)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moss_core::PageKind;
 
     fn doc(source_path: &str, location: &[&str], kind: PageKind) -> ParsedDocument {
         ParsedDocument {

@@ -184,7 +184,7 @@ fn parse_doc_date(d: &ParsedDocument, bound: DateBound) -> Option<DateTime<Utc>>
     //    allows dating a page to the month or year alone. `bound` picks which
     //    end of the range the missing month/day resolves to; sorting and the
     //    `since:` filter want different ends (see `DateBound`).
-    let pd = crate::build::components::date::parse_partial_date(raw)?;
+    let pd = moss_core::date::parse_partial_date(raw)?;
     let naive_date = match bound {
         DateBound::Earliest => pd.earliest(),
         DateBound::Latest => pd.latest(),

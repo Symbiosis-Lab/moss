@@ -403,6 +403,19 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(month <= 2), month, day)
 }
 
+/// The weekday of a proleptic Gregorian date, Monday first (0 to 6), by the
+/// inverse of [`civil_from_days`]: 1970-01-01 was a Thursday.
+pub fn weekday_from_monday(year: i64, month: u32, day: u32) -> u32 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = i64::from(if month > 2 { month - 3 } else { month + 9 });
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    (days + 3).rem_euclid(7) as u32
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -415,6 +428,18 @@ mod tests {
         assert_eq!(civil_from_days(47_540), (2100, 2, 28));
         assert_eq!(civil_from_days(47_541), (2100, 3, 1));
         assert_eq!(civil_from_days(20_764), (2026, 11, 7));
+    }
+
+    #[test]
+    fn weekdays_count_from_monday_across_the_epoch_leap_days_and_2100() {
+        use super::weekday_from_monday;
+        assert_eq!(weekday_from_monday(1970, 1, 1), 3);
+        assert_eq!(weekday_from_monday(1969, 12, 31), 2);
+        assert_eq!(weekday_from_monday(2000, 2, 29), 1);
+        assert_eq!(weekday_from_monday(2026, 11, 1), 6);
+        assert_eq!(weekday_from_monday(2026, 11, 2), 0);
+        assert_eq!(weekday_from_monday(2100, 3, 1), 0);
+        assert_eq!(weekday_from_monday(1, 1, 1), 0);
     }
 
     use super::*;

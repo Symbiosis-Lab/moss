@@ -24,7 +24,7 @@ use super::frontmatter::{
 };
 use super::html_post::{
     adjust_relative_paths_for_pretty_urls, inject_article_title_h1,
-    prepare_markdown_source, resolve_to_root_relative,
+    prepare_markdown_source,
 };
 
 /// The text the parser reads for a whole file: its body with CriticMarkup
@@ -1334,82 +1334,8 @@ pub fn process_markdown_file(
     // Extract analytics configuration from frontmatter
     let analytics = frontmatter.analytics;
 
-    // Extract cover image from frontmatter and resolve to root-relative path.
-    // After the resolve phase, wikilinks are already resolved to paths
-    // (possibly with |attrs appended). The wikilink fallback handles direct
-    // process_markdown_file calls that bypass the resolve phase.
-    //
-    // Pipe-aware: split on | to separate path from display attrs, resolve
-    // only the path part, then rejoin with attrs for downstream rendering.
     let cover_opted_out = frontmatter.cover.as_deref().is_some_and(|c| c.trim() == "false");
-    let cover = frontmatter.cover.filter(|_| !cover_opted_out).map(|c| {
-        let trimmed = c.trim();
-        // Strip optional surrounding quotes. A lone `"` is not a quoted empty
-        // string — `strip_prefix`/`strip_suffix` require two distinct quotes,
-        // where the old start/end test accepted one and then sliced `1..0`.
-        let unquoted = trimmed
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .or_else(|| {
-                trimmed
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''))
-            })
-            .unwrap_or(trimmed);
-        // Embed wikilink: strip ![[...]] — pipe content = display params (preserved)
-        // Regular wikilink: strip [[...]] — pipe content = alias (discarded per Obsidian convention)
-        let (is_embed, wikilink_inner) = if let Some(inner) = unquoted
-            .strip_prefix("![[")
-            .and_then(|s| s.strip_suffix("]]"))
-        {
-            (true, inner)
-        } else if let Some(inner) = unquoted
-            .strip_prefix("[[")
-            .and_then(|s| s.strip_suffix("]]"))
-        {
-            (false, inner)
-        } else {
-            (false, "")
-        };
-        let resolved_path = if !wikilink_inner.is_empty() {
-            let inner = wikilink_inner;
-            // Split on | to separate path from pipe content
-            let (path_part, attrs_str) = moss_core::media::split_pipe(inner);
-            let resolved = path_part.trim_start_matches('/').to_string();
-            // Only preserve pipe attrs for embed syntax (![[...|attrs]])
-            // For regular wikilinks ([[...|alias]]), discard the alias
-            if is_embed && !attrs_str.is_empty() {
-                format!("{}|{}", resolved, attrs_str)
-            } else {
-                resolved
-            }
-        } else if let Some((alt_section, url_part)) = unquoted
-            // Inline image syntax: ![alt|params](url)
-            .strip_prefix("![")
-            .and_then(|s| s.strip_suffix(')'))
-            .and_then(|s| s.rsplit_once("]("))
-        {
-            // Extract attrs from alt text (after pipe)
-            let attrs_str = alt_section.split_once('|').map_or("", |(_, attrs)| attrs);
-
-            let resolved = resolve_to_root_relative(url_part, &url_path);
-            if attrs_str.is_empty() {
-                resolved
-            } else {
-                format!("{}|{}", resolved, attrs_str)
-            }
-        } else {
-            // Plain or relative path — split on | before resolving
-            let (path_part, attrs_str) = moss_core::media::split_pipe(unquoted);
-            let resolved = resolve_to_root_relative(path_part, &url_path);
-            if attrs_str.is_empty() {
-                resolved
-            } else {
-                format!("{}|{}", resolved, attrs_str)
-            }
-        };
-        resolved_path
-    });
+    let cover = frontmatter.cover.as_deref().and_then(|c| moss_core::page::card::frontmatter_cover(c, &url_path));
 
     let card_cover = (!cover_opted_out)
         .then(|| crate::build::page::cover::card_cover_from_page(hero_image_url.as_deref(), body_cover_path.as_deref()))

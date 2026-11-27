@@ -5,52 +5,7 @@
 
 use moss_core::render::image::Loading;
 
-/// The type of media used for a cover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoverType {
-    Image,
-    Video,
-    Iframe,
-}
-
-impl CoverType {
-    pub fn resolve(cover: Option<&str>, explicit: Option<CoverType>) -> Option<Self> {
-        cover.map(|_| explicit.unwrap_or(CoverType::Image))
-    }
-}
-
-/// Detect the cover type from a URL's file extension, with optional explicit override.
-///
-/// If `explicit` is provided, it takes priority:
-/// - `"video"` → `Video`
-/// - `"iframe"` → `Iframe`
-/// - anything else → `Image`
-///
-/// Otherwise, the extension of `url` is used:
-/// - `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.avif`, `.svg` → `Image`
-/// - `.mp4`, `.webm`, `.mov` → `Video`
-/// - `.html`, `.htm` → `Iframe`
-/// - unknown or missing extension → `Image`
-pub fn detect_cover_type(url: &str, explicit: Option<&str>) -> CoverType {
-    if let Some(e) = explicit {
-        return match e.to_ascii_lowercase().as_str() {
-            "video" => CoverType::Video,
-            "iframe" => CoverType::Iframe,
-            _ => CoverType::Image,
-        };
-    }
-
-    // Strip query string and fragment before extracting extension
-    let path = url.split(['?', '#']).next().unwrap_or(url);
-    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-
-    match ext.as_str() {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "svg" => CoverType::Image,
-        "mp4" | "webm" | "mov" | "m4v" => CoverType::Video,
-        "html" | "htm" => CoverType::Iframe,
-        _ => CoverType::Image,
-    }
-}
+pub use moss_core::page::card::{detect_cover_type, CoverType};
 
 /// Render the appropriate HTML for a cover element.
 ///

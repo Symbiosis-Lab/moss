@@ -188,7 +188,7 @@ impl PageChromeContext<'_, '_> {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
             }
-            body_attrs.push_str(&format!(r#" style="{}""#, escape_html_attr(&crate::build::scan::section_text::section_style(section))));
+            body_attrs.push_str(&format!(r#" style="{}""#, escape_html_attr(&section.style())));
         }
         let homepage = self.project.homepage_file.as_ref()
             .and_then(|_| self.documents.iter().find(|d| d.url_path == "index.html"));

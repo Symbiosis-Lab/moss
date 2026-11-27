@@ -2,6 +2,7 @@
 //! the language set, the string table and Chinese numerals. Pure tables, so
 //! the build and every host draw the same words.
 
+pub mod dates;
 pub mod filename;
 pub mod link;
 pub mod numerals;
@@ -338,4 +339,28 @@ fn declared_only(
     }
 
     None
+}
+
+/// A folder card's article count as displayed text: `3 articles`, `三篇`.
+/// Chinese numerals only under vertical CJK: an Arabic digit in a vertical
+/// run is laid on its side.
+pub fn article_count_label(lang: Language, count: usize, typesetting: Option<&str>) -> String {
+    let counter = if count == 1 { t(lang, "article_counter_singular") } else { t(lang, "article_counter") };
+    if use_cjk_numerals(typesetting, lang) {
+        format!("{}{}", numerals::to_chinese_numeral(count), counter)
+    } else {
+        format!("{} {}", count, counter)
+    }
+}
+
+/// A folder card's count text under the listing's `children_count:` setting,
+/// or `None` when it hides the count. No setting is the built-in
+/// [`article_count_label`]; a custom text takes its `{n}` in the same
+/// numerals the built-in one would use.
+pub fn card_count_label(lang: Language, count: usize, typesetting: Option<&str>, setting: Option<&crate::frontmatter_union::ChildrenCount>) -> Option<String> {
+    let Some(setting) = setting else {
+        return Some(article_count_label(lang, count, typesetting));
+    };
+    let number = if use_cjk_numerals(typesetting, lang) { numerals::to_chinese_numeral(count) } else { count.to_string() };
+    setting.render(count, &number)
 }

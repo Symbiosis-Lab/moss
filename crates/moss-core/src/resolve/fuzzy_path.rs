@@ -760,8 +760,8 @@ mod tests {
     }
 
     fn md_dest_of(src: &str) -> Option<String> {
-        use pulldown_cmark::{Event, Parser, Tag};
-        Parser::new(src).find_map(|ev| {
+        use pulldown_cmark::{Event, Options, Tag};
+        crate::ast::pulldown(src, Options::empty()).find_map(|ev| {
             if let Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) = ev {
                 Some(dest_url.to_string())
             } else {

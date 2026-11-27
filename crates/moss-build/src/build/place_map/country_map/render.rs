@@ -99,7 +99,7 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
     let (height, project) = projection::frame(WIDTH);
     let n = model.spec.levels.len();
     let by_country: std::collections::HashMap<usize, &super::resolve::Row> = model.rows.iter().map(|r| (r.country, r)).collect();
-    let stamp = date.map(|d| (d, t(lang, "country_map_as_of").replace("{date}", &crate::build::components::date::format_display_date(d, lang, None))));
+    let stamp = date.map(|d| (d, t(lang, "country_map_as_of").replace("{date}", &moss_core::i18n::dates::format_display_date(d, lang, None))));
 
     let vars = shares(n);
 

@@ -75,6 +75,8 @@ pub trait SitePage: SortableDoc + SortableLabel {
     fn event_span(&self) -> Option<EventSpan>;
     /// A `start:` with no usable value: an event still waiting for its date.
     fn awaits_event_date(&self) -> bool;
+    /// The page's own facts a listing's card reads.
+    fn card_facts(&self) -> std::borrow::Cow<'_, super::card::CardFacts>;
 
     /// A partial that says `listed: true`: a row in its own folder's listings
     /// with no page behind it. Only folder listings take it; every surface
@@ -133,7 +135,7 @@ pub trait SitePage: SortableDoc + SortableLabel {
 /// Every fact a whole-site pass reads about one page, as owned values. A host
 /// builds these from the site's texts; the build's documents produce the same
 /// through [`PageFacts::from_page`], so a test can hold the two equal.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PageFacts {
     pub url_path: String,
     /// The event `start` if the page has one, else its `date`.
@@ -176,6 +178,7 @@ pub struct PageFacts {
     pub children_limit: Option<u32>,
     pub event: Option<EventSpan>,
     pub awaits_event_date: bool,
+    pub card: super::card::CardFacts,
 }
 
 impl PageFacts {
@@ -221,6 +224,7 @@ impl PageFacts {
             children_limit: page.children_limit(),
             event: page.event_span(),
             awaits_event_date: page.awaits_event_date(),
+            card: page.card_facts().into_owned(),
         }
     }
 }
@@ -272,6 +276,7 @@ impl SitePage for PageFacts {
     fn children_limit(&self) -> Option<u32> { self.children_limit }
     fn event_span(&self) -> Option<EventSpan> { self.event }
     fn awaits_event_date(&self) -> bool { self.awaits_event_date }
+    fn card_facts(&self) -> std::borrow::Cow<'_, super::card::CardFacts> { std::borrow::Cow::Borrowed(&self.card) }
 }
 
 /// Every page of the site as the build sees it once all pages are read: its
@@ -348,6 +353,7 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     }
 
     apply_folder_cascades(&mut pages, &cascades);
+    super::inherit::inherit_work_locations(&mut pages, |p| &p.card.location, |p| &mut p.card.location);
 
     let sorts: Vec<(usize, ResolvedSort)> = crate::sort::direct_children_sorts(&pages).into_iter().map(|(i, s, _)| (i, s)).collect();
     for (i, sort) in sorts {
@@ -622,6 +628,19 @@ fn one_page(
     let order_match_name = crate::sort::order_match_name(is_folder_index, Some(path), &url_path, &clean_stem).to_string();
     let nav_label = fm.nav_label.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
     let nav_link = super::nav::nav_link(fm.external_url.as_deref()).map(str::to_string);
+    let pageless = fm.partial == Some(true) && fm.listed == Some(true);
+    let card = super::card::CardFacts {
+        posted_date: fm.date.clone(),
+        text: super::card::card_text(fm.description.as_deref(), fm.byline.as_ref().and_then(|b| b.first()).map(String::as_str)),
+        cover: fm.cover.as_deref().and_then(|c| super::card::frontmatter_cover(c, path)),
+        cover_type: fm.cover_type.clone(),
+        outlet: super::card::outlet_href(fm.external_url.as_deref(), pageless),
+        kicker: fm.publisher.clone().filter(|s| !s.is_empty()),
+        location: fm.location.clone().unwrap_or_default(),
+        tickets: event.and(fm.tickets.clone()),
+        online: event.and(fm.online.clone()),
+        subtitle: super::card::trimmed(fm.subtitle.as_deref()),
+    };
     let page = PageFacts {
         date: event_when.or(fm.date),
         weight: fm.weight,
@@ -663,6 +682,7 @@ fn one_page(
         awaits_event_date: false,
         event,
         url_path,
+        card,
     };
     (page, lang_tag)
 }

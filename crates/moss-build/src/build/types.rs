@@ -43,30 +43,15 @@ impl EventFields {
             online: fm.online.clone(),
         })
     }
+
+    pub fn span(&self) -> moss_core::event::EventSpan {
+        moss_core::event::EventSpan { start: self.start, end: self.end }
+    }
 }
 
-/// The accent a folder's `color:` gives the pages under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SectionAccent {
-    /// The validated colour, as written (`#rgb` or `#rrggbb`).
-    pub color: String,
-    /// The same hue as a text colour on the default light page, `#rrggbb`.
-    pub text_light: String,
-    /// The same hue as a text colour on the default dark page, `#rrggbb`.
-    pub text_dark: String,
-    /// The coloured folder's own url path segment; empty for the site root.
-    pub segment: String,
-}
+pub use moss_core::page::card::SectionAccent;
 
-/// The count and picture a term's pseudo-folder card shows.
-#[derive(Debug, Clone, Default)]
-pub struct TermCard {
-    pub count: usize,
-    pub cover: Option<String>,
-    /// The term kind's `count` wording for the card's language; `None` keeps the
-    /// default. Set by `terms::set_term_cards`.
-    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
-}
+pub use moss_core::page::card::TermCardFacts;
 
 /// Parsed markdown document with frontmatter and content.
 ///
@@ -146,7 +131,7 @@ pub struct ParsedDocument {
     /// the first member in the term page's order. Set by `terms::set_term_cards`.
     #[serde(skip)]
     #[specta(skip)]
-    pub term_card: Option<TermCard>,
+    pub term_card: Option<TermCardFacts>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
@@ -1312,6 +1297,21 @@ impl moss_core::page::site_page::SitePage for ParsedDocument {
     fn children_limit(&self) -> Option<u32> { self.children_limit }
     fn event_span(&self) -> Option<moss_core::event::EventSpan> { self.event.as_ref().map(|e| moss_core::event::EventSpan { start: e.start, end: e.end }) }
     fn awaits_event_date(&self) -> bool { self.event.is_none() && self.raw_frontmatter.contains_key("start") }
+    fn card_facts(&self) -> std::borrow::Cow<'_, moss_core::page::card::CardFacts> {
+        let str_field = |key: &str| self.raw_frontmatter.get(key).and_then(|v| v.as_str());
+        std::borrow::Cow::Owned(moss_core::page::card::CardFacts {
+            posted_date: self.date.clone(),
+            text: crate::build::components::child_list::explicit_card_text(self),
+            cover: self.cover.clone(),
+            cover_type: self.cover_type.clone(),
+            outlet: moss_core::page::card::outlet_href(str_field("external_url"), self.is_pageless_entry()),
+            kicker: str_field("publisher").filter(|s| !s.is_empty()).map(str::to_string),
+            location: self.location.clone(),
+            tickets: self.event.as_ref().and_then(|e| e.tickets.clone()),
+            online: self.event.as_ref().and_then(|e| e.online.clone()),
+            subtitle: crate::build::components::child_list::card_subtitle(self),
+        })
+    }
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

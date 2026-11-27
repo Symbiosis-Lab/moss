@@ -51,7 +51,7 @@ fn percent_encode_feed_url(url: &str) -> String {
 /// and a feed entry with a coarse timestamp orders better than one with none.
 /// Returns None if the date cannot be parsed.
 fn date_to_rfc822(date_str: &str) -> Option<String> {
-    let pd = crate::build::components::date::parse_partial_date(date_str)?;
+    let pd = moss_core::date::parse_partial_date(date_str)?;
     let year = pd.year;
     let month = pd.month.unwrap_or(1);
     let day = pd.day.unwrap_or(1);

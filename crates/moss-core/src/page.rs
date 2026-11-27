@@ -12,6 +12,7 @@ pub mod nav;
 pub mod page_map;
 pub mod inherit;
 pub mod excerpt;
+pub mod card;
 pub use site_sources::{site_bundle, site_text_paths, home_file, SiteSources, PluginSource, Admission};
 
 use crate::ast::{self, DefaultHooks, ParseConfig};

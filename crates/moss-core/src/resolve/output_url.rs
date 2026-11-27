@@ -120,6 +120,45 @@ pub fn to_pretty_url(file_path: &str) -> String {
     }
 }
 
+/// A path written on the page at `doc_url_path`, as a path from the site root,
+/// so it works on any page that shows it (a cover on the home page's listing).
+///
+/// # Examples
+/// - cover "../../assets/img.jpg" from doc "articles/travel/index.html" → "assets/img.jpg"
+/// - cover "assets/img.jpg" from doc "index.html" → "assets/img.jpg"
+/// - cover "https://example.com/img.jpg" from any doc → "https://example.com/img.jpg" (unchanged)
+pub fn resolve_to_root_relative(path: &str, doc_url_path: &str) -> String {
+    // Skip absolute URLs and already root-relative paths
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
+    }
+    // Leading `/` means site root — strip it to get a root-relative path
+    if let Some(stripped) = path.strip_prefix('/') {
+        return stripped.to_string();
+    }
+
+    // Get document directory parts from url_path
+    let doc_dir: Vec<&str> = doc_url_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Resolve the relative path against the document directory
+    let mut parts = doc_dir.clone();
+    for segment in path.split('/') {
+        match segment {
+            ".." => { parts.pop(); }
+            "." | "" => {}
+            other => { parts.push(other); }
+        }
+    }
+
+    parts.join("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

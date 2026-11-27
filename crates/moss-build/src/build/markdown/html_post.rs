@@ -208,47 +208,7 @@ fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
 }
 
 
-/// Resolve a relative path (e.g., "../../assets/img.jpg") to a root-relative path
-/// by resolving it against the document's directory derived from its url_path.
-///
-/// This ensures cover images stored relative to their collection directory
-/// are resolved to root-relative paths that work on any page (e.g., homepage).
-///
-/// # Examples
-/// - cover "../../assets/img.jpg" from doc "articles/travel/index.html" → "assets/img.jpg"
-/// - cover "assets/img.jpg" from doc "index.html" → "assets/img.jpg"
-/// - cover "https://example.com/img.jpg" from any doc → "https://example.com/img.jpg" (unchanged)
-pub(crate) fn resolve_to_root_relative(path: &str, doc_url_path: &str) -> String {
-    // Skip absolute URLs and already root-relative paths
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return path.to_string();
-    }
-    // Leading `/` means site root — strip it to get a root-relative path
-    if let Some(stripped) = path.strip_prefix('/') {
-        return stripped.to_string();
-    }
-
-    // Get document directory parts from url_path
-    let doc_dir: Vec<&str> = doc_url_path
-        .rsplit_once('/')
-        .map(|(dir, _)| dir)
-        .unwrap_or("")
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    // Resolve the relative path against the document directory
-    let mut parts = doc_dir.clone();
-    for segment in path.split('/') {
-        match segment {
-            ".." => { parts.pop(); }
-            "." | "" => {}
-            other => { parts.push(other); }
-        }
-    }
-
-    parts.join("/")
-}
+pub(crate) use moss_core::resolve::output_url::resolve_to_root_relative;
 
 /// True if `token` is a valid srcset width (`400w`) or density (`2x`) or
 /// height (`800h`) descriptor.

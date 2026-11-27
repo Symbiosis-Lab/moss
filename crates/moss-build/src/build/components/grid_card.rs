@@ -4,7 +4,7 @@
 //! Cards display cover image on top, with title and article count on the same row below.
 //!
 //! The input is [`ChildItemProps`], the one reading of a page every card
-//! surface shares (`child_list::props_for_document`). This module used to own
+//! surface shares (`moss_core::page::card::props_for`). This module used to own
 //! a second struct, `FolderCardProps`, describing the same page in its own
 //! vocabulary; the two producers that filled it — the `children_style: grid`
 //! listing and the hand-picked `:::grid` card — each re-derived every field
@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use super::child_list::{self, event_card_links, ChildItemProps};
-use crate::i18n::{self, Language};
+use crate::i18n::Language;
 use crate::build::media::cover::{self, html_escape, CoverType};
 use moss_core::render::image::Loading;
 use crate::build::page::meta::render_description_html_in_link;
@@ -126,7 +126,7 @@ pub fn render_item_with_typesetting(
         .iter()
         .map(|c| format!("--item-cover-color: {}", html_escape(c)))
         .chain(cover_ratio.iter().filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| format!("--item-cover-ratio: {w} / {h}")))
-        .chain(props.section_color.iter().map(|a| html_escape(&crate::build::scan::section_text::section_style(a))))
+        .chain(props.section_color.iter().map(|a| html_escape(&a.style())))
         .collect();
     let cover_color_attrs = format!(
         "{}{}",

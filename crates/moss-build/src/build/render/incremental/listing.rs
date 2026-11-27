@@ -141,7 +141,7 @@ impl ListingGroups {
         let all_refs: Vec<&ParsedDocument> = documents.iter().collect();
         let projections: HashMap<&str, Projected> = documents
             .par_iter()
-            .map(|doc| (doc.url_path.as_str(), project_child(doc, &all_refs, project, math)))
+            .map(|doc| (doc.url_path.as_str(), project_child(doc, &all_refs, math)))
             .collect();
 
         let mut keys: BTreeMap<String, GroupKey> = BTreeMap::new();
@@ -251,12 +251,9 @@ struct ChildProjection<'a> {
     /// two levels down reorders its parent's hosts.
     leads: bool,
     folder_latest_date: Option<String>,
-    /// `extract_date_from_doc` reaches past frontmatter into filename and
-    /// filesystem fallbacks, so `date_raw` can be `Some` where `doc.date` is
-    /// `None`.
-    date_display: String,
+    /// Reaches past frontmatter into the filename, so it can be `Some` where
+    /// `doc.date` is `None`; the row's date display is a function of it.
     date_raw: Option<String>,
-    date_explicit: bool,
     /// Kept as a borrow so the hash covers the identity the group orders by.
     url_path: &'a str,
 }
@@ -271,7 +268,6 @@ struct Projected {
 fn project_child(
     doc: &ParsedDocument,
     all_refs: &[&ParsedDocument],
-    project: &ProjectStructure,
     math: bool,
 ) -> Projected {
     let mut stripped = doc.clone();
@@ -296,11 +292,9 @@ fn project_child(
 
     // The card's own facts, so the digest moves when the card does: a page
     // added two levels down re-renders every host of this card.
-    let (article_count, leads) = crate::build::page::page::folder_card_facts(doc, all_refs);
-    let folder_latest_date = article_count
-        .and_then(|_| crate::build::folder_embed::folder_latest_date(doc, all_refs, &project.root_path));
-    let (date_display, date_raw, date_explicit) =
-        crate::build::components::extract_date_from_doc(doc, &project.root_path);
+    let (article_count, leads) = moss_core::page::card::folder_card_facts(doc, all_refs, doc.term_card.is_some());
+    let folder_latest_date = article_count.and_then(|_| moss_core::page::card::folder_latest_date(doc, all_refs));
+    let date_raw = moss_core::page::card::listing_date(doc);
 
     let resolved_excerpt = card_excerpt(doc, math);
     let rich = is_rich(doc, &resolved_excerpt);
@@ -310,9 +304,7 @@ fn project_child(
         child_count: article_count,
         leads,
         folder_latest_date,
-        date_display,
         date_raw,
-        date_explicit,
         url_path: &doc.url_path,
     });
     Projected { hash, rich }

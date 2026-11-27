@@ -4,7 +4,7 @@
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::types::ParsedDocument;
-use moss_core::event::{EventSpan, EventTime};
+use moss_core::event::EventSpan;
 use std::collections::HashSet;
 
 /// True for an event that has not ended at `now`: see [`EventSpan::ends_at`]. Ordinary
@@ -13,50 +13,9 @@ pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> b
     moss_core::page::listing::is_upcoming(doc, &minute(now))
 }
 
-/// The test behind [`is_upcoming`], for callers that hold an event's times
-/// rather than its page.
-pub(crate) fn span_is_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> bool {
-    ends_if_upcoming(start, end, now).is_some()
-}
-
-/// [`EventSpan::ends_at`] while the event has not ended at `now`, else `None`.
-pub(crate) fn ends_if_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> Option<String> {
-    EventSpan { start, end }.ends_if_upcoming(&minute(now))
-}
-
 /// `now` as the minute an event's end is compared with.
 pub(crate) fn minute(now: chrono::NaiveDateTime) -> String {
     now.format("%Y-%m-%dT%H:%M").to_string()
-}
-
-/// Where an event stands at `now`, as its page meta, card and row publish it.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum EventWhen {
-    /// Not ended; `ends` is [`EventSpan::ends_at`], read by `event-ends.js` to turn the
-    /// element past in the browser at that minute.
-    Upcoming { ends: String },
-    Past,
-}
-
-impl EventWhen {
-    pub(crate) fn of(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> Self {
-        ends_if_upcoming(ev.start, ev.end, now).map_or(Self::Past, |ends| Self::Upcoming { ends })
-    }
-
-    /// ` data-when="…"`, with ` data-ends="…"` while upcoming.
-    pub(crate) fn attrs(&self) -> String {
-        match self {
-            Self::Upcoming { ends } => format!(r#" data-when="upcoming" data-ends="{ends}""#),
-            Self::Past => r#" data-when="past""#.to_string(),
-        }
-    }
-}
-
-/// The event's `tickets:` address while it has not ended. A past event sells
-/// nothing, so every page, card and row that draws a Tickets link asks here.
-/// `online:` is not gated: after an event it is often the recording.
-pub(crate) fn open_tickets(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> Option<&str> {
-    ev.tickets.as_deref().filter(|_| span_is_upcoming(ev.start, ev.end, now))
 }
 
 /// The `url_path`s of the upcoming events among `docs`; empty unless `group`
@@ -157,8 +116,8 @@ mod tests {
         let start = EventTime::DateTime(2026, 10, 8, 19, 0);
         let end = Some(EventTime::DateTime(2026, 10, 8, 21, 30));
         let at = |h, m| chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap().and_hms_opt(h, m, 0).unwrap();
-        assert!(span_is_upcoming(start, end, at(21, 29)));
-        assert!(!span_is_upcoming(start, end, at(21, 30)));
+        assert!(EventSpan { start, end }.is_upcoming(&minute(at(21, 29))));
+        assert!(!EventSpan { start, end }.is_upcoming(&minute(at(21, 30))));
         assert_eq!(EventSpan { start, end }.ends_at(), "2026-10-08T21:30");
     }
 
@@ -167,7 +126,7 @@ mod tests {
         let day = EventTime::Date(2026, 12, 31);
         assert_eq!(EventSpan { start: day, end: None }.ends_at(), "2027-01-01T00:00");
         let at = |y, m, d, h, min| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, min, 0).unwrap();
-        assert!(span_is_upcoming(day, None, at(2026, 12, 31, 23, 59)));
-        assert!(!span_is_upcoming(day, None, at(2027, 1, 1, 0, 0)));
+        assert!(EventSpan { start: day, end: None }.is_upcoming(&minute(at(2026, 12, 31, 23, 59))));
+        assert!(!EventSpan { start: day, end: None }.is_upcoming(&minute(at(2027, 1, 1, 0, 0))));
     }
 }

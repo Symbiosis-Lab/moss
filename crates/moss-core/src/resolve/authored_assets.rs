@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use pulldown_cmark::{Event, LinkType, Parser, Tag};
+use pulldown_cmark::{Event, LinkType, Tag};
 
 use crate::resolve::md_extract::{extract_md_references, RawRef, RefSyntax};
 use crate::resolve::reference::{classify_reference_verdict, ReferenceContext, ResolvedReference};
@@ -161,7 +161,7 @@ struct ParsedSpans {
 
 fn parsed_spans(source: &str, parse_config: &crate::ast::parser::ParseConfig) -> ParsedSpans {
     let mut parser =
-        Parser::new_ext(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
+        crate::ast::pulldown(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
     let mut spans = ParsedSpans { image_definitions: HashSet::new(), literal_html: Vec::new() };
     while let Some((event, range)) = parser.next() {
         // allow:math-events-ignored — only the source span of an HTML block and

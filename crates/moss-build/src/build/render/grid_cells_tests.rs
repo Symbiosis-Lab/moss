@@ -18,7 +18,7 @@ fn make_doc(title: &str, url_path: &str, cover: Option<&str>) -> ParsedDocument 
     }
 }
 
-/// A folder note. `props_for_document` counts children only for a
+/// A folder note. `props_for` counts children only for a
 /// `PageKind::Folder`, which is what page_map makes every folder note.
 fn make_folder(title: &str, url_path: &str, cover: Option<&str>) -> ParsedDocument {
     ParsedDocument { kind: PageKind::Folder, ..make_doc(title, url_path, cover) }
@@ -473,9 +473,8 @@ fn collection_cells_render_through_the_grid_card_emitter() {
     let overrides = HashMap::new();
     let mut loading = crate::build::components::grid_card::CoverLoading::new(false);
     for doc in &docs {
-        let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None,
-        );
+        let cards = crate::build::components::child_list::BuildCards::new(&overrides, None, chrono::NaiveDateTime::default());
+        let props = moss_core::page::card::props_for(doc, &docs, &cards, None);
         // `list_has_covers=true`: "Ink Study" has a cover, so "Works" (the
         // other cell, coverless) must render through the quote-slot branch,
         // not the bare `.moss-card-no-cover` placeholder — see
@@ -1248,9 +1247,8 @@ fn summary_cells_render_through_the_summary_card_emitter() {
 
     let overrides = HashMap::new();
     for doc in &docs {
-        let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None,
-        );
+        let cards = crate::build::components::child_list::BuildCards::new(&overrides, None, chrono::NaiveDateTime::default());
+        let props = moss_core::page::card::props_for(doc, &docs, &cards, None);
         let expected = crate::build::components::child_summary::render_with_sort(
             &props,
             Language::En,

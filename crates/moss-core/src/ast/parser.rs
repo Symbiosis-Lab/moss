@@ -145,6 +145,15 @@ impl Default for ParseConfig<'_> {
     }
 }
 
+/// What a core parse does with a reference that has no definition. Every core
+/// parse takes this one `fn` type, so pulldown's parser is compiled once.
+pub type BrokenLinks = for<'a> fn(pulldown_cmark::BrokenLink<'a>) -> Option<(pulldown_cmark::CowStr<'a>, pulldown_cmark::CowStr<'a>)>;
+
+/// pulldown's parser over `source`, leaving an undefined reference as text.
+pub fn pulldown(source: &str, options: Options) -> Parser<'_, BrokenLinks> {
+    Parser::new_with_broken_link_callback(source, options, None)
+}
+
 /// **The** pulldown-cmark option set moss parses markdown with.
 ///
 /// Every parser construction site in the repo must call this rather than
@@ -280,7 +289,7 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // Offsets are always collected: source-line tracking reads them, and so
     // does the alt-only image rule (it needs the bracket text as written).
     let (events, offsets): (Vec<Event<'_>>, Vec<std::ops::Range<usize>>) =
-        Parser::new_ext(&source, options).into_offset_iter().unzip();
+        pulldown(&source, options).into_offset_iter().unzip();
     let (events, offsets, capped_at) = cap_nesting(events, offsets);
 
     // Lines are counted in `source`, the text pulldown-cmark reads. Extraction

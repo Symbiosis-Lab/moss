@@ -5,6 +5,7 @@
 
 pub mod time;
 pub mod validation;
+pub mod when;
 
 pub use time::EventTime;
 

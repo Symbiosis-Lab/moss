@@ -59,6 +59,56 @@ pub fn hidden_homes<'a>(pages: impl IntoIterator<Item = (&'a str, bool)>) -> Vec
         .collect()
 }
 
+/// One folder's work: the index of its self-named home page, and every other
+/// page sharing its folder, in the caller's order.
+pub struct WorkGroup {
+    pub home_idx: usize,
+    pub companions: Vec<usize>,
+}
+
+/// The site's works, by folder: a folder whose home is its self-named file
+/// (not an index stem, not a `home: true` file of another name) and names a
+/// place (`location` non-empty). Its other pages are the work's companions.
+pub fn work_groups<P: super::site_page::SitePage>(pages: &[P], location: impl Fn(&P) -> &[String]) -> std::collections::BTreeMap<String, WorkGroup> {
+    let mut by_folder: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, page) in pages.iter().enumerate() {
+        let Some(path) = page.source_path() else { continue };
+        by_folder.entry(path.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default()).or_default().push(i);
+    }
+    let mut works = std::collections::BTreeMap::new();
+    for (folder, indices) in by_folder {
+        let folder_name = folder.rsplit('/').next().unwrap_or("");
+        if indices.len() < 2 || folder_name.is_empty() {
+            continue;
+        }
+        let Some(home_idx) = indices.iter().copied().find(|&i| pages[i].is_folder_index()) else { continue };
+        if location(&pages[home_idx]).is_empty() {
+            continue;
+        }
+        let home_file = pages[home_idx].source_path().and_then(|p| p.rsplit('/').next()).unwrap_or("");
+        let home_stem = std::path::Path::new(home_file).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if crate::home::is_index_stem_any_lang(home_stem) || crate::content_graph::generate_slug(home_stem) != crate::content_graph::generate_slug(folder_name) {
+            continue;
+        }
+        let companions = indices.into_iter().filter(|&i| i != home_idx).collect();
+        works.insert(folder, WorkGroup { home_idx, companions });
+    }
+    works
+}
+
+/// Each work's companions with no `location:` of their own take the home's.
+pub fn inherit_work_locations<P: super::site_page::SitePage>(pages: &mut [P], location: impl Fn(&P) -> &[String], location_mut: impl Fn(&mut P) -> &mut Vec<String>) {
+    for work in work_groups(pages, &location).into_values() {
+        let home = location(&pages[work.home_idx]).to_vec();
+        for i in work.companions {
+            let own = location_mut(&mut pages[i]);
+            if own.is_empty() {
+                own.clone_from(&home);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "inherit_tests.rs"]
 mod tests;

@@ -566,7 +566,7 @@ pub(super) fn read(dir: &Path, generation: &str) -> Option<ParseCache> {
 mod tests {
     use super::*;
     use crate::build::terms::TermLine;
-    use crate::build::types::{SectionAccent, TermCard};
+    use crate::build::types::{SectionAccent, TermCardFacts};
 
     #[test]
     fn saved_shape_omits_later_pass_fields() {
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn capture_refuses_each_later_pass_value_including_members() {
         let cases = [
-            ParsedDocument { term_card: Some(TermCard::default()), ..Default::default() },
+            ParsedDocument { term_card: Some(TermCardFacts::default()), ..Default::default() },
             ParsedDocument { term_lines: vec![TermLine {
                 term: "tags".into(), field: "tags".into(), label: "Tags".into(),
                 separator: ": ".into(), links: "[Notes](/tags/notes/)".into(), is_place: false,

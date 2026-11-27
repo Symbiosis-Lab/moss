@@ -11,38 +11,21 @@
 //! - `minimal=true`: Shows month only (e.g., "11") since year is in section header
 
 
-use super::date as date_formatters;
-use moss_core::page::site_page::SitePage;
+use moss_core::i18n::dates as date_formatters;
 use crate::build::assets::paths::PathResolver;
-use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
+use crate::build::media::cover::html_escape;
 use crate::build::types::ParsedDocument;
 
-/// The language of a listed page that differs from the listing page's: the page's
-/// BCP 47 tag for `lang=` on its title and description, and the mark naming it in
-/// the listing page's interface language.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RowLang {
-    pub tag: String,
-    /// Language name in the listing page's interface language; empty for an unknown tag.
-    pub name: &'static str,
-    /// The listing page's tag, which the mark's text is in.
-    pub listing_tag: String,
-}
+pub use moss_core::page::card::{root_attrs, source_file_attr, ChildItemProps, RowLang, EVENT_SEP};
 
-impl RowLang {
-    /// Set when `doc` is written in another language than the page listing it.
-    pub(crate) fn between(
-        doc: &ParsedDocument,
-        listing_tag: &str,
-        ui: crate::i18n::Language,
-    ) -> Option<RowLang> {
-        let tag = doc.lang_tag.as_deref().unwrap_or_else(|| doc.lang.as_bcp47_attr());
-        (!tag.eq_ignore_ascii_case(listing_tag)).then(|| RowLang {
-            tag: tag.to_string(),
-            name: crate::i18n::language_name(ui, tag),
-            listing_tag: listing_tag.to_string(),
-        })
-    }
+/// Set when `doc` is written in another language than the page listing it.
+pub(crate) fn row_lang(doc: &ParsedDocument, listing_tag: &str, ui: crate::i18n::Language) -> Option<RowLang> {
+    let tag = doc.lang_tag.as_deref().unwrap_or_else(|| doc.lang.as_bcp47_attr());
+    (!tag.eq_ignore_ascii_case(listing_tag)).then(|| RowLang {
+        tag: tag.to_string(),
+        name: crate::i18n::language_name(ui, tag),
+        listing_tag: listing_tag.to_string(),
+    })
 }
 
 /// ` lang="de"` for an element holding a page's words in another language, or nothing.
@@ -82,11 +65,11 @@ pub struct ArticleListItemProps {
     /// resolved `location:`.
     pub place: Option<String>,
     /// An event's written time as a `<time>` with its parts in spans
-    /// (`event_meta::render_when`); shown in place of `date_display`.
+    /// (`moss_core::event::when::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
     /// Where an event stands, published on the row as `data-when` (and
     /// `data-ends`); `None` for any other page.
-    pub when: Option<crate::build::folder_embed::upcoming::EventWhen>,
+    pub when: Option<moss_core::event::when::EventWhen>,
     /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
     pub credits: Option<String>,
     /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
@@ -139,31 +122,9 @@ pub(crate) fn link_or_box(url: Option<&str>, box_tag: &'static str, attrs: &str)
     }
 }
 
-/// An event's `data-when` and `data-ends` on its card or row, or nothing.
-fn when_attr(when: Option<&crate::build::folder_embed::upcoming::EventWhen>) -> String {
-    when.map(|w| w.attrs()).unwrap_or_default()
-}
-
-/// The attributes every listing card and row root carries: its source page
-/// and an event's upcoming/past state.
-pub(crate) fn root_attrs(source_file: Option<&str>, when: Option<&crate::build::folder_embed::upcoming::EventWhen>) -> String {
-    format!("{}{}", source_file_attr(source_file), when_attr(when))
-}
-
-/// ` data-source-file="…"` for an element whose source is another page, or
-/// nothing when the path is unknown.
-pub(crate) fn source_file_attr(path: Option<&str>) -> String {
-    path.map(|p| format!(r#" data-source-file="{}""#, html_escape(p))).unwrap_or_default()
-}
-
 /// The page's `subtitle:` frontmatter, trimmed; `None` when absent or blank.
 pub(crate) fn card_subtitle(doc: &ParsedDocument) -> Option<String> {
-    doc.raw_frontmatter
-        .get("subtitle")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    moss_core::page::card::trimmed(doc.raw_frontmatter.get("subtitle").and_then(|v| v.as_str()))
 }
 
 /// The line under a card's or row's title; nothing when there is no subtitle.
@@ -272,132 +233,6 @@ pub fn render(
     )
 }
 
-/// Properties for rendering a child list item (article or folder)
-#[derive(Debug, Clone, Default)]
-pub struct ChildItemProps {
-    pub title: String,
-    /// Where the card goes; `None` for a page-less entry, drawn unlinked.
-    pub url: Option<String>,
-    /// None for folders
-    pub date_display: Option<String>,
-    /// Raw ISO date for sorting. For folders: latest article date within
-    pub date_raw: Option<String>,
-    /// Number of articles inside. None for leaf articles
-    pub child_count: Option<usize>,
-    /// A folder with pages to count or folders inside: it leads the pages
-    /// and sorts as a folder. A term's card shows a count and is not one.
-    pub subfolder: bool,
-    /// From frontmatter description or auto-extracted. Markdown, not plain
-    /// text — a renderer prints it with `page::meta::render_description_html`,
-    /// never a bare escape, the way `child_summary`/`grid_card`/this file's
-    /// own `render_child` already do.
-    pub description: Option<String>,
-    /// Optional cover image path
-    pub cover: Option<String>,
-    /// The page's own pictures, cover first, resolved like `cover`, when the
-    /// listing asked for a strip (`pictures:N`) and the page has more than
-    /// one. Empty otherwise: a summary row then draws `cover` alone.
-    pub pictures: Vec<String>,
-    /// The listing asked for `motion:marquee`: the strip is drawn twice in a
-    /// track that slides sideways. Meaningful only with `pictures`.
-    pub marquee: bool,
-    /// Type of cover media (image, video, iframe). Defaults to Image when cover is Some.
-    pub cover_type: Option<CoverType>,
-    /// Optional overline shown above the title (horizontal) or between title
-    /// and meta (vertical). Honored by `child_summary::render_with_sort` (cards-list);
-    /// silently ignored by `child_list::render_child` (cards-minimal) because
-    /// the minimal layout has no slot for it. Empty string and None are
-    /// equivalent — no kicker rendered.
-    pub kicker: Option<String>,
-    /// Local archival URL. Set ONLY when the primary `url` field points OUT
-    /// (i.e. `external_url:` overrode it for a linkblog/imported card). The
-    /// summary renderer (`child_summary::render_with_sort`) emits a `★`
-    /// permalink mark linking here so readers can reach the local copy
-    /// independent of the external title link. The minimal-style renderer
-    /// (`child_list::render_child`) intentionally ignores this field — its
-    /// year-grouped row layout has no slot for a second anchor.
-    /// `None` for ordinary cards (where `url` is already the local URL).
-    pub permalink: Option<String>,
-    /// The page's own `url_path`. Unlike `url`, neither `external_url:` nor a
-    /// directory override changes it, so it is what breaks a tie between two
-    /// cards on the same date.
-    pub url_path: String,
-    /// The page's `weight:`, which orders cards on one date.
-    pub weight: Option<i32>,
-    /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
-    /// — shown next to a leaf's date by [`with_place`]; never shown beside a
-    /// folder's count, which is not a date. `None` for a page with no
-    /// resolved `location:`.
-    pub place: Option<String>,
-    /// An event's written time as a `<time>` with its parts in spans
-    /// (`event_meta::render_when`); shown in place of `date_display`.
-    pub when_html: Option<String>,
-    /// Where an event stands, published on the card as `data-when` (and
-    /// `data-ends`); `None` for any other page.
-    pub when: Option<crate::build::folder_embed::upcoming::EventWhen>,
-    /// The names a term kind with `cards = true` lists on this page, as one
-    /// pre-rendered `moss-card-credits` span (`terms::roles`). Shown in a
-    /// leaf's meta after its date and place; `None` for a folder.
-    pub credits: Option<String>,
-    /// An event's `tickets:` address. A card with a web address here gets its
-    /// own Tickets link and its title is the page link (`event_card_links`).
-    pub tickets: Option<String>,
-    /// An event's `online:` address. Like `tickets`, a web address here gives
-    /// the card its own Online link after Tickets (`event_card_links`).
-    pub online: Option<String>,
-    /// The accent colour of the section the page sits in
-    /// (`ParsedDocument::section`), published on the card as
-    /// `--moss-section-color` (with its readable text variants) so a theme can tint cards by section.
-    pub section_color: Option<crate::build::types::SectionAccent>,
-    /// Source path of the page this card stands for (`ParsedDocument::source_path`),
-    /// published as `data-source-file` on the card's root so a click in the
-    /// preview opens that page rather than the listing.
-    pub source_file: Option<String>,
-    /// The listing's `children_count:` setting, applied to a folder's count.
-    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
-    /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
-    pub subtitle: Option<String>,
-    /// Set when the page is in another language than the listing.
-    pub lang: Option<RowLang>,
-}
-
-impl ChildItemProps {
-    /// A folder or a term's card: it stands for the pages it holds.
-    pub(crate) fn is_collection(&self) -> bool {
-        self.child_count.is_some()
-    }
-
-    /// A folder card's count text, or `None` for a leaf or a listing that
-    /// hides the count. The one place the setting is applied.
-    pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
-        let count = self.child_count?;
-        crate::i18n::card_count_label(lang, count, typesetting, self.count_setting.as_ref())
-    }
-
-    pub(crate) fn root_attrs(&self) -> String {
-        root_attrs(self.source_file.as_deref(), self.when.as_ref())
-    }
-
-    /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
-    /// a page outside any coloured section.
-    pub(crate) fn section_style_attr(&self) -> String {
-        self.section_color
-            .as_ref()
-            .map(|a| format!(r#" style="{}""#, html_escape(&crate::build::scan::section_text::section_style(a))))
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
-        moss_core::sort::DateSortKey {
-            date: self.date_raw.as_deref(),
-            is_folder: self.subfolder,
-            label: &self.title,
-            url_path: &self.url_path,
-            weight: self.weight,
-        }
-    }
-}
-
 /// The compact meta text for a leaf's date, with its resolved place appended
 /// when the page declares one — the single owner of this composition.
 /// `grid_card::render_item`, `child_summary::render_with_sort` and this
@@ -423,9 +258,6 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
         Some(p) => format!("{} · {}", date_html, html_escape(p)),
     }
 }
-
-/// The dot between the parts of a card's meta line.
-pub(crate) const EVENT_SEP: &str = r#"<span class="moss-event-sep"> · </span>"#;
 
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
 /// the date markup (`date_html`, already escaped and `<time>`-wrapped by
@@ -490,171 +322,38 @@ pub(crate) fn meta_text(
 /// excerpt fallback and the incremental listing hash read it too, so a card's
 /// text is chosen here and nowhere else.
 pub(crate) fn explicit_card_text(doc: &ParsedDocument) -> Option<String> {
-    doc.description
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .or_else(|| doc.byline.first().map(|row| row.trim()).filter(|s| !s.is_empty()))
-        .map(str::to_string)
+    moss_core::page::card::card_text(doc.description.as_deref(), doc.byline.first().map(String::as_str))
 }
 
-/// Build one card's props from the document it describes.
-///
-/// The shared reading of a `ParsedDocument` that both listing styles and the
-/// hand-picked `:::grid {.summary}` variant need: the folder-count-or-date
-/// branch, the pipe-encoded cover split-resolve-rejoin, the `external_url:`
-/// linkblog pair, and the publisher kicker.
-///
-/// `description` comes from `explicit_card_text`: frontmatter, else the first
-/// byline row. A caller that wants the auto-extracted excerpt as a last resort
-/// (the folder-listing path does) overrides that one field with
-/// `page::meta::resolve_page_description` afterwards, which takes the same
-/// text first —
-/// which is also what keeps this function out of the `math: bool` the excerpt
-/// resolver needs.
-pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
-    doc: &ParsedDocument,
-    all_docs: &[D],
-    root_path: &str,
-    dir_overrides: &std::collections::HashMap<String, String>,
-    typesetting: Option<&str>,
-    now: chrono::NaiveDateTime,
-    pictures: Option<usize>,
-) -> ChildItemProps {
-    let path_resolver = PathResolver::new().with_dir_overrides(dir_overrides.clone());
+/// What a card reads from the build beyond the page's own facts: the path
+/// resolver with the site's directory overrides, and the other passes' results
+/// on the document (a term's card, places, credits, section, body pictures).
+pub(crate) struct BuildCards<'a> {
+    resolver: PathResolver,
+    typesetting: Option<&'a str>,
+    now: String,
+}
 
-    // The card always counts every listable article beneath the folder,
-    // subfolders included — independent of `children_depth`, which only
-    // controls how many of them the folder's OWN page lists when opened. A
-    // `direct` folder can legitimately show fewer items than its card claims;
-    // the claim is "this many pages live here", not "this many rows below".
-    // No articles → no claim (a date, like grid cards), not "0 articles".
-    let (article_count, leads) = crate::build::page::page::folder_card_facts(doc, all_docs);
-    // A term's card shows a count without being a folder: it keeps the date
-    // and the place in the order of a page.
-    let term_count = doc.term_card.as_ref().map(|card| card.count);
-
-    let (child_count, date_raw, date_display) = if let Some(count) = article_count {
-        // A folder's own home page can declare `date:` (and `location:`)
-        // just like any page — that's the date a reader picks the folder
-        // by, so it wins over `folder_latest_date` (the latest date among
-        // the folder's children, which stays the fallback when the home
-        // page has none of its own, e.g. a folder that only groups other
-        // dated pages). `date_display` is set ONLY from the folder's own
-        // date, never from the fallback: a folder with no date of its own
-        // keeps showing just its count, exactly as before.
-        let date_display = doc.date.as_deref().map(|d| {
-            date_formatters::time_html(&date_formatters::format_compact_date(d, doc.lang, typesetting), d)
-        });
-        let date_raw = doc.date.clone().or_else(|| {
-            crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path)
-        });
-        (Some(count), date_raw, date_display)
-    } else {
-        // `dd` is Arabic-formatted; re-format the raw date so a vertical-CJK
-        // page gets CJK numerals.
-        let (dd, raw, is_explicit) = date_formatters::extract_date_from_doc(doc, root_path);
-        let dd_opt = (is_explicit && dd != "Unknown" && !dd.is_empty()).then(|| {
-            let shown = raw.as_deref().unwrap_or(&dd);
-            date_formatters::time_html(&date_formatters::format_compact_date(shown, doc.lang, typesetting), shown)
-        });
-        (None, raw, dd_opt)
-    };
-
-    // Split pipe-encoded cover to resolve only the path part. Rejoin with
-    // attrs so downstream renderers can extract them.
-    // A term's card takes its picture from its members (`terms::cards`).
-    let listing_cover = doc
-        .term_card
-        .as_ref()
-        .and_then(|card| card.cover.as_deref())
-        .or_else(|| doc.listing_cover());
-    let (cover, cover_path_for_type) = match listing_cover {
-        Some(c) => {
-            let (path_part, attrs_str) = moss_core::media::split_pipe(c);
-            let resolved = path_resolver.resolve_url(path_part);
-            let cover_with_attrs = if attrs_str.is_empty() {
-                resolved.clone()
-            } else {
-                format!("{}|{}", resolved, attrs_str)
-            };
-            (Some(cover_with_attrs), Some(resolved))
-        }
-        None => (None, None),
-    };
-
-    // When the child page declares an `external_url:` (linkblog / imported
-    // article), the card href targets the outlet — not the local archive. The
-    // page itself is still built at its slug; direct visits keep working.
-    // Pattern from JSON Feed 1.1. The local archive URL is preserved as the
-    // card's `permalink` so child_summary can emit a `★` mark next to the
-    // kicker (the Daring-Fireball linkblog convention).
-    // A page-less entry has no local address: no archive mark, and no link
-    // unless it names an outlet or a file on the site.
-    let external_url = crate::build::scan::page_map::outlet_href(doc);
-    let local_url = (!doc.is_pageless_entry())
-        .then(|| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path)));
-    let permalink = external_url.as_ref().and(local_url.clone());
-
-    let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::EventWhen::of(e, now));
-    let term_count_shown = child_count.is_none() && term_count.is_some();
-    // A listing's `children_count` applies to a card only where the card has no wording of its own.
-    let count_setting = doc.term_card.as_ref().filter(|_| term_count_shown).and_then(|card| card.count_setting.clone());
-
-    ChildItemProps {
-        // Child list cards/rows are chrome; use the plain-text label.
-        title: doc.label.clone(),
-        url: external_url.or(local_url),
-        date_display,
-        date_raw,
-        child_count: child_count.or(term_count),
-        subfolder: leads,
-        description: explicit_card_text(doc),
-        pictures: pictures.zip(cover.as_deref()).map_or_else(Vec::new, |(n, cover)| strip_pictures(doc, cover, n, &path_resolver)),
-        marquee: false,
-        cover,
-        cover_type: cover_path_for_type
-            .as_deref()
-            .map(|c| detect_cover_type(c, doc.cover_type.as_deref())),
-        kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
-        permalink,
-        url_path: doc.url_path.clone(),
-        weight: doc.weight,
-        count_setting,
-        place: doc.place_names.clone().or_else(|| {
-            // An event's place is shown even when it names no place page.
-            doc.event.as_ref()?;
-            Some(doc.location.join(", ")).filter(|p| !p.is_empty())
-        }),
-        when_html: doc.event.as_ref().map(|e| {
-            let mut html = crate::build::components::event_meta::render_when(e.start, e.end, doc.lang);
-            let mark = crate::build::components::event_meta::upcoming_mark(e, doc.lang, now);
-            if !mark.is_empty() {
-                html.push_str(EVENT_SEP);
-                html.push_str(&mark);
-            }
-            html
-        }),
-        when,
-        credits: doc.card_extras.clone(),
-        tickets: doc.event.as_ref().and_then(|e| crate::build::folder_embed::upcoming::open_tickets(e, now)).map(str::to_string),
-        online: doc.event.as_ref().and_then(|e| e.online.clone()),
-        section_color: doc.section.clone(),
-        source_file: doc.source_path.clone(),
-        subtitle: card_subtitle(doc),
-        lang: None,
+impl<'a> BuildCards<'a> {
+    pub(crate) fn new(dir_overrides: &std::collections::HashMap<String, String>, typesetting: Option<&'a str>, now: chrono::NaiveDateTime) -> Self {
+        Self { resolver: PathResolver::new().with_dir_overrides(dir_overrides.clone()), typesetting, now: crate::build::folder_embed::upcoming::minute(now) }
     }
 }
 
-/// The pictures a summary row draws as a strip (`pictures:N`): the card's own
-/// resolved `cover` first, then the page's other pictures resolved the same
-/// way. Empty when the page has no other, so the row draws its cover.
-fn strip_pictures(doc: &ParsedDocument, cover: &str, n: usize, path_resolver: &PathResolver) -> Vec<String> {
-    let rest = crate::build::page::cover::card_pictures_after_cover(doc.listing_cover(), doc.hero_image_url.as_deref(), &doc.body_cover_candidates, n);
-    if rest.is_empty() {
-        return Vec::new();
+impl moss_core::page::card::CardHost<ParsedDocument> for BuildCards<'_> {
+    fn resolve_url(&self, path: &str) -> String { self.resolver.resolve_url(path) }
+    fn typesetting(&self) -> Option<&str> { self.typesetting }
+    fn now(&self) -> &str { &self.now }
+    fn term_card(&self, doc: &ParsedDocument) -> Option<moss_core::page::card::TermCardFacts> {
+        doc.term_card.clone()
     }
-    std::iter::once(cover.to_string()).chain(rest.iter().map(|path| path_resolver.resolve_url(path))).collect()
+    fn body_cover(&self, doc: &ParsedDocument) -> Option<String> { doc.card_cover.clone() }
+    fn place_names(&self, doc: &ParsedDocument) -> Option<String> { doc.place_names.clone() }
+    fn credits(&self, doc: &ParsedDocument) -> Option<String> { doc.card_extras.clone() }
+    fn section(&self, doc: &ParsedDocument) -> Option<crate::build::types::SectionAccent> { doc.section.clone() }
+    fn pictures_after_cover(&self, doc: &ParsedDocument, n: usize) -> Vec<String> {
+        crate::build::page::cover::card_pictures_after_cover(doc.listing_cover(), doc.hero_image_url.as_deref(), &doc.body_cover_candidates, n)
+    }
 }
 
 /// The links of an event card whose page has a web `tickets:` or `online:`
@@ -675,11 +374,11 @@ pub(crate) fn event_card_links(props: &ChildItemProps, lang: crate::i18n::Langua
     let tickets = props
         .tickets
         .as_deref()
-        .and_then(|u| super::event_meta::tickets_link(u, lang, Some(&props.title)));
+        .and_then(|u| moss_core::event::when::tickets_link(u, lang, Some(&props.title)));
     let online = props
         .online
         .as_deref()
-        .and_then(|u| super::event_meta::online_link(u, lang, Some(&props.title)));
+        .and_then(|u| moss_core::event::when::online_link(u, lang, Some(&props.title)));
     if tickets.is_none() && online.is_none() {
         return None;
     }
@@ -775,23 +474,9 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
                 props.root_attrs(), open, meta_span("moss-prefix-link-prefix"), title, close
             )
         }
-    } else if let Some(ref date_raw) = props.date_raw {
-        // Article with a raw date — full precision, since there is no year
-        // heading above this row (unlike the year-grouped rows) to carry it:
-        // "year · month" when the date has a month, "year" when that's all
-        // it has. Same compact form grid cards use. The page's resolved
-        // place, if any, goes right next to it — see `with_place`.
-        let date = date_formatters::time_html(&date_formatters::format_compact_date(date_raw, lang, typesetting), date_raw);
-        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
-        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
-        format!(
-            r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
-            props.root_attrs(), open, date, title, close
-        )
     } else if let Some(ref date_display) = props.date_display {
-        // Article with a display date but no raw date. `date_display` is
-        // already the compact "year · month"/"year" form —
-        // `props_for_document` formatted it with `format_compact_date`.
+        // An article's compact date ("year · month", or the year alone): no
+        // year heading above this row carries it.
         let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(

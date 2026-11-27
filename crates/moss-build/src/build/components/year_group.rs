@@ -5,7 +5,7 @@
 //! - Collection index pages (optional)
 
 use super::child_list::{self as child_list_item, ArticleListItemProps};
-use super::date as date_formatters;
+use moss_core::i18n::dates as date_formatters;
 
 /// Renders a list of articles grouped by year.
 ///

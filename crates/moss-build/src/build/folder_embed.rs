@@ -57,7 +57,7 @@ use moss_core::PageKind;
 
 use crate::build::components::{self, ArticleListItemProps};
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::date as date_formatters;
+use moss_core::i18n::dates as date_formatters;
 use crate::build::media::cover::html_escape;
 use crate::i18n::Language;
 use crate::{build::types::ParsedDocument, types::content::ProjectStructure};
@@ -279,47 +279,6 @@ pub(crate) fn is_rich_child(d: &ParsedDocument, math: bool) -> bool {
     is_rich(d, &card_excerpt(d, math))
 }
 
-/// Compute the latest article date within a folder.
-///
-/// Finds all documents whose url_path is under the folder's prefix and returns
-/// the maximum date string (ISO comparison works for chronological ordering).
-pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
-    folder_doc: &ParsedDocument,
-    all_docs: &[D],
-    root_path: &str,
-) -> Option<String> {
-    let folder_prefix = folder_doc.url_path.trim_end_matches("index.html");
-    all_docs
-        .iter()
-        .map(|d| d.borrow())
-        .filter(|d| {
-            d.url_path != folder_doc.url_path
-                // Direct children only: at most one path segment of remainder
-                && d.url_path.strip_prefix(folder_prefix).is_some_and(|rem| {
-                    !rem.trim_end_matches("/index.html")
-                        .trim_end_matches('/')
-                        .contains('/')
-                })
-        })
-        .filter_map(|d| {
-            // For sub-folders, recurse to get their latest child date
-            let is_subfolder = d.kind == PageKind::Folder && {
-                let prefix = d.url_path.trim_end_matches("index.html");
-                all_docs.iter().map(|o| o.borrow()).any(|other| {
-                    other.url_path != d.url_path && other.url_path.starts_with(prefix)
-                })
-            };
-            if is_subfolder {
-                folder_latest_date(d, all_docs, root_path)
-            } else {
-                // Leaf article: use extract_date_from_doc for filesystem fallback
-                let (_display, raw, _explicit) =
-                    crate::build::components::date::extract_date_from_doc(d, root_path);
-                raw
-            }
-        })
-        .max()
-}
 
 /// Generates a unified children listing for folder index pages and folder embeds.
 ///
@@ -368,25 +327,18 @@ pub(crate) fn generate_children(
     // struct; the one thing the row shapes want on top is the auto-extracted
     // excerpt fallback for `description`, which the hand-picked card paths
     // deliberately do not take.
+    let cards = components::child_list::BuildCards::new(dir_overrides, typesetting, now);
     let items: Vec<ChildItemProps> = folder_docs
         .iter()
         .map(|doc| {
-            let mut props = components::child_list::props_for_document(
-                doc,
-                all_folder_docs,
-                &project.root_path,
-                dir_overrides,
-                typesetting,
-                now,
-                rows.pictures.filter(|_| style == "summary"),
-            );
+            let mut props = moss_core::page::card::props_for(*doc, all_folder_docs, &cards, rows.pictures.filter(|_| style == "summary"));
             // The grid card is one of those paths: its description comes from
-            // `props_for_document` (frontmatter, then the first byline row) and
+            // `props_for` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
             props.marquee = rows.marquee;
             props.count_setting = props.count_setting.take().or_else(|| rows.count.cloned());
-            props.lang = rows.listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
+            props.lang = rows.listing_tag.and_then(|tag| components::child_list::row_lang(doc, tag, lang));
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),

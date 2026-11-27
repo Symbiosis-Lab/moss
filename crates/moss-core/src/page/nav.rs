@@ -334,15 +334,39 @@ fn folder_name<P: SitePage>(pages: &[P], url_folder: &str) -> Option<String> {
         .find_map(|p| p.source_path()?.split('/').nth(depth - 1).map(crate::heading::filename_text))
 }
 
+/// What the trail reads about one page.
+#[derive(Clone, Copy)]
+struct Crumb<'a> {
+    url_path: &'a str,
+    label: &'a str,
+    translates_home: bool,
+    passthrough_root: Option<&'a str>,
+}
+
+fn crumb<P: SitePage>(p: &P) -> Crumb<'_> {
+    Crumb { url_path: p.url_path(), label: p.label(), translates_home: p.translates_home(), passthrough_root: p.passthrough_root() }
+}
+
 /// The trail below the site name, each folder above the page and then the
 /// page, with the address the site name links to (a translation root, else `/`).
+///
+/// A shell over [`walk_trail`], so the walk is compiled once for every page type.
 fn trail_tail<P: SitePage>(page: &P, pages: &[P]) -> Option<(String, Vec<BreadcrumbSegment>)> {
-    let parts: Vec<&str> = page.url_path().split('/').collect();
+    let find = |url_path: &str| pages.iter().find(|p| p.url_path() == url_path).map(crumb);
+    let name = |url_folder: &str| folder_name(pages, url_folder);
+    walk_trail(crumb(page), &find, &name)
+}
+
+fn walk_trail<'a>(
+    page: Crumb<'a>,
+    find: &dyn Fn(&str) -> Option<Crumb<'a>>,
+    folder_name: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, Vec<BreadcrumbSegment>)> {
+    let parts: Vec<&str> = page.url_path.split('/').collect();
     let (filename, folder_parts) = parts.split_last()?;
-    let find = |url_path: &str| pages.iter().find(|p| p.url_path() == url_path);
 
     let lang_prefix = folder_parts.first()
-        .filter(|first| find(&format!("{first}/index.html")).is_some_and(|p| p.translates_home()))
+        .filter(|first| find(&format!("{first}/index.html")).is_some_and(|p| p.translates_home))
         .copied();
     let effective = if lang_prefix.is_some() { folder_parts.get(1..).unwrap_or_default() } else { folder_parts };
     let home_url = lang_prefix.map_or_else(|| "/".to_string(), |prefix| format!("/{prefix}/")); // allow:served-path-url-construct (breadcrumb home href to translation root, not a framework asset)
@@ -356,11 +380,11 @@ fn trail_tail<P: SitePage>(page: &P, pages: &[P]) -> Option<(String, Vec<Breadcr
         let path = effective[..=i].join("/");
         let index = format!("{}/index.html", full(&path));
         let folder = find(&index);
-        let title = folder.map_or_else(|| folder_name(pages, &full(&path)).unwrap_or_else(|| titlecase_segment(effective[i])), |p| p.label().to_string());
+        let title = folder.map_or_else(|| folder_name(&full(&path)).unwrap_or_else(|| titlecase_segment(effective[i])), |p| p.label.to_string());
         // A passthrough folder gets no listing page, so an ancestor inside one
         // with no page of its own is left out.
         let has_page = folder.is_some()
-            || !page.passthrough_root().is_some_and(|root| crate::resolve::folder_within(root, &full(&path)));
+            || !page.passthrough_root.is_some_and(|root| crate::resolve::folder_within(root, &full(&path)));
         let is_current_folder = i + 1 == effective.len() && *filename == "index.html";
         if is_current_folder {
             segments.push(BreadcrumbSegment { title, url: String::new(), is_current: true });
@@ -369,7 +393,7 @@ fn trail_tail<P: SitePage>(page: &P, pages: &[P]) -> Option<(String, Vec<Breadcr
         }
     }
     if *filename != "index.html" {
-        segments.push(BreadcrumbSegment { title: page.label().to_string(), url: String::new(), is_current: true });
+        segments.push(BreadcrumbSegment { title: page.label.to_string(), url: String::new(), is_current: true });
     }
     Some((home_url, segments))
 }

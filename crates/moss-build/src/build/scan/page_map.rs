@@ -418,27 +418,6 @@ pub fn nav_external_href(
     moss_core::page::nav::nav_link(raw_frontmatter.get("external_url").and_then(|v| v.as_str()))
 }
 
-/// Where a listing row or card for `doc` links instead of its local address: a
-/// page-less entry's [`pageless_row_href`], else a page's [`external_url`].
-pub fn outlet_href(doc: &crate::build::types::ParsedDocument) -> Option<String> {
-    if doc.is_pageless_entry() {
-        pageless_row_href(&doc.raw_frontmatter)
-    } else {
-        external_url(&doc.raw_frontmatter)
-    }
-}
-
-/// Where a page-less listing row links: an http(s) outlet or a site path to a
-/// file or folder the site serves (a PDF, a hand-made HTML folder), the same
-/// targets a page-less nav entry takes. `None` draws the row unlinked.
-pub fn pageless_row_href(
-    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> Option<String> {
-    nav_external_href(raw_frontmatter)
-        .filter(|u| is_valid_external_url(u) || (u.starts_with('/') && !u.starts_with("//")))
-        .map(str::to_string)
-}
-
 /// Emits a `log::warn!` when `raw_url` is set but is not a value any
 /// consumer of `external_url:` accepts (see [`is_valid_nav_target`]).
 /// `file_path` is used only for the diagnostic message.
@@ -477,22 +456,6 @@ pub fn external_url(
         return None;
     }
     Some(raw.to_string())
-}
-
-/// Read `publisher:` from a doc's raw frontmatter as the card kicker source.
-/// Returns the publisher string when it's a non-empty YAML string, `None`
-/// otherwise (missing, empty, or a non-string YAML value like a number/list).
-///
-/// Centralized so the three child-summary/grid-card emitters share one
-/// extractor — matches the `external_url` pattern above.
-pub fn publisher(
-    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> Option<String> {
-    raw_frontmatter
-        .get("publisher")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
 }
 
 #[cfg(test)]

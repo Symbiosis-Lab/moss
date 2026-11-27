@@ -811,17 +811,10 @@ fn resolve_cell_href(page_url_path: &str, href: &str) -> String {
 /// rung showed one in the listing and none here.
 fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<ChildItemProps> {
     let doc = find_linked_document(link.href, index.page_url_path, index.documents, index.graph)?;
-    let mut props = crate::build::components::child_list::props_for_document(
-        doc,
-        index.documents,
-        index.root_path.unwrap_or(""),
-        index.dir_overrides,
-        index.typesetting,
-        index.now,
-        None,
-    );
+    let cards = crate::build::components::child_list::BuildCards::new(index.dir_overrides, index.typesetting, index.now);
+    let mut props = moss_core::page::card::props_for(doc, index.documents, &cards, None);
     // An explicit link text wins; otherwise the linked page's own label, which
-    // `props_for_document` already filled in.
+    // `props_for` already filled in.
     if link.has_authored_title {
         props.title = link.text.clone();
     }

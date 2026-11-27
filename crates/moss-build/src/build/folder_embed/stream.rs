@@ -15,7 +15,7 @@ use regex::{Captures, Regex};
 use super::inline_body::{dir_segments, listed_body, IdScopes};
 use super::ListingRowOptions;
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::date as date_formatters;
+use moss_core::i18n::dates as date_formatters;
 use crate::build::features::html_escape;
 use crate::build::markdown::pipeline::absolute_pretty_url;
 use crate::build::types::ParsedDocument;
@@ -243,7 +243,6 @@ fn outside_reply(doc: &ParsedDocument, lang: Language) -> String {
 pub(crate) fn page_thread(
     doc: &ParsedDocument,
     all_docs: &[ParsedDocument],
-    root_path: &str,
     dir_overrides: &HashMap<String, String>,
     typesetting: Option<&str>,
     now: chrono::NaiveDateTime,
@@ -252,9 +251,10 @@ pub(crate) fn page_thread(
         return ThreadHtml::default();
     }
     let draw = |pages: &[&ParsedDocument]| {
+        let cards = crate::build::components::child_list::BuildCards::new(dir_overrides, typesetting, now);
         let props: Vec<ChildItemProps> = pages
             .iter()
-            .map(|p| crate::build::components::child_list::props_for_document(p, all_docs, root_path, dir_overrides, typesetting, now, None))
+            .map(|p| moss_core::page::card::props_for(*p, all_docs, &cards, None))
             .collect();
         let sorted: Vec<&ChildItemProps> = props.iter().collect();
         let rows = ListingRowOptions {

@@ -291,6 +291,9 @@ pub struct FrontMatter {
     /// from schema.org `publisher` (via `@id` ref to an `Organization` entry)
     /// or OpenGraph `og:site_name`, falling back to the URL host.
     pub publisher: Option<String>,
+    /// The line under a page's title, and under its card's.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub subtitle: Option<String>,
     /// Linkblog target: when set, internal references to this page (cards,
     /// link rewrites, canonical, sitemap) point here instead of the local URL.
     /// The page is still built locally — direct visits to its slug still

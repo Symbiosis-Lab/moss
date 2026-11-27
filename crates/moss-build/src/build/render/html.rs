@@ -642,6 +642,7 @@ pub(super) fn render_page<'d>(
     let page_lang_tag = &facts.page_lang_tag;
     let site_title = &facts.site_title;
     let resolved_typesetting = facts.typesetting;
+    let cards = components::child_list::BuildCards::new(dir_overrides, resolved_typesetting, now);
     let shell_type = facts.shell_type;
     let is_article_page = facts.is_article_page;
     let locator_placement = facts.locator_placement;
@@ -864,7 +865,7 @@ pub(super) fn render_page<'d>(
             // stays honest (matches the placeholder removal in year_group /
             // folder_embed).
             let article_list =
-                generate_year_grouped_article_list(all_docs, project, true, context.chrome.site_lang, resolved_typesetting);
+                generate_year_grouped_article_list(all_docs, project, &cards, true, context.chrome.site_lang);
             let content = if article_list.is_empty() {
                 String::new()
             } else {
@@ -961,25 +962,7 @@ pub(super) fn render_page<'d>(
                 // Sidebar always shows direct children only, regardless of children_depth.
                 // Nested subfolder articles are excluded from sidebar listings.
                 .filter(|d| moss_core::page::series::is_direct_child(&d.url_path, &target_prefix))
-                .map(|d| {
-                    let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
-                    components::ArticleListItemProps {
-                        credits: None,
-                        subtitle: None,
-                        date_display,
-                        date_raw,
-                        url: Some(path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&d.url_path))),
-                        // chrome; plain-text label
-                        title: d.label.clone(),
-                        url_path: d.url_path.clone(),
-                        weight: d.weight,
-                        place: d.place_names.clone(),
-                        when_html: None,
-                        when: None,
-                        source_file: d.source_path.clone(),
-                        lang: None,
-                    }
-                })
+                .map(|d| components::ArticleListItemProps::from(&moss_core::page::card::props_for(d, all_docs, &cards, None)))
                 .collect();
 
             // Always newest-first: a "Latest" sidebar has no folder of its own
@@ -1075,7 +1058,7 @@ pub(super) fn render_page<'d>(
     // Its "Add to calendar" link goes in this meta line when the page has one,
     // and closes the body otherwise (a Page-shell event has no meta line). Only
     // here is it decided which spot gets the link, and that a past event has none.
-    let event_calendar_href = doc.filter(|d| d.event.as_ref().is_some_and(|ev| crate::build::folder_embed::upcoming::span_is_upcoming(ev.start, ev.end, now))).and_then(|d| context.shared.calendar.event_href(d));
+    let event_calendar_href = doc.filter(|d| d.event.as_ref().is_some_and(|ev| ev.span().is_upcoming(&crate::build::folder_embed::upcoming::minute(now)))).and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
         .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), components::event_meta::UpcomingLabel::Hidden, now));
@@ -1089,7 +1072,7 @@ pub(super) fn render_page<'d>(
         // The size control's "Aa" would hang off the end of the event facts.
         let has_size_control = event_meta_html.is_none() && d.reader_controls != Some(false);
         let when_html = event_meta_html.unwrap_or_else(|| {
-            let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
+            let formatted = moss_core::i18n::dates::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
             let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
             format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
         });
@@ -1159,7 +1142,7 @@ pub(super) fn render_page<'d>(
         } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
             finished = crate::build::components::field_places::beside_leading_picture(&finished);
         }
-        let thread = doc.map(|d| crate::build::folder_embed::stream::page_thread(d, all_docs, &project.root_path, dir_overrides, resolved_typesetting, now)).unwrap_or_default();
+        let thread = doc.map(|d| crate::build::folder_embed::stream::page_thread(d, all_docs, dir_overrides, resolved_typesetting, now)).unwrap_or_default();
         // Under the parent label while it still heads the page, else first.
         finished.insert_str(label.filter(|l| finished.starts_with(l.as_str())).map_or(0, |l| l.len()), &thread.before);
         finished = crate::build::page::default_width::apply(finished, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
@@ -1169,7 +1152,7 @@ pub(super) fn render_page<'d>(
         // A page with its listing off shows no events here; its embedded
         // listings carry their own folders' links (`folder_embed`).
         if let Some(d) = doc {
-            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &crate::build::components::field_places::EndCards { graph: context.content_graph, root_path: &project.root_path, dir_overrides, typesetting: resolved_typesetting, now, media_lookup }));
+            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &crate::build::components::field_places::EndCards { graph: context.content_graph, dir_overrides, typesetting: resolved_typesetting, now, media_lookup }));
             if let Some(href) = calendar_at_body_end.as_deref() {
                 finished.push_str(&context.shared.calendar.event_link_html(href, d.lang));
             }
@@ -1196,7 +1179,7 @@ pub(super) fn render_page<'d>(
         },
         formatted_date: if is_article_page && doc.is_some() && doc.unwrap().date.is_some() {
             let date_str = doc.unwrap().date.as_ref().unwrap();
-            Some(components::format_display_date(date_str, doc.unwrap().lang, resolved_typesetting))
+            Some(moss_core::i18n::dates::format_display_date(date_str, doc.unwrap().lang, resolved_typesetting))
         } else {
             None
         },
@@ -1208,7 +1191,7 @@ pub(super) fn render_page<'d>(
         date_line: None,
         short_date: if is_article_page && doc.is_some() && doc.unwrap().date.is_some() {
             let date_str = doc.unwrap().date.as_ref().unwrap();
-            Some(components::format_compact_date(date_str, doc.unwrap().lang, resolved_typesetting))
+            Some(moss_core::i18n::dates::format_compact_date(date_str, doc.unwrap().lang, resolved_typesetting))
         } else {
             None
         },

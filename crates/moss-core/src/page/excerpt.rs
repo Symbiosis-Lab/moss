@@ -60,7 +60,7 @@ pub fn extract_description_markdown(content: &str, math: bool) -> String {
 /// dropped whole, since cutting it would change where it points.
 // Char-aligned: every offset is a pulldown-cmark range, a `char_indices` position or a run of ASCII emphasis marks.
 fn cut_markdown_like_plain(excerpt: &ExcerptText, max_chars: usize, math: bool) -> String {
-    use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+    use pulldown_cmark::{Event, LinkType, Tag, TagEnd};
     let markdown = excerpt.markdown.trim();
     let plain = excerpt.plain.trim();
     let cut_plain = truncate_at_boundary(plain, max_chars);
@@ -90,7 +90,7 @@ fn cut_markdown_like_plain(excerpt: &ExcerptText, max_chars: usize, math: bool) 
         }
         kept
     };
-    for (event, range) in Parser::new_ext(markdown, crate::ast::parser_options(math)).into_offset_iter() {
+    for (event, range) in crate::ast::pulldown(markdown, crate::ast::parser_options(math)).into_offset_iter() {
         #[allow(clippy::string_slice)]
         let source = &markdown[range.clone()];
         let visible = match &event {
@@ -502,14 +502,8 @@ struct ExcerptText {
 /// form count, including reference links whose definition lives elsewhere.
 fn is_only_links(paragraph: &str, math: bool) -> bool {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-    let mut unresolved = |link: pulldown_cmark::BrokenLink<'_>| {
-        Some((link.reference.to_string().into(), "".into()))
-    };
-    let parser = Parser::new_with_broken_link_callback(
-        paragraph,
-        crate::ast::parser_options(math),
-        Some(&mut unresolved),
-    );
+    let unresolved: crate::ast::BrokenLinks = |link| Some((link.reference.to_string().into(), "".into()));
+    let parser = Parser::new_with_broken_link_callback(paragraph, crate::ast::parser_options(math), Some(unresolved));
     let (mut depth, mut links) = (0usize, 0usize);
     for event in parser {
         match event {
@@ -657,7 +651,7 @@ impl NonProseView {
 /// than string-matched later, so a `[^a]` inside a code span or (on a
 /// math-ON site) inside `$…$` survives exactly when the page displays it.
 fn non_prose_view(markdown: &str, math: bool) -> NonProseView {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    use pulldown_cmark::{Event, Tag, TagEnd};
 
     // Byte offset at which each line starts, so a range maps to line indices.
     let mut line_starts: Vec<usize> = vec![0];
@@ -674,7 +668,7 @@ fn non_prose_view(markdown: &str, math: bool) -> NonProseView {
 
     // The SAME math the page parses with — see `extract_description`.
     let options = crate::ast::parser_options(math);
-    let mut events = Parser::new_ext(markdown, options)
+    let mut events = crate::ast::pulldown(markdown, options)
         .into_offset_iter()
         .peekable();
     while let Some((event, range)) = events.next() {

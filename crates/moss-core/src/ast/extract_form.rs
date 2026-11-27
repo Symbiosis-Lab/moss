@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 use super::attrs::parse_attrs;
@@ -125,7 +125,7 @@ fn read_items(body: &str) -> Vec<Item> {
     let mut top: Vec<Item> = Vec::new();
     let mut stack: Vec<Item> = Vec::new();
     // allow:no-wikilinks a form label is plain text; `[[x]]` stays as typed
-    for (event, range) in Parser::new_ext(body, Options::empty()).into_offset_iter() {
+    for (event, range) in super::pulldown(body, Options::empty()).into_offset_iter() {
         match event {
             Event::Start(Tag::Item) => stack.push(Item::default()),
             Event::End(TagEnd::Item) => {

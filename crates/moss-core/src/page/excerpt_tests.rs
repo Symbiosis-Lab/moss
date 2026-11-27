@@ -1461,6 +1461,14 @@ fn a_row_of_reference_links_is_not_the_description() {
     assert_eq!(extract_description(&format!("{nav}\n"), true), "");
 }
 
+/// A reference with no definition anywhere still counts as a link, beside a
+/// wikilink.
+#[test]
+fn a_row_with_an_undefined_reference_is_not_the_description() {
+    let input = "[About][nowhere] · [[Tickets]]\n\nExample Show runs at Example Hall.\n";
+    assert_eq!(extract_description(input, true), "Example Show runs at Example Hall.");
+}
+
 /// A link row that also holds an equation is content, not navigation.
 #[test]
 fn a_link_row_with_an_equation_is_still_the_description() {

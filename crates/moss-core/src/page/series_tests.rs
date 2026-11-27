@@ -263,6 +263,7 @@ impl SitePage for Page {
     fn children_limit(&self) -> Option<u32> { None }
     fn event_span(&self) -> Option<crate::event::EventSpan> { None }
     fn awaits_event_date(&self) -> bool { false }
+    fn card_facts(&self) -> std::borrow::Cow<'_, crate::page::card::CardFacts> { Default::default() }
 }
 
 fn by_weight() -> Option<ResolvedSort> {

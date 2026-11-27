@@ -35,45 +35,7 @@ pub use moss_core::i18n::numerals;
 
 pub use moss_core::i18n::{filename, path, clean_stem_only, folder_language, resolve_document_language};
 pub use moss_core::i18n::{canonical_bcp47, declared_lang_tag, lang_tag, lang_tag_in_tree, switcher_label};
-pub use moss_core::i18n::{Language, use_cjk_numerals, diagram_type_name, hook_strings, sources_headings, t, term_root_title};
-
-/// A folder card's article count as displayed text — `3 articles`, `三篇`.
-///
-/// Chinese numerals only under vertical CJK: an Arabic digit in a
-/// vertical run is laid on its side.
-pub fn article_count_label(lang: Language, count: usize, typesetting: Option<&str>) -> String {
-    let counter = if count == 1 {
-        t(lang, "article_counter_singular")
-    } else {
-        t(lang, "article_counter")
-    };
-    if use_cjk_numerals(typesetting, lang) {
-        format!("{}{}", numerals::to_chinese_numeral(count), counter)
-    } else {
-        format!("{} {}", count, counter)
-    }
-}
-
-/// A folder card's count text under the listing's `children_count:` setting,
-/// or `None` when it hides the count. No setting is the built-in
-/// [`article_count_label`]; a custom text takes its `{n}` in the same
-/// numerals the built-in one would use.
-pub fn card_count_label(
-    lang: Language,
-    count: usize,
-    typesetting: Option<&str>,
-    setting: Option<&moss_core::frontmatter_union::ChildrenCount>,
-) -> Option<String> {
-    let Some(setting) = setting else {
-        return Some(article_count_label(lang, count, typesetting));
-    };
-    let number = if use_cjk_numerals(typesetting, lang) {
-        numerals::to_chinese_numeral(count)
-    } else {
-        count.to_string()
-    };
-    setting.render(count, &number)
-}
+pub use moss_core::i18n::{article_count_label, card_count_label, Language, use_cjk_numerals, diagram_type_name, hook_strings, sources_headings, t, term_root_title};
 
 /// A declared tag's language named in `ui`, the reader's interface language
 /// (`German` on an English page, `德文` on a Simplified Chinese one). A language

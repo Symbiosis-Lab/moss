@@ -5,7 +5,7 @@
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
 use super::child_list::{self, event_card_links, ChildItemProps};
-use super::date::extract_year;
+use moss_core::i18n::dates::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
 

@@ -808,7 +808,7 @@ fn a_term_card_move_narrows_to_its_page_and_its_listing_host() {
     h.run(&docs);
 
     let mut edited = docs.clone();
-    edited[1].term_card = Some(crate::build::types::TermCard { count: 2, ..Default::default() });
+    edited[1].term_card = Some(crate::build::types::TermCardFacts { count: 2, ..Default::default() });
     let verdict = h.run(&edited);
     assert_incremental(&verdict);
     assert!(!verdict.may_skip("writings/index.md"));

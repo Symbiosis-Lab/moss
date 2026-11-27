@@ -933,6 +933,11 @@ fn snapshot_no_home_site() {
 }
 
 #[test]
+fn snapshot_slugged_cover_site() {
+    run_snapshot_test("slugged-cover-site");
+}
+
+#[test]
 fn snapshot_multilingual_site() {
     run_snapshot_test("multilingual-site");
 }
