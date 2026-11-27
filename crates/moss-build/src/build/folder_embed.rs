@@ -103,8 +103,6 @@ struct ParsedMarker<'a> {
     /// both flow through `FolderEmbedParams::more` (moss-core) into this one
     /// marker field, so the render side doesn't need to know which named it.
     more: Option<String>,
-    /// `children_count:` — what the listing's folder cards say they count.
-    count: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// The listing's own width / float / size, read off the embed pothole.
     placement: moss_core::media::Placement,
     /// Caption for the listing, rendered on the figure that wraps it.
@@ -166,7 +164,6 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "group" => out.group = Some(v.trim().to_string()),
                 "size" => out.size = Some(v.trim().to_string()),
                 "more" => out.more = Some(marker_decode(v.trim())),
-                "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
                 "when" => out.when = Some(v.trim()),
                 "pictures" => out.pictures = folder_list::picture_count(v).ok(),
@@ -1132,7 +1129,7 @@ fn render_one(
         is_embed,
         placement: container_placement,
         lazy_cards: parsed.lazy_cards,
-        count: parsed.count.as_ref(),
+        count: host.count.as_ref(),
         listing_tag: Some(&host.lang_tag),
         pictures: parsed.pictures,
         marquee: parsed.marquee,
@@ -1404,7 +1401,6 @@ pub(crate) fn synthesize_children_marker_for(
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
-        count: doc.children_count.clone(),
         scope_default_tree: scoped,
         exclude_nav: scoped,
         // A frontmatter listing has no pothole to read placement or a

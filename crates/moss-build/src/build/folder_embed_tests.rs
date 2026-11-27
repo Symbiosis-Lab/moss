@@ -3387,6 +3387,7 @@ fn count_listing(style: &str, count: Option<moss_core::frontmatter_union::Childr
     let mut host = make_folder_doc("stage/index.html", "Stage");
     host.children_style = Some(moss_core::Resolved::frontmatter(style.to_string()));
     host.children_count = count;
+    host.source_path = Some("stage/index.md".into());
     let docs = vec![
         host.clone(),
         make_folder_doc("stage/productions/index.html", "Productions"),
@@ -3426,6 +3427,39 @@ fn children_count_text_replaces_the_counter_with_singular_and_plural() {
     assert!(summary.contains(">2 productions<") && summary.contains(">1 production<"), "{summary}");
     let list = count_listing("list", setting());
     assert!(list.contains(">2 productions<") && list.contains(">1 production<"), "{list}");
+}
+
+#[test]
+fn a_body_embed_counts_in_its_host_page_s_children_count() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let mut home = make_folder_doc("index.html", "Home");
+    home.source_path = Some("index.md".into());
+    home.children_count = Some(ChildrenCount("{n} production|{n} productions".into()));
+    let docs = vec![
+        home,
+        make_folder_doc("stage/index.html", "Stage"),
+        make_folder_doc("stage/productions/index.html", "Productions"),
+        make_doc("stage/productions/a.html", "A", None),
+        make_doc("stage/productions/b.html", "B", None),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("grid".into()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker("/stage/", "index.md", &params);
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains(">2 productions<"), "{out}");
+    assert!(!out.contains("articles"), "{out}");
 }
 
 #[test]

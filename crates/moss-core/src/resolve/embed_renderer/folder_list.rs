@@ -48,10 +48,6 @@ pub struct FolderEmbedParams {
     /// frontmatter already can; `synthesize_children_marker` sets this
     /// field from `children_more` too, so both sources share one field.
     pub more: Option<String>,
-    /// Internal, set from the `children_count:` frontmatter key: what the
-    /// listing's folder cards say they count. The embed grammar has no key
-    /// for it, since its text carries the `|` and `,` that grammar splits on.
-    pub count: Option<crate::frontmatter_union::ChildrenCount>,
     /// Internal: this is the root homepage's own depth=all self-listing, so scope it
     /// to the default language tree — on a multilingual site (gated at render time by
     /// `ProjectStructure.has_language_trees`) drop docs under a language-prefix folder
@@ -387,9 +383,6 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));
-    }
-    if let Some(c) = &params.count {
-        parts.push(format!("count={}", marker_encode(&c.0)));
     }
     if let Some(w) = params.placement.width {
         parts.push(format!("width={}", w));

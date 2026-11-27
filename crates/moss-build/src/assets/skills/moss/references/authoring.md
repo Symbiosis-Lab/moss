@@ -1270,7 +1270,7 @@ To link a capped homepage to a full archive, make an ordinary page for it with `
 
 `children_listed: here` on a folder's home keeps every page under that folder (nested folders included) out of the listings that flatten the folders above it: the site home's whole-tree listing, an ancestor's `children_depth: all`, an archive page that lists what the home lists, and an embed of an ancestor with `depth:all`. The folder's own listing, its feed, the sitemap, search and an embed of the folder itself still have them, and a direct listing of the parent still shows the folder's own page as a card. Unset or `everywhere`, the pages appear in all of them. Use it for a folder of short posts that would otherwise flood the home.
 
-A listing's folder cards say how many pages they hold ("46 articles"). `children_count` on the listing page changes that text or hides it; `{n}` is the number, and the first `|` always splits the form used for 1 from the plural (there is no way to write a literal `|`); an empty form hides the count.
+A listing's folder cards say how many pages they hold ("46 articles"). `children_count` on the listing page changes that text or hides it, on its own listing and on every listing its body embeds (`![[/stage/|style:grid]]`); `{n}` is the number, and the first `|` always splits the form used for 1 from the plural (there is no way to write a literal `|`); an empty form hides the count.
 
 ```yaml
 children_count: "{n} production|{n} productions"   # or false to hide it

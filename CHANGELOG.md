@@ -46,6 +46,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A listing embedded in a page's body (`![[/stage/|style:grid]]`) counts its folder cards in the page's `children_count`, as the page's own listing does, instead of "articles".
 - The editor's file list no longer stays on "Files unavailable" when moss answers slowly, as it can while building a large site: a list that arrives late still shows.
 - The live preview keeps what a theme's or page's own script draws, such as a map, when the site rebuilds: a page that runs one reloads instead of having its content swapped in place, which erased the drawing and left its empty frame.
 - `moss deploy` no longer refuses a page as "would roll back to older source content" when the page is the published one without the `uid:` line moss wrote into it after that publish, as a copy from git or a sync has it. A page that is really older still needs `--accept-stale-content`.
