@@ -440,10 +440,63 @@ fn inject_in_this_process(
 ) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
     let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
     let mut staged = StagedLinks::load(&paths, "pages", dir);
-    inject_slots_into_directory_cached(
-        dir, dir, slots, &resolved_slots_hash(slots), &Default::default(), objects, transforms, Default::default(), stage_pages(dir), &Default::default(), &mut staged,
+    let pass = inject_slots_into_directory_cached(
+        dir, dir, slots, &resolved_slots_hash(slots), &Default::default(), objects, transforms, Default::default(), stage_pages(dir), &Default::default(), Vec::new(), &mut staged,
+    )?;
+    staged.save();
+    Ok(settle(dir, pass, objects, transforms))
+}
+
+/// The after-paint batch, run now: each deferred page's blob, record and
+/// staged link, then every receipt the manifest would get.
+fn settle(
+    dir: &std::path::Path,
+    pass: SlotPass,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) -> Vec<SlotInjectionReceipt> {
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    let (mut receipts, mut pages) = (pass.receipts, pass.deferred);
+    settle_pages(&mut pages, dir, &paths, objects, transforms, || false);
+    receipts.extend(pages.into_iter().map(|page| page.receipt));
+    receipts
+}
+
+/// The batch vouches only for the stage file the pass wrote. Here the blob is
+/// already stored (an identical page), so nothing re-hashes the stage: a page
+/// rewritten between the pass and the batch must not be recorded as that blob,
+/// or the next pass would ship its bytes unread under the old oid.
+#[test]
+fn the_batch_does_not_vouch_for_a_stage_page_replaced_after_the_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let marked = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    let rendered = std::collections::BTreeMap::from([("a.html".to_string(), marked.to_string()), ("b.html".to_string(), marked.to_string())]);
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join(".moss"));
+    let mut staged = StagedLinks::load(&paths, "pages", dir.path());
+    let slots = head_end_slots("<style>h1{}</style>");
+    let pass = inject_slots_into_directory_cached(
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, Vec::new(), &Default::default(), Vec::new(), &mut staged,
     )
-    .map(|pass| pass.receipts)
+    .unwrap();
+    staged.save();
+    let (a, b) = (&pass.deferred[0], &pass.deferred[1]);
+    let mut links = crate::build::cache::HashIndex::new();
+    let mut failures = StoreFailures::default();
+    assert!(a.settle(dir.path(), &objects, &transforms, &mut links, &mut failures));
+    let oid = a.oid().to_string();
+
+    // A newer pass's bytes: a new inode, as every stage write is.
+    std::fs::remove_file(dir.path().join("b.html")).unwrap();
+    std::fs::write(dir.path().join("b.html"), "<html>newer</html>").unwrap();
+    assert!(b.settle(dir.path(), &objects, &transforms, &mut links, &mut failures));
+    assert_eq!(b.oid(), oid, "the blob holds the pass's bytes");
+    links.save_merging(&paths.staged_links("pages")).unwrap();
+
+    let mut staged = StagedLinks::load(&paths, "pages", dir.path());
+    assert_eq!(staged.vouched_oid("a.html"), Some(oid));
+    assert_eq!(staged.vouched_oid("b.html"), None, "a replaced stage page was vouched for as the pass's blob");
 }
 
 fn slot_test_cache(
@@ -517,11 +570,11 @@ fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled(
     let mut staged = StagedLinks::load(&paths, "pages", dir.path());
     let slots = head_end_slots("<style>h1{}</style>");
 
-    let receipts = inject_slots_into_directory_cached(
-        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, stage_pages(dir.path()), &Default::default(), &mut staged,
+    let pass = inject_slots_into_directory_cached(
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, stage_pages(dir.path()), &Default::default(), Vec::new(), &mut staged,
     )
-    .unwrap()
-    .receipts;
+    .unwrap();
+    let receipts = settle(dir.path(), pass, &objects, &transforms);
 
     assert_eq!(std::fs::read_to_string(&lab).unwrap(), marked, "JupyterLite's page was rewritten");
     let note = std::fs::read_to_string(dir.path().join("jupyter/note/index.html")).unwrap();
@@ -1115,4 +1168,39 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
 fn a_site_without_archival_hashes_the_slots_it_hashed_before_the_edition_field() {
     let expected = crate::build::assets::paths::compute_binary_hash(br#"{"entries":{},"feature_styles":[],"listings":{}}"#);
     assert_eq!(resolved_slots_hash(&ResolvedSlots::empty()), expected);
+}
+
+/// A batch cancelled mid-run stores and links the pages it reached and leaves
+/// the rest owed, with no blob and no staged link to vouch for them.
+#[test]
+fn a_batch_cancelled_mid_run_leaves_the_pages_it_did_not_reach_owed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let rendered: std::collections::BTreeMap<String, String> = (0..4)
+        .map(|i| (format!("p{i}.html"), format!("<html><head><!-- slot:head-end --></head><body>{i}</body></html>")))
+        .collect();
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join(".moss"));
+    let mut staged = StagedLinks::load(&paths, "pages", dir.path());
+    let slots = head_end_slots("<style>h1{}</style>");
+    let pass = inject_slots_into_directory_cached(
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, Vec::new(), &Default::default(), Vec::new(), &mut staged,
+    )
+    .unwrap();
+    staged.save();
+    let reached = std::sync::atomic::AtomicUsize::new(0);
+    let mut pages = pass.deferred;
+    let settled = settle_pages(&mut pages, dir.path(), &paths, &objects, &transforms, || {
+        reached.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0
+    });
+
+    assert_eq!(settled.iter().filter(|s| **s == Settled::Stored).count(), 1, "{settled:?}");
+    assert_eq!(settled.iter().filter(|s| **s == Settled::Cancelled).count(), 3, "{settled:?}");
+    let mut staged = StagedLinks::load(&paths, "pages", dir.path());
+    for (page, settled) in pages.iter().zip(&settled) {
+        let stored = *settled == Settled::Stored;
+        assert_eq!(objects.holds(page.oid()), stored, "{} blob", page.receipt.page_path);
+        assert_eq!(page.receipt.content_oid.as_deref(), stored.then(|| page.oid()), "{} receipt", page.receipt.page_path);
+        assert_eq!(staged.vouched_oid(&page.receipt.page_path).is_some(), stored, "{} link", page.receipt.page_path);
+    }
 }

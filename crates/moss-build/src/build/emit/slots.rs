@@ -18,7 +18,7 @@
 use crate::build::outcome::BuildStopped;
 use crate::build::manifest::PendingManifest;
 use crate::build::render::incremental::CarryVerification;
-use crate::build::enhance::ResolvedSlots;
+use crate::build::enhance::{ResolvedSlots, Settled};
 use crate::moss_paths::MossPaths;
 use std::path::Path;
 
@@ -55,7 +55,9 @@ pub fn apply_to_stage_and_manifest(
     // `MOSS_INCREMENTAL_VERIFY=1`; consumed at the END of this function because
     // that is the first moment the stage holds post-injection bytes.
     carry_verification: Option<CarryVerification>,
-) -> Result<(), BuildStopped> {
+) -> Result<SlotBatch, BuildStopped> {
+    // Wait for the stage's last batch, so the links below include the ones it saved.
+    let unsettled = take_unsettled(stage_dir);
     // A carried page holds the previous pass's output only if that pass ran with
     // these same slots and shipping transform; otherwise every page is re-read.
     let slots_hash = crate::build::enhance::resolved_slots_hash(slots);
@@ -91,6 +93,7 @@ pub fn apply_to_stage_and_manifest(
         pending.take_unwritten_pages(),
         registered,
         &carried,
+        if same_pass { unsettled } else { Vec::new() },
         &mut staged,
     )
     // `with_context`, not `format!`: re-stringifying would discard the deferred
@@ -121,13 +124,20 @@ pub fn apply_to_stage_and_manifest(
     // would otherwise do. Nothing that used to be registered here is lost: a page
     // keeps its markers only until the first pass that fills them, so the pages
     // the pass rewrites are the ones this build just rendered.
-    for receipt in pass.receipts {
+    // The served path and entry a page the store has not taken yet ships under.
+    let mut attach = |receipt: &crate::build::enhance::SlotInjectionReceipt| {
         // A stage path no page of this build could have (`_moss/...` bundles a
         // search settle laid down last time) is simply not one.
-        let Ok(sp) = crate::build::served_path::ServedPath::from_output(&receipt.page_path) else {
-            continue;
-        };
-        pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid);
+        let sp = crate::build::served_path::ServedPath::from_output(&receipt.page_path).ok()?;
+        let entry = pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid.clone());
+        entry.filter(|_| receipt.content_oid.is_none()).map(|entry| (sp.as_str().to_string(), entry))
+    };
+    for receipt in &pass.receipts {
+        attach(receipt);
+    }
+    let mut pages = pass.deferred;
+    for page in &mut pages {
+        page.ship = attach(&page.receipt);
     }
     // The build that runs again finds the page missing and renders it.
     if let Some(page) = pending.rereads_left().next() {
@@ -143,7 +153,122 @@ pub fn apply_to_stage_and_manifest(
         verification.compare_final_bytes(stage_dir);
     }
 
-    Ok(())
+    let handover = std::sync::Arc::new(Handover::default());
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).insert(stage_dir.to_path_buf(), handover.clone());
+    Ok(SlotBatch { paths: paths.clone(), stage_dir: stage_dir.to_path_buf(), pages, handover, session: None, _hold: None })
+}
+
+/// The slot batch of each stage in this process, which the stage's next pass
+/// waits for so that it carries the pages the batch stored instead of reading them.
+static RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, std::sync::Arc<Handover>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+#[derive(Default)]
+struct Handover {
+    /// Set once, when the batch ends or is dropped unrun.
+    unsettled: std::sync::Mutex<Option<Vec<crate::build::enhance::DeferredPage>>>,
+    ended: std::sync::Condvar,
+}
+
+/// Wait for the stage's batch to end and take the pages it did not settle (all
+/// of them when it was dropped unrun). Past the bound its pages are read
+/// again, which costs time, never correctness.
+fn take_unsettled(stage_dir: &Path) -> Vec<crate::build::enhance::DeferredPage> {
+    let Some(handover) = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(stage_dir) else { return Vec::new() };
+    let unsettled = handover.unsettled.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut unsettled, wait) = handover.ended
+        .wait_timeout_while(unsettled, std::time::Duration::from_secs(30), |pages| pages.is_none())
+        .unwrap_or_else(|e| e.into_inner());
+    if wait.timed_out() {
+        log::info!("[slots] the last slot batch did not end; its pages are read again");
+    }
+    unsettled.take().unwrap_or_default()
+}
+
+/// The pages the slot pass wrote with no blob yet. A worker stores their blobs,
+/// records and staged links after the preview paints; the seal waits for it, so
+/// a deploy does too.
+pub(crate) struct SlotBatch {
+    paths: MossPaths,
+    stage_dir: std::path::PathBuf,
+    pages: Vec<crate::build::enhance::DeferredPage>,
+    handover: std::sync::Arc<Handover>,
+    session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
+    _hold: Option<crate::system::folder_session::UiBoundHold>,
+}
+
+impl SlotBatch {
+    /// The batch to run after the paint, `None` when the pass stored nothing.
+    /// Held from dispatch, so a publish waits even before the pool starts it.
+    pub(crate) fn after_paint(mut self, session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>) -> Option<Self> {
+        self._hold = session.as_ref().map(|s| s.hold_ui_bound());
+        self.session = session;
+        (!self.pages.is_empty()).then_some(self)
+    }
+
+    pub(crate) fn spawn(
+        self,
+        workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>,
+        tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
+    ) {
+        crate::build::background::spawn_traced_worker(workers, move || self.run(&tx));
+    }
+
+    /// Run the batch here and attach its blobs to `pending`, as the coordinator would.
+    #[cfg(test)]
+    pub(crate) fn settle_into(self, pending: &mut PendingManifest) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(self.pages.len().max(1));
+        self.run(&tx).expect("slot batch");
+        while let Ok(message) = rx.try_recv() {
+            crate::build::coordinator::apply(pending, message);
+        }
+    }
+
+    /// No stage lock: each staged link is proved by the stage file's own stat,
+    /// so a save's pass that rewrites a page meanwhile only costs it its link.
+    fn run(mut self, tx: &tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>) -> Result<(), crate::build::background::BuildError> {
+        let _phase = crate::build::phase::PhaseTrace::start("background_slot_batch");
+        let objects = crate::build::cache::ObjectStore::for_slot_pass(&self.paths);
+        let transforms = crate::build::cache::TransformCache::for_slot_pass(&self.paths, &objects);
+        let mut pages = std::mem::take(&mut self.pages);
+        let session = self.session.as_deref();
+        let settled = BATCH_POOL.install(|| crate::build::enhance::settle_pages(&mut pages, &self.stage_dir, &self.paths, &objects, &transforms,
+            || session.is_some_and(|s| s.cancel.is_cancelled())));
+        let mut closed = false;
+        for (page, settled) in pages.into_iter().zip(settled) {
+            match settled {
+                Settled::Cancelled => self.pages.push(page),
+                Settled::Stored if !closed => {
+                    if let (Some((rel_path, entry)), Some(oid)) = (page.ship, page.receipt.content_oid) {
+                        closed = tx.blocking_send(crate::build::coordinator::EmitMessage::Blob { rel_path, entry, oid }).is_err();
+                    }
+                }
+                Settled::Stored | Settled::Failed => {}
+            }
+        }
+        if closed {
+            return Err(crate::build::background::BuildError::Worker("slot batch coordinator closed".into()));
+        }
+        Ok(())
+    }
+}
+
+/// The batch settles on two workers. Its work is file creates and renames,
+/// which the kernel serialises: on a 10k-page site a full pool finished it no
+/// sooner than two workers and spent twice their CPU contending for those locks.
+static BATCH_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("moss-slot-batch-{i}"))
+        .num_threads(rayon::current_num_threads().min(2))
+        .build()
+        .expect("moss-slot-batch pool")
+});
+
+impl Drop for SlotBatch {
+    fn drop(&mut self) {
+        *self.handover.unsettled.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::mem::take(&mut self.pages));
+        self.handover.ended.notify_all();
+    }
 }
 
 /// What the last slot pass left on the stage, per machine.

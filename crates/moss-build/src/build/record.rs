@@ -235,6 +235,8 @@ pub static BUILD: Kind = Kind {
         budgeted("render_sharing_cards", 20_000),
         // The feeds, llms.txt and sitemap.xml, written after the preview paints.
         budgeted("background_site_files", 5_000),
+        // The slot pass's blobs, records and staged links, stored after the preview paints.
+        budgeted("background_slot_batch", 20_000),
         // In-memory hashing and diffing; it should stay far under render_html_pages.
         budgeted("incremental_facade_diff", 10_000),
         phase("entry_check"), phase("resolve_inputs"), phase("comment_refresh"),

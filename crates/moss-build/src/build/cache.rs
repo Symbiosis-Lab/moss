@@ -380,7 +380,7 @@ impl ObjectStore {
     /// when the caller already has bytes in memory — e.g., a small JSON
     /// metadata blob.
     pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
-        let oid = format!("{:x}", Sha256::digest(data));
+        let oid = Self::oid_of(data);
         self.store_routed(&oid, |store| store.store_bytes_in_base(data, &oid))
     }
 
@@ -407,6 +407,11 @@ impl ObjectStore {
         .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
         self.place_pending(oid, &tmp, &dest)
+    }
+
+    /// The oid [`store_bytes`](Self::store_bytes) would give `data`.
+    pub(crate) fn oid_of(data: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(data))
     }
 
     /// Return the on-disk path for a blob only if it is really an output.

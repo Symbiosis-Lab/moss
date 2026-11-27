@@ -412,32 +412,147 @@ pub(crate) fn resolved_slots_hash(slots: &ResolvedSlots) -> String {
     crate::build::assets::paths::compute_binary_hash(&bytes)
 }
 
-/// Pages the object store could not take during one pass.
+/// A page the pass injected and wrote to the stage. Its blob, record and staged
+/// link are written after the preview paints, by [`DeferredPage::settle`].
+pub(crate) struct DeferredPage {
+    oid: String,
+    len: u64,
+    /// The stage file right after the pass wrote it, the only one the staged
+    /// link may vouch for.
+    written: Option<crate::build::stat::FileStat>,
+    record: Option<SlotRecordKey>,
+    /// What the manifest is told about it. The batch puts the blob's oid on it
+    /// once the blob is stored.
+    pub receipt: SlotInjectionReceipt,
+    /// The served path and manifest entry its blob ships under, once the
+    /// manifest has registered the page.
+    pub ship: Option<(String, String)>,
+}
+
+/// What the batch did with one page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Settled {
+    /// Not reached before the session was cancelled: still owed.
+    Cancelled,
+    /// The store refused it; the page ships from the stage.
+    Failed,
+    /// Its blob and record are stored.
+    Stored,
+}
+
+/// Settle `pages` in parallel and save the staged links and verified blobs
+/// they made; one [`Settled`] per page, in order. The next save's render
+/// carries pages only from a sealed render, and the seal waits for this.
+pub(crate) fn settle_pages(
+    pages: &mut [DeferredPage], stage: &std::path::Path, paths: &crate::moss_paths::MossPaths,
+    objects: &crate::build::cache::ObjectStore, transforms: &crate::build::cache::TransformCache,
+    cancelled: impl Fn() -> bool + Sync,
+) -> Vec<Settled> {
+    use rayon::prelude::*;
+    type Batch = (Vec<Settled>, crate::build::cache::HashIndex, StoreFailures);
+    let empty = || -> Batch { (Vec::new(), crate::build::cache::HashIndex::new(), StoreFailures::default()) };
+    let (settled, links, failures) = pages
+        .par_iter_mut()
+        .fold(empty, |(mut settled, mut links, mut failures), page| {
+            settled.push(if cancelled() {
+                Settled::Cancelled
+            } else if page.settle(stage, objects, transforms, &mut links, &mut failures) {
+                page.receipt.content_oid = Some(page.oid.clone());
+                Settled::Stored
+            } else {
+                Settled::Failed
+            });
+            (settled, links, failures)
+        })
+        .reduce(empty, |(mut settled, mut links, mut failures), (more, more_links, more_failures)| {
+            settled.extend(more);
+            links.entries.extend(more_links.entries);
+            failures.merge(more_failures);
+            (settled, links, failures)
+        });
+    // Merged: a pass that saved meanwhile keeps its entries.
+    let file = paths.staged_links("pages");
+    if let Err(e) = (!links.entries.is_empty()).then(|| links.save_merging(&file)).unwrap_or(Ok(())) {
+        log::info!("[slots] could not save {}: {e}", file.display());
+    }
+    if let Err(e) = objects.save_verified_keeping_unchecked() {
+        log::info!("[slots] could not save the verified-blob record: {e}");
+    }
+    failures.report();
+    settled
+}
+
+struct SlotRecordKey {
+    source_oid: String,
+    params: serde_json::Value,
+    source_len: u64,
+    record: SlotInjectRecord,
+}
+
+impl DeferredPage {
+    pub(crate) fn oid(&self) -> &str {
+        &self.oid
+    }
+
+    /// Store the page's blob from its stage file, then its record, and add its
+    /// staged link to `links` if the stage still holds the file the pass wrote.
+    /// Whether the blob was stored.
+    pub(crate) fn settle(&self, stage: &std::path::Path, objects: &crate::build::cache::ObjectStore,
+        transforms: &crate::build::cache::TransformCache, links: &mut crate::build::cache::HashIndex,
+        failures: &mut StoreFailures) -> bool {
+        let path = stage.join(&self.receipt.page_path);
+        let recorded_at = crate::build::stat::recording_clock();
+        if let Err(reason) = objects.store_hashed_file(&path, &self.oid) {
+            failures.fail(reason);
+            return false;
+        }
+        if let Some(key) = &self.record {
+            transforms.put_with_page(SLOT_PAGE_TRANSFORM, &key.source_oid, key.source_len, &key.params, &key.record, (&self.oid, self.len));
+        }
+        if let Some(now) = self.still_staged(&path, recorded_at) {
+            links.update_read_at(self.receipt.page_path.clone(), &now, self.oid.clone(), recorded_at);
+        }
+        true
+    }
+
+    /// The stat of the stage file at `path` if it is still the one the pass
+    /// wrote (one a later pass replaced is that pass's), judged against a clock
+    /// sampled before.
+    fn still_staged(&self, path: &std::path::Path, recorded_at: Option<u64>) -> Option<crate::build::stat::FileStat> {
+        let now = std::fs::symlink_metadata(path).ok().map(|md| crate::build::stat::FileStat::of(&md))?;
+        let written = self.written.as_ref()?;
+        (written.same_inode_and_write(&now, recorded_at)
+            || (now.inode.is_none() && crate::build::cache::ObjectStore::hash_file(path).is_ok_and(|hash| hash == self.oid)))
+            .then_some(now)
+    }
+}
+
+/// Pages the object store could not take during one batch.
 ///
 /// A full or unwritable store must cost a page its CAS object, never the build,
 /// so storing fails OPEN here and the reason is kept for one report at the end:
 /// a store that is full fails every page, and a WARN per page is a corpus's
 /// worth of the same line.
 #[derive(Default)]
-struct StoreFailures {
+pub(crate) struct StoreFailures {
     pages: usize,
     first_reason: Option<String>,
 }
 
 impl StoreFailures {
-    /// `store_bytes`, with `None` for a page the store could not take.
-    fn store(&mut self, object_store: &crate::build::cache::ObjectStore, bytes: &[u8]) -> Option<String> {
-        match object_store.store_bytes(bytes) {
-            Ok(oid) => Some(oid),
-            Err(reason) => {
-                self.pages += 1;
-                self.first_reason.get_or_insert(reason);
-                None
-            }
+    fn fail(&mut self, reason: String) {
+        self.pages += 1;
+        self.first_reason.get_or_insert(reason);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.pages += other.pages;
+        if self.first_reason.is_none() {
+            self.first_reason = other.first_reason;
         }
     }
 
-    fn report(self) {
+    pub(crate) fn report(self) {
         if let Some(reason) = self.first_reason {
             log::info!(
                 target: "slots",
@@ -480,13 +595,12 @@ fn place_page(root: &std::path::Path, path: &std::path::Path, oid: Option<&str>,
 /// ([`resolved_slots_hash`]), so it can never alias a change that lands
 /// somewhere else in `ResolvedSlots`. A hit names the blob of the final bytes
 /// and re-emits the cached residual-marker WARN (a diagnostic must never become
-/// cache-skippable); a miss injects once and stores the result. Pages reach the
-/// stage through `staged`, which skips a file it vouches already holds the blob.
+/// cache-skippable); a miss injects once and writes the stage, and its blob and
+/// record wait in [`SlotPass::deferred`] so the preview does not. A hit reaches
+/// the stage through `staged`, which skips a file it vouches already holds the blob.
 ///
-/// Returns one [`SlotInjectionReceipt`] per page scanned, whichever way it went.
-/// A CAS that cannot take a page's bytes costs that page its `content_oid`, never
-/// the build: a full or unwritable object store must not fail a build that
-/// succeeds today for a page that never needed a blob.
+/// Returns one [`SlotInjectionReceipt`] per page scanned, whichever way it went;
+/// a miss's names no blob until the batch stores one.
 pub(crate) fn inject_slots_into_directory_cached(
     // The VAULT root, not `dir` (which is the stage below it): `io_stop` asks
     // the watcher predicates about the path inside the vault.
@@ -507,6 +621,9 @@ pub(crate) fn inject_slots_into_directory_cached(
     // Stage pages proved unchanged since the pass that last filled them, by path,
     // with their manifest entry. Each is reported from its staged link, unread.
     carried: &std::collections::BTreeMap<String, String>,
+    // Pages an earlier pass with these slots wrote whose batch stopped before
+    // storing them: each still in the stage as written is reported unread and owed again.
+    unsettled: Vec<DeferredPage>,
     staged: &mut StagedLinks,
     // `BuildStopped`: this reads the stage back, so a cloud eviction here must
     // stay distinguishable from a plugin returning garbage. See `build::outcome`.
@@ -516,7 +633,7 @@ pub(crate) fn inject_slots_into_directory_cached(
     let mut rewritten = 0usize;
     let mut written = 0usize;
     let mut residual_files = 0usize;
-    let mut store_failures = StoreFailures::default();
+    let mut deferred = Vec::new();
     // The part that scales with the CORPUS (walk, read, hash: paid even when
     // nothing changed); the rest, inject and write, scales with the DELTA.
     let mut walk_ms = std::time::Duration::ZERO;
@@ -527,10 +644,21 @@ pub(crate) fn inject_slots_into_directory_cached(
     let mut kept = std::collections::HashMap::new();
 
     let t_walk = std::time::Instant::now();
+    let mut unsettled: std::collections::HashMap<String, DeferredPage> =
+        unsettled.into_iter().map(|page| (page.receipt.page_path.clone(), page)).collect();
+    let recorded_at = crate::build::stat::recording_clock();
     let staged_only: Vec<String> = registered
         .into_iter()
         .filter(|page_path| !rendered.contains_key(page_path))
         .filter(|page_path| {
+            let owed = unsettled.remove(page_path.as_str()).filter(|page| page.still_staged(&dir.join(page_path), recorded_at).is_some());
+            if let Some((page, manifest_hash)) = owed.and_then(|page| {
+                let manifest_hash = page.record.as_ref()?.record.manifest_hash.clone();
+                Some((page, manifest_hash))
+            }) {
+                deferred.push(DeferredPage { receipt: SlotInjectionReceipt { page_path: page_path.clone(), manifest_hash, content_oid: None }, ship: None, ..page });
+                return false;
+            }
             let Some(oid) = staged.vouched_oid(page_path).filter(|oid| object_store.holds(oid)) else { return true };
             // A page newer than the sealed manifest that this process's last pass
             // filled: its record names the blob the link vouches for.
@@ -544,9 +672,9 @@ pub(crate) fn inject_slots_into_directory_cached(
         .collect();
     walk_ms += t_walk.elapsed();
     // A page carried unread this pass keeps its record for the pass that renders it again.
-    for receipt in &receipts {
-        if let Some(entry) = remembered.get(&receipt.page_path) {
-            kept.insert(receipt.page_path.clone(), entry.clone());
+    for page_path in receipts.iter().map(|receipt| &receipt.page_path).chain(deferred.iter().map(|page| &page.receipt.page_path)) {
+        if let Some(entry) = remembered.get(page_path) {
+            kept.insert(page_path.clone(), entry.clone());
         }
     }
     let pages = rendered.into_iter().map(|(page_path, html)| (page_path, Some(html)));
@@ -597,14 +725,14 @@ pub(crate) fn inject_slots_into_directory_cached(
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
             .filter(|record| object_store.get_path(&record.content_oid).is_some());
-        let (changed, manifest_hash, content_oid, injected) = if let (Some(record), Some((source_oid, _))) = (hit, &key) {
+        let (changed, manifest_hash, content_oid, injected, owed) = if let (Some(record), Some((source_oid, _))) = (hit, &key) {
             kept.insert(page_path.clone(), (source_oid.clone(), record.clone()));
             if !record.residual.is_empty() {
                 residual_files += 1;
                 let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
                 log_residual_slot_markers(&page_path, &residual);
             }
-            (record.rewritten, record.manifest_hash, Some(record.content_oid), None)
+            (record.rewritten, record.manifest_hash, Some(record.content_oid), None, None)
         } else {
             // Miss (or stale record) — do the real work.
             let injected = inject_slots(&html, slots, &page_path);
@@ -618,39 +746,49 @@ pub(crate) fn inject_slots_into_directory_cached(
             // stripped ones — computed here, from the bytes in hand, because
             // this is the last moment anything holds them.
             let manifest_hash = crate::build::ship::shipped_hash(&page_path, mount, injected.as_bytes());
-            let content_oid = store_failures.store(object_store, injected.as_bytes());
-            // Cache only what a hit can serve whole: a record without its blob would
-            // have to be a miss again anyway.
-            if let (Some(oid), Some((source_oid, params))) = (&content_oid, key) {
+            let oid = crate::build::cache::ObjectStore::oid_of(injected.as_bytes());
+            // In the memo now: a hit there still needs the blob the batch stores.
+            let record = key.map(|(source_oid, params)| {
                 let record = SlotInjectRecord {
                     content_oid: oid.clone(),
                     manifest_hash: manifest_hash.clone(),
                     rewritten: changed_page,
                     residual: residual.iter().map(|s| s.to_string()).collect(),
                 };
-                transform_cache.put_with_page(SLOT_PAGE_TRANSFORM, &source_oid, html.len() as u64, &params, &record, (oid, injected.len() as u64));
-                kept.insert(page_path.clone(), (source_oid, record));
-            }
-            (changed_page, manifest_hash, content_oid, Some(injected))
+                kept.insert(page_path.clone(), (source_oid.clone(), record.clone()));
+                SlotRecordKey { source_oid, params, source_len: html.len() as u64, record }
+            });
+            // A blob the store holds already (a page with no marker is the same bytes
+            // every pass) ships as a hit does; the batch still verifies it before
+            // vouching for the stage file.
+            let stored = object_store.holds(&oid).then(|| oid.clone());
+            let owed = (stored.is_none() || record.is_some()).then(|| (oid, injected.len() as u64, record));
+            (changed_page, manifest_hash, stored, Some(injected), owed)
         };
         rewritten += changed as usize;
         if changed || !in_stage {
-            written += place_page(root, &path, content_oid.as_deref(), injected.as_deref(), object_store, staged)? as usize;
+            let bytes = injected.as_deref();
+            written += place_page(root, &path, content_oid.as_deref(), bytes, object_store, staged)? as usize;
         }
-        receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
+        let receipt = SlotInjectionReceipt { page_path, manifest_hash, content_oid };
+        if let Some((oid, len, record)) = owed {
+            let written = std::fs::symlink_metadata(&path).ok().map(|md| crate::build::stat::FileStat::of(&md));
+            deferred.push(DeferredPage { oid, len, written, record, receipt, ship: None });
+        } else {
+            receipts.push(receipt);
+        }
     }
 
     let sources = kept.iter().map(|(page, (oid, _))| (page.clone(), oid.clone())).collect();
     SLOT_MEMO.keep(dir, SlotMemo { key: memo_key, pages: kept });
     crate::build::phase::record_count("slot_html_scanned", scanned);
     crate::build::phase::record_count("slot_html_rewritten", rewritten);
-    store_failures.report();
     let total = t_pass.elapsed();
     log::info!(
         target: "slots",
         "slot injection: {} html scanned, {} carried unread, {} rewritten, {} written, {} with unresolved markers",
         scanned,
-        receipts.len() - scanned,
+        receipts.len() + deferred.len() - scanned,
         rewritten,
         written,
         residual_files,
@@ -664,15 +802,19 @@ pub(crate) fn inject_slots_into_directory_cached(
         total.saturating_sub(walk_ms),
         rewritten,
     );
-    Ok(SlotPass { receipts, scanned, sources })
+    Ok(SlotPass { receipts, scanned, sources, deferred })
 }
 
-/// A receipt per page the pass covered, `scanned` of which it read and hashed.
+/// A receipt per page the pass covered, `scanned` of which it read and hashed:
+/// in `receipts`, or on the deferred page itself.
 pub(crate) struct SlotPass {
     pub receipts: Vec<SlotInjectionReceipt>,
     pub scanned: usize,
     /// Each page this pass has a record for, with that record's source oid.
     pub sources: std::collections::BTreeMap<String, String>,
+    /// The pages it wrote, whose blobs and records wait for the after-paint batch,
+    /// each carrying its own receipt.
+    pub deferred: Vec<DeferredPage>,
 }
 
 #[cfg(test)]

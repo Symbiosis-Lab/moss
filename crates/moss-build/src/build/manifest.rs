@@ -925,6 +925,14 @@ impl PendingManifest {
         self.inner.files.get(rel_path.as_str()).cloned()
     }
 
+    /// Ship `rel_path` from `oid` if `entry` is still what it is registered as:
+    /// a later registration of other bytes wins.
+    pub(crate) fn attach_blob(&mut self, rel_path: String, entry: &str, oid: String) {
+        if self.inner.files.get(&rel_path).is_some_and(|current| current == entry) {
+            self.ship_sources.insert(rel_path, ShipSource::Cas(oid));
+        }
+    }
+
     fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         // Mark-and-sweep mark step: record that this build owns `rel_path`.
         // Every output-bucket entry must pass through this chokepoint

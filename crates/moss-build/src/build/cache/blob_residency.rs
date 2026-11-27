@@ -72,11 +72,7 @@ impl ObjectStore {
             Ok(hash) if hash == oid => {
                 let unchanged = fs::metadata(path).ok().is_some_and(|after| FileStat::of(&after) == before);
                 if !unchanged { return false; }
-                let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if self.remembered.is_none() && index.entries.len() >= MAX_VERIFIED_BLOBS && !index.entries.contains_key(&key) {
-                    index.entries.clear();
-                }
-                index.update_read_at(key, &before, hash, recorded_at);
+                self.remember_verified(key, &before, hash, recorded_at);
                 true
             },
             Ok(hash) => {
@@ -90,6 +86,36 @@ impl ObjectStore {
                 false
             }
         }
+    }
+
+    /// Store a copy of the file at `source`, whose bytes the caller hashed as
+    /// `oid`. The copy is hashed again before it enters the store, so the next
+    /// pass takes it as verified.
+    pub(crate) fn store_hashed_file(&self, source: &Path, oid: &str) -> Result<String, String> {
+        self.store_routed(oid, |store| {
+            if store.holds_verified(&store.blob_path(oid), oid) {
+                return Ok(());
+            }
+            let recorded_at = recording_clock();
+            store.store_file_in_base(source, oid)?;
+            store.note_verified(&store.blob_path(oid), oid, recorded_at);
+            Ok(())
+        })
+    }
+
+    /// Note `path`, whose bytes the caller hashed as `oid` since `recorded_at`, as verified.
+    fn note_verified(&self, path: &Path, oid: &str, recorded_at: Option<u64>) {
+        if let Ok(metadata) = fs::symlink_metadata(path) {
+            self.remember_verified(path.to_string_lossy().into_owned(), &FileStat::of(&metadata), oid.to_string(), recorded_at);
+        }
+    }
+
+    fn remember_verified(&self, key: String, stat: &FileStat, oid: String, recorded_at: Option<u64>) {
+        let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.remembered.is_none() && index.entries.len() >= MAX_VERIFIED_BLOBS && !index.entries.contains_key(&key) {
+            index.entries.clear();
+        }
+        index.update_read_at(key, stat, oid, recorded_at);
     }
 
     /// Whether this store, or the pass it remembers, verified `path` as `oid`.

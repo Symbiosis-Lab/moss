@@ -1620,7 +1620,7 @@ fn build_inner(
     }
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
-    crate::build::emit::slots::apply_to_stage_and_manifest(
+    let slot_batch = crate::build::emit::slots::apply_to_stage_and_manifest(
         &paths,
         &stage_dir,
         &resolved_slots,
@@ -1954,6 +1954,7 @@ fn build_inner(
         // Clone what we need before consuming background_ctx by video dispatch.
         let og_requests = std::mem::take(&mut background_ctx.og_requests);
         let site_files = background_ctx.site_files.take().and_then(|files| files.after_paint(&documents, &background_ctx.staging_dir, services.and_then(|s| s.session.clone())));
+        let slot_batch = slot_batch.after_paint(services.and_then(|s| s.session.clone()));
         let og_output = background_ctx.staging_dir.clone();
         let og_session = services.and_then(|s| s.session.clone());
         let video_items_empty = background_ctx.video_items.is_empty();
@@ -2025,6 +2026,7 @@ fn build_inner(
                 job.spawn(workers, tx.clone());
             }
             if let Some(job) = site_files { job.spawn(workers, tx.clone(), render.clone()); }
+            if let Some(batch) = slot_batch { batch.spawn(workers, tx.clone()); }
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {

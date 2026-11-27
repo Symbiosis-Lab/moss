@@ -359,10 +359,12 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
     // The render phase registered it: this build owns the page.
     pending.register(&page, b"<html>rendered</html>", HashBucket::Files);
-    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None)
+    let batch = apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None)
         .expect("slot pass");
 
     pending.register_hashed(&page, "0123456789abcdef", HashBucket::Files);
+    // The pass's blob is stored after the paint, so it arrives after this registration.
+    batch.settle_into(&mut pending);
 
     assert_eq!(pending.seal().staged_oid("page.html"), None);
 }
@@ -404,7 +406,7 @@ fn a_newer_page_this_process_filled_is_not_read_again() {
     let slots = || head_end("<style>h1{}</style>");
     let mut rendered = PendingManifest::new(crate::types::content::SiteHashes::default());
     rendered.register_unwritten_page(&page, "<html><head><!-- slot:head-end --></head></html>".to_string());
-    apply_to_stage_and_manifest(&paths, &stage, &slots(), &mut rendered, None).expect("render's slot pass");
+    apply_to_stage_and_manifest(&paths, &stage, &slots(), &mut rendered, None).expect("render's slot pass").settle_into(&mut rendered);
     let filled = rendered.seal().files()["page.html"].clone();
     touch_apart();
 
@@ -434,7 +436,7 @@ fn a_reread_page_gone_from_the_stage_stops_the_build() {
 
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
     pending.register_carried_page(&ServedPath::from_source("page.html").unwrap(), "0123456789abcdef", StageBytes::Newer);
-    let stopped = apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None).unwrap_err();
+    let Err(stopped) = apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None) else { panic!("the pass must stop") };
     assert!(stopped.is_discarded(), "the pipeline builds once more rather than show an error");
     assert_eq!(super::staged_render(&paths), None, "a pass that did not end leaves no render on record");
 }
@@ -678,4 +680,66 @@ fn a_changed_footer_rewrites_every_page() {
         let html = std::fs::read_to_string(site.stage(key)).unwrap();
         assert!(html.contains("second footer words") && !html.contains("first footer words"), "{key}: stale footer");
     }
+}
+
+/// One page rendered and filled by a pass whose batch is handed back unrun,
+/// in a fresh folder; with the page's stage path.
+fn filled_and_unsettled(tmp: &TempDir) -> (MossPaths, PathBuf, crate::build::served_path::ServedPath, SlotBatch) {
+    let paths = MossPaths::new(tmp.path());
+    let stage = paths.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let page = crate::build::served_path::ServedPath::from_source("page.html").unwrap();
+    let mut rendered = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    rendered.register_unwritten_page(&page, "<html><head><!-- slot:head-end --></head></html>".to_string());
+    let batch = apply_to_stage_and_manifest(&paths, &stage, &head_end("<style>h1{}</style>"), &mut rendered, None).expect("render's slot pass");
+    (paths, stage, page, batch)
+}
+
+/// A batch dropped unrun leaves its pages to the next pass, which carries them
+/// unread and owes them again: the page ships by oid with the entry a settled
+/// batch would have given it.
+#[test]
+fn a_page_a_dropped_batch_never_stored_is_carried_unread_and_stored_by_the_next() {
+    use crate::build::manifest::{PendingManifest, StageBytes};
+    let tmp = TempDir::new().unwrap();
+    let (paths, stage, page, batch) = filled_and_unsettled(&tmp);
+    drop(batch);
+    touch_apart();
+
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register_carried_page(&page, "0123456789abcdef", StageBytes::Newer);
+    apply_to_stage_and_manifest(&paths, &stage, &head_end("<style>h1{}</style>"), &mut pending, None)
+        .expect("save's slot pass")
+        .settle_into(&mut pending);
+
+    assert_eq!(scanned_by_last_pass(), 0, "the save read a page the last pass wrote");
+    let sealed = pending.seal();
+    let oid = sealed.staged_oid("page.html").expect("the carried page names no blob");
+    let blob = std::fs::read(ObjectStore::for_site(&paths).get_path(oid).expect("its blob was never stored")).unwrap();
+    assert_eq!(blob, std::fs::read(stage.join("page.html")).unwrap());
+    assert_eq!(sealed.files()["page.html"], entry_for("page.html", &blob));
+}
+
+/// A save's pass waits for the batch still storing the last pass's pages, so
+/// it carries them by their staged links, unread, instead of reading them.
+#[test]
+fn a_pass_waits_for_the_running_batch_and_carries_what_it_stored() {
+    use crate::build::manifest::{PendingManifest, StageBytes};
+    let tmp = TempDir::new().unwrap();
+    let (paths, stage, page, batch) = filled_and_unsettled(&tmp);
+    touch_apart();
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let running = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        batch.run(&tx).expect("slot batch");
+    });
+
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register_carried_page(&page, "0123456789abcdef", StageBytes::Newer);
+    let next = apply_to_stage_and_manifest(&paths, &stage, &head_end("<style>h1{}</style>"), &mut pending, None).expect("save's slot pass");
+    running.join().unwrap();
+
+    assert_eq!(scanned_by_last_pass(), 0, "the save read a page the running batch stored");
+    assert!(next.pages.is_empty(), "the save owes a page the running batch stored");
+    assert!(pending.seal().staged_oid("page.html").is_some(), "the carried page names no blob");
 }
