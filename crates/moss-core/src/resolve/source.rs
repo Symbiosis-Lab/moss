@@ -1,21 +1,5 @@
 //! Source preparation shared by build and standalone page rendering.
 
-static CM_SUB_RE: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\{~~(.*?)~>(.*?)~~\}").ok()
-});
-static CM_ADD_RE: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\{\+\+(.*?)\+\+\}").ok()
-});
-static CM_DEL_RE: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\{--(.*?)--\}").ok()
-});
-static CM_HL_RE: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\{==(.*?)==\}").ok()
-});
-static CM_COM_RE: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\{>>(.*?)<<\}").ok()
-});
-
 /// The pre-parse source-hygiene pass: everything moss does to a page's
 /// markdown *before* it becomes an AST.
 ///
@@ -64,6 +48,38 @@ fn unterminated_comment_warning(body: &str, frontmatter_line_count: usize) -> Op
     ))
 }
 
+/// CriticMarkup's marks: opening, the `~>` of a substitution, closing, and
+/// whether the text before the closing is kept.
+const CRITIC_MARKS: [(&str, Option<&str>, &str, bool); 5] = [
+    ("{~~", Some("~>"), "~~}", true),
+    ("{++", None, "++}", true),
+    ("{--", None, "--}", false),
+    ("{==", None, "==}", true),
+    ("{>>", None, "<<}", false),
+];
+
+/// Each mark in `text`, leftmost first and not overlapping, as (whole, kept):
+/// the kept range runs from the opening (or the `middle`) to the nearest
+/// closing after it, across lines.
+fn critic_spans<'a>(
+    text: &'a str,
+    open: &'a str,
+    middle: Option<&'a str>,
+    close: &'a str,
+) -> impl Iterator<Item = (std::ops::Range<usize>, std::ops::Range<usize>)> + 'a {
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let start = from + text.get(from..)?.find(open)?;
+        let mut kept = start + open.len();
+        if let Some(middle) = middle {
+            kept += text.get(kept..)?.find(middle)? + middle.len();
+        }
+        let end = kept + text.get(kept..)?.find(close)?;
+        from = end + close.len();
+        Some((start..from, kept..end))
+    })
+}
+
 /// Accept every CriticMarkup edit in the input and return the clean markdown.
 /// Highlights and insertions are kept, deletions and comments are removed,
 /// substitutions resolve to the "new" side. Inert content — fenced and
@@ -77,39 +93,15 @@ pub fn accept_criticmarkup(text: &str) -> std::borrow::Cow<'_, str> {
 
     let masked = crate::inert_regions::mask_inert(text);
 
-    // Collect (start, end, replacement) from all five patterns.
+    // Collect (start, end, replacement) from all five marks.
     let mut reps: Vec<(usize, usize, String)> = Vec::new();
-    // The mask is byte-length-preserving, so a match range in it indexes
-    // `text` — and every match starts at an ASCII `{`, which a masked byte
-    // can never be. `get` keeps a future mask change from aborting a build.
-    for cap in CM_SUB_RE.as_ref().into_iter().flat_map(|pattern| pattern.captures_iter(&masked)) {
-        let Some(m) = cap.get(0) else { continue };
-        let Some(new_side) = cap.get(2).and_then(|g| text.get(g.range())) else {
-            continue;
-        };
-        reps.push((m.start(), m.end(), new_side.to_string()));
-    }
-    for cap in CM_ADD_RE.as_ref().into_iter().flat_map(|pattern| pattern.captures_iter(&masked)) {
-        let Some(m) = cap.get(0) else { continue };
-        let Some(content) = cap.get(1).and_then(|g| text.get(g.range())) else {
-            continue;
-        };
-        reps.push((m.start(), m.end(), content.to_string()));
-    }
-    for cap in CM_DEL_RE.as_ref().into_iter().flat_map(|pattern| pattern.captures_iter(&masked)) {
-        let Some(m) = cap.get(0) else { continue };
-        reps.push((m.start(), m.end(), String::new()));
-    }
-    for cap in CM_HL_RE.as_ref().into_iter().flat_map(|pattern| pattern.captures_iter(&masked)) {
-        let Some(m) = cap.get(0) else { continue };
-        let Some(content) = cap.get(1).and_then(|g| text.get(g.range())) else {
-            continue;
-        };
-        reps.push((m.start(), m.end(), content.to_string()));
-    }
-    for cap in CM_COM_RE.as_ref().into_iter().flat_map(|pattern| pattern.captures_iter(&masked)) {
-        let Some(m) = cap.get(0) else { continue };
-        reps.push((m.start(), m.end(), String::new()));
+    // The mask is byte-length-preserving, so a range in it indexes `text`.
+    // `get` keeps a future mask change from aborting a build.
+    for (open, middle, close, keeps) in CRITIC_MARKS {
+        for (whole, kept) in critic_spans(&masked, open, middle, close) {
+            let Some(kept) = (if keeps { text.get(kept) } else { Some("") }) else { continue };
+            reps.push((whole.start, whole.end, kept.to_string()));
+        }
     }
 
     if reps.is_empty() {

@@ -15,7 +15,6 @@ publish = true
 workspace = true
 
 [dependencies]
-regex = "1.12.2"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -54,3 +53,5 @@ proptest = "1.5"
 # tests/it: components_sync_test.rs, img_contract_test.rs: recursive source-tree walk.
 # Same version as moss-build's own (non-dev) walkdir dependency.
 walkdir = "2.4"
+# tests/it/components_sync_test.rs: class and custom-property scans of the stylesheet.
+regex = "1.12.2"

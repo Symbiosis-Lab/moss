@@ -388,3 +388,27 @@ fn a_raw_src_that_names_no_file_or_a_present_one_is_not_missing() {
                   <img src=\"//cdn.example.org/far.png\">\n\n<img src=\"/img/here.svg\">\n\n<img src=\"img/here.svg?v=2\">\n";
     assert_eq!(missing(source, &["img/here.svg"]), Vec::<String>::new());
 }
+
+/// Each raw tag's name and `src` value, for the scanner's edge cases.
+fn tag_srcs(source: &str) -> Vec<(String, Option<String>)> {
+    raw_media_tags(source).into_iter().map(|t| (t.tag, t.src.map(|r| source[r].to_string()))).collect()
+}
+
+#[test]
+fn the_raw_tag_scan_reads_src_as_a_browser_does() {
+    let src = |s: &str| Some(s.to_string());
+    let cases: [(&str, Vec<(String, Option<String>)>); 9] = [
+        (r#"<img srcset="a.png 2x" src="b.png">"#, vec![("img".into(), src("b.png"))]),
+        (r#"<img src="a.png src=b.png>"#, vec![("img".into(), src("b.png"))]),
+        (r#"<img src="">"#, vec![("img".into(), src(""))]),
+        (r#"<IMG SRC = 'a.png'/>"#, vec![("img".into(), src("a.png"))]),
+        (r#"<script><img src="a"></script ><img src="b">"#, vec![("img".into(), src("b"))]),
+        (r#"<script><img src="a"></SCRIPT><img src="b">"#, vec![("img".into(), src("b"))]),
+        (r#"<style>.x {} <img src="a">"#, vec![]),
+        (r#"<imgur src="a"> <videos src="b"> <video src="c">"#, vec![("video".into(), src("c"))]),
+        (r#"<img ſrc="a.png">"#, vec![("img".into(), None)]),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(tag_srcs(input), expected, "{input}");
+    }
+}

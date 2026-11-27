@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The `regex` dependency. CriticMarkup acceptance and the raw `<img>`/`<video>`/`<audio>` scan are plain string scans with the same matches, which takes about 220 KB (brotli) off the wasm build.
 - **BREAKING:** `PageKind::is_listable_at_depth_all` and `PageKind::is_listable_at_depth_direct` are gone. `page::listing::select` was their one caller: a flattened listing leaves out folder homes, and a direct one keeps every kind.
 - **BREAKING:** `page::site_sources::resolve_site_default_lang` is gone; read `.code` off `resolve_site_lang`, which also says whether the language was declared.
 
