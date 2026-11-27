@@ -13,6 +13,8 @@ pub mod page_map;
 pub mod inherit;
 pub mod excerpt;
 pub mod card;
+pub mod card_pictures;
+mod preview_cards;
 pub use site_sources::{site_bundle, site_text_paths, home_file, SiteSources, PluginSource, Admission};
 
 use crate::ast::{self, DefaultHooks, ParseConfig};
@@ -331,10 +333,33 @@ pub fn embedded_notes(source_path: &str, text: &str, site: &SiteInputs) -> Vec<S
 /// page's banner stays in the body here, with the title above it.
 pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> RenderedPage {
     let fields = frontmatter::frontmatter_map(text);
+    let ParsedPage { doc, markdown, diagnostics } = parse_page(source_path, text, site, &graph(site));
+    let inputs = HeadingInputs {
+        file_path: source_path,
+        frontmatter_title: fields.get("title").and_then(|v| v.as_str()),
+        body_markdown: &markdown,
+        root_folder_name: None,
+        is_home_override: fields.get("home").and_then(|v| v.as_bool()) == Some(true),
+        slot_only: source_path == "footer.md",
+        dated: fields.contains_key("date") || fields.contains_key("start"),
+    };
+    let title = heading::compute(inputs).text;
+    let title_outcome = heading::article_title_outcome(inputs, fields.get("nav").and_then(|v| v.as_bool()) == Some(true));
+    RenderedPage { title, title_outcome, diagnostics, body_html: ast::render_document(&doc, &DefaultHooks::new()) }
+}
+
+/// A page's body parsed and resolved as the preview draws it, with what the
+/// parse and the resolver warned about.
+struct ParsedPage {
+    doc: ast::Document,
+    markdown: String,
+    diagnostics: Vec<Diagnostic>,
+}
+
+fn parse_page(source_path: &str, text: &str, site: &SiteInputs, graph: &ContentGraph) -> ParsedPage {
     let body = frontmatter::body(text);
     let offset = line_at(text, text.len() - body.len()) - 1;
-    let graph = graph(site);
-    let resolved = crate::resolve::resolve_content(source_path, body, &graph, &|path| site.notes.get(path).cloned());
+    let resolved = crate::resolve::resolve_content(source_path, body, graph, &|path| site.notes.get(path).cloned());
     let (markdown, warnings) = crate::resolve::prepare_markdown_source(&resolved.content_markdown, offset);
     let mut diagnostics: Vec<_> = warnings.into_iter().map(|message| {
         let line = message_line(&message);
@@ -343,8 +368,8 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
     let mut doc = ast::parse_with_config(&markdown, &ParseConfig { warning_line_offset: offset, blocks: Some(&site.blocks), ..parse_config() });
     diagnostics.extend(doc.warnings.iter().map(|message| diagnostic(Severity::Warning, message.clone(), message_line(message))));
     let resolution = ast::resolve_document(
-        &mut doc, &crate::asset_snapshot::AssetSnapshot::new(), Some(&graph), source_path,
-        parse_config().implicit_figure, &|target| page_url(target, source_path, &graph),
+        &mut doc, &crate::asset_snapshot::AssetSnapshot::new(), Some(graph), source_path,
+        parse_config().implicit_figure, &|target| page_url(target, source_path, graph),
     );
     // Graph resolution pins assets and rooted links before the host mapper runs.
     // A preview's base is the site root, so those URLs must also use that base.
@@ -360,18 +385,15 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         // `path` names a frontmatter field in every diagnostic; the message names the reference.
         Diagnostic { severity: Severity::Warning, message: d.message, path: None, line: None, column: None }
     }));
-    let inputs = HeadingInputs {
-        file_path: source_path,
-        frontmatter_title: fields.get("title").and_then(|v| v.as_str()),
-        body_markdown: &markdown,
-        root_folder_name: None,
-        is_home_override: fields.get("home").and_then(|v| v.as_bool()) == Some(true),
-        slot_only: source_path == "footer.md",
-        dated: fields.contains_key("date") || fields.contains_key("start"),
-    };
-    let title = heading::compute(inputs).text;
-    let title_outcome = heading::article_title_outcome(inputs, fields.get("nav").and_then(|v| v.as_bool()) == Some(true));
-    RenderedPage { title, title_outcome, diagnostics, body_html: ast::render_document(&doc, &DefaultHooks::new()) }
+    ParsedPage { doc, markdown, diagnostics }
+}
+
+/// The pictures a page's body gives its listing card, read from its text as
+/// the preview draws it, with the opening hero lifted out first.
+pub(crate) fn page_pictures(source_path: &str, text: &str, site: &SiteInputs, graph: &ContentGraph) -> card_pictures::PagePictures {
+    let mut doc = parse_page(source_path, text, site, graph).doc;
+    let hero = ast::extract_hero(&mut doc, &DefaultHooks::new()).and_then(|h| h.image_url);
+    card_pictures::PagePictures::of(&doc, hero)
 }
 
 fn split_suffix(target: &str) -> (&str, &str) {

@@ -4,8 +4,8 @@
 //! - Auto-generated home pages (directories without index files)
 //! - Collection index pages (optional)
 
-use super::child_list::{self as child_list_item, ArticleListItemProps};
-use moss_core::i18n::dates as date_formatters;
+use super::row::{self as child_list_item, ArticleListItemProps};
+use crate::i18n::dates as date_formatters;
 
 /// Renders a list of articles grouped by year.
 ///
@@ -68,7 +68,7 @@ fn render_internal(
 ) -> String {
     // Shared date-axis order, the same comparator folder listings use.
     let mut sorted_articles = articles.to_vec();
-    sorted_articles.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
+    sorted_articles.sort_by(|a, b| crate::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
 
     // Group by year
     let mut current_year: Option<i32> = None;
@@ -139,14 +139,8 @@ fn render_internal(
 }
 
 /// The year a row belongs under: the raw ISO date first, the display string
-/// only as a fallback.
-///
-/// It used to read `date_display` alone, and `extract_year` only understands
-/// four leading ASCII digits — so on a vertical CJK page, where the display
-/// date is already `一七〇三年十二月`, EVERY row returned `None`, the whole
-/// listing collapsed into one headingless section, and 59 works lost their
-/// chronology (a vertical site's home, 2026-09-11). The raw date is the same ISO string
-/// the sort above already trusts.
+/// only as a fallback, since a vertical CJK display date (`一七〇三年十二月`)
+/// has no ASCII year to read.
 fn year_of(article: &ArticleListItemProps) -> Option<i32> {
     article
         .date_raw

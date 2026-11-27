@@ -1070,27 +1070,9 @@ pub fn process_markdown_file(
         None => band_over,
     };
 
-    // 4. Capture the first body image for the cover chain.
-    //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
-    //    query descends into Hero overlay (query.rs:145-153) — if hero is
-    //    still in `doc.blocks`, an overlay image could be returned as the
-    //    body cover, double-counting against the OG image already captured
-    //    from `hero_extraction.image_url`.
-    //
-    //    Only raster pictures with a file-like href qualify: the share image
-    //    and listing cards cannot use a vector, a video or a folder URL.
-    let body_images = moss_core::ast::block_images(&doc);
-    let raster_href = |url: &moss_core::ast::Url| match url {
-        moss_core::ast::Url::Resolved(r)
-            if !r.href.ends_with('/') && crate::build::page::cover::is_raster_picture(&r.href) =>
-        {
-            Some(r.href.clone())
-        }
-        _ => None,
-    };
-    let body_cover_path: Option<String> = body_images.first().and_then(|i| raster_href(i.src));
-    let body_cover_candidates: Vec<crate::build::page::cover::BodyPicture> =
-        body_images.iter().filter_map(|i| Some(crate::build::page::cover::BodyPicture { href: raster_href(i.src)?, alt: i.alt.to_string() })).collect();
+    // 4. The body's pictures for the cover chain, read after `extract_hero`
+    //    so the hero overlay's picture is not counted twice.
+    let pictures = moss_core::page::card_pictures::PagePictures::of(&doc, hero_image_url.clone());
 
     // 5. Final safety net: any `Url::Unresolved` that escaped phases 1-2
     //    (e.g., a future URL-bearing variant added before its phase wires
@@ -1337,9 +1319,7 @@ pub fn process_markdown_file(
     let cover_opted_out = frontmatter.cover.as_deref().is_some_and(|c| c.trim() == "false");
     let cover = frontmatter.cover.as_deref().and_then(|c| moss_core::page::card::frontmatter_cover(c, &url_path));
 
-    let card_cover = (!cover_opted_out)
-        .then(|| crate::build::page::cover::card_cover_from_page(hero_image_url.as_deref(), body_cover_path.as_deref()))
-        .flatten();
+    let card_cover = pictures.card_cover(frontmatter.cover.as_deref());
 
     // Extract page tree fields from frontmatter
     let nav = frontmatter.nav;
@@ -1572,8 +1552,8 @@ pub fn process_markdown_file(
         body_claims_eager,
         lists_folders,
         hero_image_url,
-        body_cover_path,
-        body_cover_candidates,
+        body_cover_path: pictures.first,
+        body_cover_candidates: pictures.body,
         opening_heading,
         hero_overlay_text,
         citations: moss_core::ast::quote_source::citations(&doc.blocks),

@@ -55,7 +55,7 @@ pub fn render(
             let alt = format!("{} cover", alt_label);
             // A folder's cover is usually the largest paint of its page.
             let loading = if media_lookup.is_some() { Loading::Priority } else { Loading::Lazy };
-            let cover_html = cover::render_cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup, loading, None);
+            let cover_html = cover::cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup.map(|l| l.asset_snapshot()), loading, None);
             // Only the media div names `cover:` — never the whole cover-row.
             // The row also holds the title and the lede, and the resolver
             // (`el.closest('[data-source-fm]')`) checks fm BEFORE

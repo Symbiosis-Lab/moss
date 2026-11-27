@@ -2,12 +2,10 @@
 //! first; everything else (past events, ordinary articles) after, newest
 //! first. Decided when the site is built, as of the build's day.
 
-use crate::build::components::child_list::ChildItemProps;
 use crate::build::types::ParsedDocument;
-use moss_core::event::EventSpan;
 use std::collections::HashSet;
 
-/// True for an event that has not ended at `now`: see [`EventSpan::ends_at`]. Ordinary
+/// True for an event that has not ended at `now`: see [`moss_core::event::EventSpan::ends_at`]. Ordinary
 /// articles are never upcoming, whatever their `date`.
 pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     moss_core::page::listing::is_upcoming(doc, &minute(now))
@@ -27,52 +25,11 @@ pub(super) fn urls<'a>(group: &str, docs: &[&'a ParsedDocument], now: chrono::Na
     docs.iter().filter(|d| is_upcoming(d, now)).map(|d| d.url_path.as_str()).collect()
 }
 
-/// Upcoming items first (soonest first), then the rest (newest first). With
-/// `keep_order` (the caller already ordered by a non-date axis) each part
-/// keeps its given order.
-pub(super) fn order<'a>(
-    items: Vec<&'a ChildItemProps>,
-    upcoming: &HashSet<&str>,
-    keep_order: bool,
-) -> Vec<&'a ChildItemProps> {
-    let (mut soon, mut rest): (Vec<_>, Vec<_>) =
-        items.into_iter().partition(|i| upcoming.contains(i.url_path.as_str()));
-    if !keep_order {
-        soon.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), true));
-        rest.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), false));
-    }
-    soon.into_iter().chain(rest).collect()
-}
-
-/// The two runs as `<section class="moss-cards-group" data-group="…">`; an
-/// empty run is not emitted. `render` draws one item.
-pub(super) fn sections(
-    articles: &[&ChildItemProps],
-    upcoming: &HashSet<&str>,
-    render: impl Fn(&ChildItemProps) -> String,
-) -> String {
-    let mut html = String::new();
-    for (name, in_group) in [("upcoming", true), ("earlier", false)] {
-        let items: Vec<&&ChildItemProps> =
-            articles.iter().filter(|a| upcoming.contains(a.url_path.as_str()) == in_group).collect();
-        if items.is_empty() {
-            continue;
-        }
-        html.push_str(&format!("<section class=\"moss-cards-group\" data-group=\"{name}\">\n"));
-        for article in items {
-            html.push_str(&render(article));
-            html.push('\n');
-        }
-        html.push_str("</section>\n");
-    }
-    html
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::build::types::EventFields;
-    use moss_core::event::EventTime;
+    use moss_core::event::{EventSpan, EventTime};
 
     fn all_day_event(day: EventTime) -> ParsedDocument {
         ParsedDocument {

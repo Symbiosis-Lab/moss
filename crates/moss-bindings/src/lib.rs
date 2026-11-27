@@ -18,6 +18,9 @@ pub struct Site {
     css: String,
     bundle: SiteBundle,
     pages: page::site_page::SitePages,
+    /// Every page's source by path, as `set_texts` received it; a listing's
+    /// cards read their excerpts and pictures from it.
+    texts: std::collections::HashMap<String, String>,
 }
 
 /// moss's page stylesheet, kept equal to the build's by a moss-build test.
@@ -27,14 +30,14 @@ impl Site {
     pub fn from_json(site_json: &str) -> Result<Self, String> {
         let bundle: SiteBundle = serde_json::from_str(site_json).map_err(|e| e.to_string())?;
         let css = format!("{PAGE_CSS}\n{}", bundle.theme_css);
-        Ok(Self { inputs: bundle.clone().inputs(), css, bundle, pages: Default::default() })
+        Ok(Self { inputs: bundle.clone().inputs(), css, bundle, pages: Default::default(), texts: Default::default() })
     }
 
     /// Replace every page's text, by site-relative path, and derive the site's
     /// pages from them once. `root_name` is the site folder's own name.
     pub fn set_texts(&mut self, texts_json: &str, root_name: &str) -> Result<(), String> {
-        let texts = serde_json::from_str(texts_json).map_err(|e| e.to_string())?;
-        self.pages = page::site_page::site_pages(&texts, &self.bundle, root_name);
+        self.texts = serde_json::from_str(texts_json).map_err(|e| e.to_string())?;
+        self.pages = page::site_page::site_pages(&self.texts, &self.bundle, root_name);
         Ok(())
     }
 
@@ -73,6 +76,9 @@ impl Site {
             page.body_html = format!("{heading}\n{}", page.body_html);
         }
         let typesetting = moss_core::frontmatter::read_page(text).0.typesetting;
+        if let Some(listing) = self.pages.own_listing(path, &self.texts, &self.inputs, typesetting.as_deref()) {
+            page.body_html.push_str(&listing);
+        }
         let url = |url_path: &str| moss_core::resolve::output_url::to_pretty_url(url_path);
         if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {
             page.body_html.push_str(&nav);

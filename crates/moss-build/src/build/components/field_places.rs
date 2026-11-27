@@ -6,7 +6,7 @@
 //! page's language and typesetting. Pure: page links arrive as a closure.
 
 use crate::build::components::field_text::{datetime_attr, number_text, value_text};
-use crate::build::components::{child_list, child_summary};
+use crate::build::components::child_list;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
@@ -198,7 +198,7 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
             props.title = headline.clone();
         }
         // A hand-picked card names no date: the axis that says nothing about one.
-        let html = child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight);
+        let html = moss_core::render::cards::summary::render_with_sort(&props, doc.lang, cards.typesetting, &crate::build::media::cover::BuildPictures { root: None, lookup: Some(cards.media_lookup) }, moss_core::sort::SortAxis::Weight);
         Some((html, props.is_collection()))
     };
     end_html(&doc.placed_fields, doc.lang, &card)

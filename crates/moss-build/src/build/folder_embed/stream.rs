@@ -116,6 +116,9 @@ pub(super) fn render(
     rows: &ListingRowOptions<'_>,
     fold_threads: bool,
 ) -> String {
+    if sorted.is_empty() {
+        return String::new();
+    }
     let host_url = rows.host_url_path;
     let to_dir = dir_segments(host_url);
     let by_url: HashMap<&str, &ParsedDocument> = docs.iter().map(|d| (d.url_path.as_str(), *d)).collect();

@@ -226,3 +226,22 @@ fn preview_draws_a_folder_home_s_title() {
     assert!(html("index.md").contains(r#"<h1 class="moss-folder-title visually-hidden">Harbor Notes</h1>"#));
     assert!(!html("guide/one.md").contains("moss-folder-title"));
 }
+
+#[test]
+fn preview_draws_a_folder_home_s_listing_with_each_page_s_excerpt_and_picture() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "guide/index.md": "---\ntitle: Guide\n---\nRead on\n",
+        "guide/one.md": "---\ntitle: One\ndate: 2026-01-02\n---\nFirst paragraph.\n\n![a mast](mast.jpg)\n",
+        "guide/two.md": "---\ntitle: Two\ndate: 2026-03-04\n---\nSecond paragraph.\n",
+    });
+    let files = json!(["index.md", "guide/index.md", "guide/one.md", "guide/two.md", "guide/mast.jpg"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let guide = json_value(&site.preview("guide/index.md", texts["guide/index.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let at = |s: &str| guide.find(s).unwrap_or_else(|| panic!("{s} missing from {guide}"));
+    assert!(at("Read on") < at("moss-cards-container"), "the listing follows the body");
+    assert!(at("Second paragraph.") < at("First paragraph."), "newest first");
+    assert!(guide.contains(r#"src="guide/mast.jpg""#), "{guide}");
+    assert!(!json_value(&site.preview("guide/one.md", texts["guide/one.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().contains("moss-cards"));
+}

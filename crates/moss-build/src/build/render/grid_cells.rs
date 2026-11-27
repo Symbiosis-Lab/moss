@@ -45,7 +45,7 @@ use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
 use moss_core::ast::link_card::{blocks_text, push_inlines_text, MISSING_COVER, NO_COVER};
 
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting, CoverLoading};
+use moss_core::render::cards::grid::{render_external_card, render_item_with_typesetting, CoverLoading};
 use moss_core::render::image::Loading;
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
 use crate::build::media::cover::detect_cover_type;
@@ -391,13 +391,13 @@ fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Optio
     }
     let props = picked_card_props(&link, index)?;
     let is_collection = props.is_collection();
-    Some((crate::build::components::child_summary::render_with_sort(
-        &props,
-        index.lang,
-        index.typesetting,
-        index.media_lookup,
-        PICKED_CARD_AXIS,
-    ), is_collection))
+    Some((moss_core::render::cards::summary::render_with_sort(
+            &props,
+            index.lang,
+            index.typesetting,
+            &crate::build::media::cover::BuildPictures { root: None, lookup: index.media_lookup },
+            PICKED_CARD_AXIS,
+        ), is_collection))
 }
 
 /// A hand-picked block has no sort. The axis names what the meta slot says,
@@ -534,14 +534,10 @@ fn card_markup(
     let props = picked_card_props(&link, index)?;
     let html = render_item_with_typesetting(
         &props,
-        index.root_path.map(std::path::Path::new),
+        &crate::build::media::cover::BuildPictures { root: index.root_path.map(std::path::Path::new), lookup: index.media_lookup },
         index.lang,
-        // The cell content is a title plus a count, and the count IS
-        // typesetting-dependent: `article_count_label` writes 四篇 rather than
-        // `4 篇` under vertical CJK. Passing `None` here left an Arabic digit
-        // lying on its side in every `:::grid` folder card (2026-09-11).
+        // The count is typesetting-dependent: 四篇 rather than `4 篇` under vertical CJK.
         index.typesetting,
-        index.media_lookup,
         loading.next(props.cover.is_some()),
         list_has_covers,
         cell_sizes,
@@ -662,17 +658,17 @@ fn external_card_markup(
             let (cover_path, attrs_str) = moss_core::media::split_pipe(href);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
             let cover_type = detect_cover_type(cover_path, None);
-            Some(crate::build::media::cover::render_cover_html(
-                cover_path,
-                cover_type,
-                alt,
-                "moss-card-cover",
-                &cover_attrs,
-                true,
-                index.media_lookup,
-                Loading::Lazy,
-                cell_sizes,
-            ))
+            Some(crate::build::media::cover::cover_html(
+            cover_path,
+            cover_type,
+            alt,
+            "moss-card-cover",
+            &cover_attrs,
+            true,
+            index.media_lookup.map(|l| l.asset_snapshot()),
+            Loading::Lazy,
+            cell_sizes,
+        ))
         }
         None => {
             let meta = link_meta.and_then(|m| m.get(link.href));
@@ -735,17 +731,17 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str
         None,
         &Default::default(),
     );
-    Some(crate::build::media::cover::render_cover_html(
-        &served_url,
-        detect_cover_type(&served_path, None),
-        alt,
-        "moss-card-cover",
-        &moss_core::media::parse_media_attrs(""),
-        true,
-        Some(&lookup),
-        Loading::Lazy,
-        cell_sizes,
-    ))
+    Some(crate::build::media::cover::cover_html(
+            &served_url,
+            detect_cover_type(&served_path, None),
+            alt,
+            "moss-card-cover",
+            &moss_core::media::parse_media_attrs(""),
+            true,
+            Some(&lookup).map(|l| l.asset_snapshot()),
+            Loading::Lazy,
+            cell_sizes,
+        ))
 }
 
 fn grids(plan: &BodyPlan) -> impl Iterator<Item = &GridEmission> {

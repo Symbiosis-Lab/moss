@@ -471,7 +471,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
     let html = page.cards(":::grid 2\n[Ink Study](works/ink-study/)\n+++\n[Works](works/)\n:::\n");
 
     let overrides = HashMap::new();
-    let mut loading = crate::build::components::grid_card::CoverLoading::new(false);
+    let mut loading = moss_core::render::cards::grid::CoverLoading::new(false);
     for doc in &docs {
         let cards = crate::build::components::child_list::BuildCards::new(&overrides, None, chrono::NaiveDateTime::default());
         let props = moss_core::page::card::props_for(doc, &docs, &cards, None);
@@ -479,7 +479,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
         // other cell, coverless) must render through the quote-slot branch,
         // not the bare `.moss-card-no-cover` placeholder — see
         // `render_item`'s `list_has_covers` doc.
-        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, loading.next(props.cover.is_some()), true, None);
+        let expected = render_item_with_typesetting(&props, &crate::build::media::cover::BuildPictures { root: None, lookup: None }, Language::En, None, loading.next(props.cover.is_some()), true, None);
         assert!(
             html.contains(&expected),
             "card for {} did not come from grid_card::render_item_with_typesetting\nexpected: {expected}\ngot: {html}",
@@ -1249,11 +1249,11 @@ fn summary_cells_render_through_the_summary_card_emitter() {
     for doc in &docs {
         let cards = crate::build::components::child_list::BuildCards::new(&overrides, None, chrono::NaiveDateTime::default());
         let props = moss_core::page::card::props_for(doc, &docs, &cards, None);
-        let expected = crate::build::components::child_summary::render_with_sort(
+        let expected = moss_core::render::cards::summary::render_with_sort(
             &props,
             Language::En,
             None,
-            None,
+            &(),
             moss_core::sort::SortAxis::Date,
         );
         assert!(

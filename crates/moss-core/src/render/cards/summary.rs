@@ -4,21 +4,19 @@
 //! The meta slot is sort-driven: it surfaces a date on Date-axis listings
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
-use super::child_list::{self, event_card_links, ChildItemProps};
-use moss_core::i18n::dates::extract_year;
-use crate::build::media::cover::{self, html_escape, CoverType};
-use crate::build::page::meta::render_description_html_in_link;
+use super::{event_card_links, CardPictures};
+use crate::i18n::dates::extract_year;
+use crate::media::html_escape;
+use crate::page::card::{ChildItemProps, CoverType};
+use crate::page::excerpt::render_description_html_in_link;
 
 /// Renders a child summary as HTML, with the meta slot resolved against the
 /// parent listing's resolved sort axis.
 ///
-/// `media_lookup`: optional variant manifest. When `Some`, the cover image
-/// is routed through `image_render::synthesize_image_html`; `None` emits a
-/// bare `<img>`.
+/// `pictures`: how the cover is drawn ([`CardPictures`]).
 ///
 /// `sort_axis`: parent's resolved sort axis. Date axis surfaces
-/// `date_display`; Weight and Title omit the meta slot entirely. Task 10
-/// adds a separate count subtitle for folder cards on non-date axes.
+/// `date_display`; Weight and Title omit the meta slot entirely.
 ///
 /// The name says "sort", but every use of it below is about THE META SLOT —
 /// what the card says, not how the list was ordered. A caller with no sort at
@@ -28,8 +26,8 @@ pub fn render_with_sort(
     props: &ChildItemProps,
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    sort_axis: moss_core::sort::SortAxis,
+    pictures: &dyn CardPictures,
+    sort_axis: crate::sort::SortAxis,
 ) -> String {
     let mut body = String::new();
 
@@ -85,7 +83,7 @@ pub fn render_with_sort(
     // year-formatted (e.g. CJK-numeral dates). A folder's own date (its
     // home page's `date:`, if any) and place lead the count the same way a
     // page's date and place would read alone — one owner for every listing
-    // form's composition, `child_list::meta_text`.
+    // form's composition, `super::meta_text`.
     let date_merged_into_kicker = kicker_base.is_some() && date_year.is_some();
     let meta_html = match (props.child_count, sort_axis) {
         // Folder: the count is always shown, on every sort axis — a bare
@@ -93,14 +91,14 @@ pub fn render_with_sort(
         // `date:`, if any, is exactly that.
         (Some(_), _) => {
             let count_label = props.count_label(lang, typesetting);
-            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
+            let text = super::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
             if text.is_empty() { String::new() } else { format!(r#"<div class="moss-card-meta">{}</div>"#, text) }
         }
         (None, axis) if !axis.shows_date() || date_merged_into_kicker => {
             // No date here: either the axis shows none or the kicker carries
             // the year. The meta slot keeps the event's time (when it has
             // one), the place and the listed names, and is never empty.
-            let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
+            let text = super::leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
             if text.is_empty() {
                 String::new()
             } else {
@@ -109,7 +107,7 @@ pub fn render_with_sort(
         }
         (None, axis) if axis.shows_date() && (props.date_display.is_some() || props.when_html.is_some() || props.credits.is_some()) => {
             let date = props.date_display.as_deref().unwrap_or("");
-            format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref()))
+            format!(r#"<div class="moss-card-meta">{}</div>"#, super::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref()))
         }
         _ => String::new(),
     };
@@ -124,8 +122,8 @@ pub fn render_with_sort(
     // clickable now that the outer card is a `<div>`, not an `<a>`);
     // bare `<h3>` for ordinary cards (outer card-anchor handles the
     // click target).
-    let row_lang = child_list::lang_attr(props.lang.as_ref());
-    let row_mark = child_list::lang_mark(props.lang.as_ref());
+    let row_lang = super::lang_attr(props.lang.as_ref());
+    let row_mark = super::lang_mark(props.lang.as_ref());
     let title_html = if is_linkblog {
         format!(
             r#"<a class="moss-card-title-link" href="{}"><h3 class="moss-card-title"{}>{}{}</h3></a>"#,
@@ -148,7 +146,7 @@ pub fn render_with_sort(
     body.push_str(&kicker_html);
     body.push_str(&meta_html);
     body.push_str(&title_html);
-    body.push_str(&child_list::subtitle_html(props.subtitle.as_deref()));
+    body.push_str(&super::subtitle_html(props.subtitle.as_deref()));
 
     // Description: wrapped in an anchor for linkblog cards so it
     // remains a click target now that the outer is `<div>`.
@@ -174,9 +172,9 @@ pub fn render_with_sort(
     // it takes the cover renderer and its CSS; only the first is named for
     // assistive technology, since the card's link already carries the title.
     let draw = |url: &str, ct: CoverType, alt: &str| {
-        let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
-        let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, moss_core::render::image::Loading::Lazy, None)
+        let (cover_path, attrs_str) = crate::media::split_pipe(url);
+        let cover_attrs = crate::media::parse_media_attrs(attrs_str);
+        super::cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, pictures.assets(), crate::render::image::Loading::Lazy, None)
     };
     let cover_inner = if let Some(first) = props.pictures.first() {
         let rest = props.pictures.iter().skip(1).map(|url| draw(url, CoverType::Image, ""));
@@ -239,7 +237,7 @@ pub fn render_with_sort(
             cover_html,
         )
     } else {
-        let (open, close) = child_list::link_or_box(
+        let (open, close) = super::link_or_box(
             props.url.as_deref(),
             "div",
             &format!(r#" class="moss-card"{}{}"#, props.root_attrs(), props.section_style_attr()),
@@ -249,5 +247,5 @@ pub fn render_with_sort(
 }
 
 #[cfg(test)]
-#[path = "child_summary_tests.rs"]
+#[path = "summary_tests.rs"]
 mod tests;

@@ -4,36 +4,22 @@
 //! Cards display cover image on top, with title and article count on the same row below.
 //!
 //! The input is [`ChildItemProps`], the one reading of a page every card
-//! surface shares (`moss_core::page::card::props_for`). This module used to own
-//! a second struct, `FolderCardProps`, describing the same page in its own
-//! vocabulary; the two producers that filled it — the `children_style: grid`
-//! listing and the hand-picked `:::grid` card — each re-derived every field
-//! and drifted on the date rung. Deleted 2026-09-12. The one thing that struct
-//! carried which `ChildItemProps` does not, the cover's band colour, is
-//! resolved here, where it is consumed.
+//! surface shares (`crate::page::card::props_for`).
 
-use std::path::Path;
-
-use super::child_list::{self, event_card_links, ChildItemProps};
+use super::{event_card_links, CardPictures};
 use crate::i18n::Language;
-use crate::build::media::cover::{self, html_escape, CoverType};
-use moss_core::render::image::Loading;
-use crate::build::page::meta::render_description_html_in_link;
+use crate::media::html_escape;
+use crate::page::card::{ChildItemProps, CoverType};
+use crate::render::image::Loading;
+use crate::page::excerpt::render_description_html_in_link;
 
 /// Renders a single folder card as HTML with typesetting context.
 ///
 /// When `typesetting == Some("vertical")` and `lang.is_cjk()`, the article
-/// count is formatted as CJK numerals (e.g. "12" → "十二篇") to match the
-/// behavior of `child_summary::render_with_sort`.
+/// count is formatted as CJK numerals (e.g. "12" → "十二篇"), as a summary
+/// row formats it.
 ///
-/// `media_lookup`: optional variant manifest. When `Some`, the card's cover
-/// image is routed through `image_render::synthesize_image_html`; `None`
-/// emits a bare `<img>`. Pass `Some` from any caller that has a
-/// `MediaDimensionLookup` in scope (e.g., `build/render/html.rs`).
-///
-/// `root`: the project root, which the cover's band colour is read under
-/// (`color_extract::resolve_card_color`); `None` disables file reads, so an
-/// image cover then colours only through its `|color=` override.
+/// `pictures`: how the cover is drawn and coloured ([`CardPictures`]).
 ///
 /// `loading`: when this card's cover is fetched; a listing hands it out
 /// through [`CoverLoading`].
@@ -54,10 +40,9 @@ use crate::build::page::meta::render_description_html_in_link;
 /// otherwise leave.
 pub fn render_item_with_typesetting(
     props: &ChildItemProps,
-    root: Option<&Path>,
+    pictures: &dyn CardPictures,
     lang: Language,
     typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     loading: Loading,
     list_has_covers: bool,
     // The `sizes=` of the `:::grid` cell the card fills; `None` in a listing.
@@ -67,11 +52,9 @@ pub fn render_item_with_typesetting(
     // its home page declares one); a leaf's is its date and place, or
     // nothing. The slot is emitted either way so the two shapes keep one
     // layout. One owner across every listing form — see
-    // `child_list::meta_text`, which also HTML-escapes the result (this slot
-    // used to print the count unescaped, safe only because it was always
-    // machine-generated text).
+    // `super::meta_text`, which also HTML-escapes the result.
     let count_label = props.count_label(lang, typesetting);
-    let count_text = super::child_list::meta_text(
+    let count_text = super::meta_text(
         props.date_display.as_deref(),
         props.when_html.as_deref(),
         props.place.as_deref(),
@@ -83,13 +66,13 @@ pub fn render_item_with_typesetting(
 
     let cover_html = match (&props.cover, cover_type) {
         (Some(url), Some(ct)) => {
-            let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
-            let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
+            let (cover_path, attrs_str) = crate::media::split_pipe(url);
+            let cover_attrs = crate::media::parse_media_attrs(attrs_str);
             // The link is named by its title (aria-label below), so a cover
             // with a title is decorative. Without a title the link has no name,
             // and the cover supplies one.
             let cover_alt = if props.title.trim().is_empty() { "cover" } else { "" };
-            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, loading, grid_cell_sizes)
+            super::cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, pictures.assets(), loading, grid_cell_sizes)
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
@@ -101,22 +84,17 @@ pub fn render_item_with_typesetting(
                 quote.map(|d| format!("<p>{}</p>", render_description_html_in_link(d))).unwrap_or_default(),
             )
         }
-        _ => moss_core::ast::link_card::NO_COVER.to_string(),
+        _ => crate::ast::link_card::NO_COVER.to_string(),
     };
 
     // One shared ladder for every cover type: `|color=` override →
     // cache/extract by type → iframe dark default.
-    let cover_color = super::color_extract::resolve_card_color(
-        props.cover.as_deref(),
-        cover_type,
-        root,
-        media_lookup,
-    );
+    let cover_color = pictures.card_color(props.cover.as_deref(), cover_type);
     // An image cover's own shape, where its size was read: a theme lays out
     // by it without waiting for the picture or running script.
-    let cover_ratio = match (props.cover.as_deref(), cover_type, media_lookup) {
-        (Some(cover), Some(CoverType::Image), Some(lookup)) => {
-            moss_core::render::image::lookup_dims(lookup.asset_snapshot(), moss_core::media::split_pipe(cover).0)
+    let cover_ratio = match (props.cover.as_deref(), cover_type, pictures.assets()) {
+        (Some(cover), Some(CoverType::Image), Some(assets)) => {
+            crate::render::image::lookup_dims(assets, crate::media::split_pipe(cover).0)
         }
         _ => None,
     };
@@ -144,12 +122,11 @@ pub fn render_item_with_typesetting(
     // Meta IS the visual kicker — a small kicker above (horizontal) or to the
     // right of (vertical) the title, since production callers populate meta
     // and leave kicker empty: same uppercase overline treatment, same
-    // position above the title. Emitting `kicker, meta, title` matches
-    // the parallel emitter at child_summary::render_with_sort so
-    // the two card surfaces agree on slot order.
+    // position above the title. `kicker, meta, title` is a summary row's
+    // slot order too.
     //
     // Description slot — a frontmatter-only paragraph below the title, placed
-    // as in child_summary, on every card that shows no count: a folder's "N articles"
+    // as in a summary row, on every card that shows no count: a folder's "N articles"
     // says what is behind it, and with the count hidden the description is all
     // it has left. Left out when the quote slot above already carries it.
     let used_in_quote_slot = list_has_covers && props.cover.is_none();
@@ -158,7 +135,7 @@ pub fn render_item_with_typesetting(
         .filter(|s| !s.is_empty())
         .filter(|_| count_label.is_none())
         .filter(|_| !used_in_quote_slot)
-        .map(|d| format!(r#"<p class="moss-card-description"{}>{}</p>"#, child_list::lang_attr(props.lang.as_ref()), render_description_html_in_link(d)))
+        .map(|d| format!(r#"<p class="moss-card-description"{}>{}</p>"#, super::lang_attr(props.lang.as_ref()), render_description_html_in_link(d)))
         .unwrap_or_default();
 
     // An event with `tickets:` or `online:` is a `<div>` whose title is the
@@ -171,7 +148,7 @@ pub fn render_item_with_typesetting(
         Some(links) => (
             format!(r#"<div class="moss-card"{}{}>"#, props.root_attrs(), cover_color_attrs),
             "</div>".to_string(),
-            format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), links.title, child_list::lang_mark(props.lang.as_ref())),
+            format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, super::lang_attr(props.lang.as_ref()), links.title, super::lang_mark(props.lang.as_ref())),
             links.actions.as_str(),
         ),
         None => {
@@ -183,7 +160,7 @@ pub fn render_item_with_typesetting(
                 let named = props.lang.as_ref().filter(|l| !l.name.is_empty()).map(|l| format!("{} ({})", props.title, l.name));
                 format!(r#" aria-label="{}""#, html_escape(named.as_deref().unwrap_or(&props.title)))
             };
-            let (open, close) = child_list::link_or_box(
+            let (open, close) = super::link_or_box(
                 props.url.as_deref(),
                 "div",
                 &format!(r#" class="moss-card"{}{}{}"#, label_attr, props.root_attrs(), cover_color_attrs),
@@ -191,7 +168,7 @@ pub fn render_item_with_typesetting(
             (
                 open,
                 close,
-                format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), html_escape(&props.title), child_list::lang_mark(props.lang.as_ref())),
+                format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, super::lang_attr(props.lang.as_ref()), html_escape(&props.title), super::lang_mark(props.lang.as_ref())),
                 "",
             )
         }
@@ -212,7 +189,7 @@ pub fn render_item_with_typesetting(
         kicker_html,
         meta_html,
         title_html,
-        child_list::subtitle_html(props.subtitle.as_deref()),
+        super::subtitle_html(props.subtitle.as_deref()),
         description_html,
         actions_html,
         close,
@@ -229,18 +206,18 @@ const FIRST_ROW: usize = 4;
 /// among the first [`FIRST_ROW`] cards loads with the page, the first such
 /// cover at high priority. A page whose opening picture already holds the one
 /// high-priority fetch passes `lazy` and every cover loads lazily.
-pub(crate) struct CoverLoading {
+pub struct CoverLoading {
     first_row_left: usize,
     priority_left: bool,
 }
 
 impl CoverLoading {
-    pub(crate) fn new(lazy: bool) -> Self {
+    pub fn new(lazy: bool) -> Self {
         Self { first_row_left: if lazy { 0 } else { FIRST_ROW }, priority_left: !lazy }
     }
 
     /// The loading of the next card's cover; a card without one still takes its place in the row.
-    pub(crate) fn next(&mut self, has_cover: bool) -> Loading {
+    pub fn next(&mut self, has_cover: bool) -> Loading {
         let in_first_row = self.first_row_left > 0;
         self.first_row_left = self.first_row_left.saturating_sub(1);
         match (has_cover && in_first_row, self.priority_left) {
@@ -260,21 +237,18 @@ impl CoverLoading {
 /// CJK numeral formatting is applied when `typesetting == Some("vertical")`
 /// and `lang.is_cjk()`.
 ///
-/// `media_lookup`: optional variant manifest. When `Some`, each card's
-/// cover image is routed through the synthesizer.
 /// `is_embed` — see `folder_embed::generate_children`'s doc comment — stamps
 /// a bare `data-embed` attribute on the `.moss-cards-container` this
 /// function builds, distinguishing a body embed from the frontmatter-
 /// synthesized listing for CSS block-rhythm purposes.
 pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     cards: &[C],
-    root: Option<&Path>,
+    pictures: &dyn CardPictures,
     lang: Language,
     typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    sort_axis: moss_core::sort::SortAxis,
+    sort_axis: crate::sort::SortAxis,
     is_embed: bool,
-    placement: &moss_core::media::Placement,
+    placement: &crate::media::Placement,
     // The page already has its one eager image elsewhere: no card here is
     // marked eager, not even the first covered one.
     lazy_cards: bool,
@@ -294,7 +268,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
         .map(|c| {
             let c = c.borrow();
             let loading = loading.next(c.cover.is_some());
-            render_item_with_typesetting(c, root, lang, typesetting, media_lookup, loading, has_covers, None)
+            render_item_with_typesetting(c, pictures, lang, typesetting, loading, has_covers, None)
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -306,7 +280,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     let cover_attr = if has_covers { " data-list-has-covers" } else { "" };
     let container_attr = if is_embed { " data-embed" } else { "" };
     // Same emit-nothing-when-empty rule as `components::cards_container`.
-    let place = moss_core::render::placement::placement_attrs(placement);
+    let place = crate::render::placement::placement_attrs(placement);
     let align = place.align_suffix();
 
     format!(
@@ -337,16 +311,16 @@ pub fn render_external_card(
     // the `.link-preview` shell this replaces): route through the
     // synthesizer with `ImageContext::Favicon`, which short-circuits to a
     // bare 16×16 `<img>` — no manifest, no `<picture>`, no LQIP.
-    let favicon_assets = moss_core::asset_snapshot::AssetSnapshot::new();
+    let favicon_assets = crate::asset_snapshot::AssetSnapshot::new();
     let favicon_html = favicon
         .filter(|f| !f.is_empty())
         .map(|f| {
-            moss_core::render::image::synthesize_image_html(
+            crate::render::image::synthesize_image_html(
                 f,
                 "",
                 &favicon_assets,
-                moss_core::render::image::ImageContext::Favicon,
-                &moss_core::render::image::ImageRenderOptions {
+                crate::render::image::ImageContext::Favicon,
+                &crate::render::image::ImageRenderOptions {
                     class: Some("moss-card-kicker-favicon"),
                     ..Default::default()
                 },
@@ -368,5 +342,5 @@ pub fn render_external_card(
 }
 
 #[cfg(test)]
-#[path = "grid_card_tests.rs"]
+#[path = "grid_tests.rs"]
 mod tests;

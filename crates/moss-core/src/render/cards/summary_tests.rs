@@ -1,4 +1,6 @@
-use super::*;
+use crate::render::cards::summary::*;
+use crate::page::card::*;
+
 
 fn article_props(title: &str, url: &str) -> ChildItemProps {
     ChildItemProps {
@@ -23,8 +25,8 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
 /// time, the same as a listing row does.
 #[test]
 fn an_event_card_wraps_its_place_after_the_time() {
-    let when = moss_core::event::when::render_when(
-        moss_core::event::EventTime::parse("2026-11-01 14:00").unwrap(),
+    let when = crate::event::when::render_when(
+        crate::event::EventTime::parse("2026-11-01 14:00").unwrap(),
         None,
         crate::i18n::Language::En,
     );
@@ -36,12 +38,12 @@ fn an_event_card_wraps_its_place_after_the_time() {
         ..article_props("Opening", "/events/opening/")
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span>"#),
         "{html}"
@@ -52,12 +54,12 @@ fn an_event_card_wraps_its_place_after_the_time() {
 fn test_render_article_card_basic() {
     let props = article_props("My Article", "/blog/my-article/");
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"class="moss-card""#));
     assert!(html.contains(r#"href="/blog/my-article/""#));
     assert!(html.contains(r#"class="moss-card-meta">"#));
@@ -74,12 +76,12 @@ fn test_render_article_card_basic() {
 fn test_render_folder_card_basic() {
     let props = folder_props("Tutorials", "/tutorials/", 4);
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"<div class="moss-card-meta">4 篇</div>"#),
         "the count is the folder's meta on every axis, got: {}",
@@ -92,12 +94,12 @@ fn test_render_card_with_cover() {
     let mut props = article_props("Photo Post", "/blog/photo/");
     props.cover = Some("/images/cover.jpg".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"class="moss-card-cover">"#));
     assert!(html.contains(r#"<img src="/images/cover.jpg" alt="Photo Post" />"#));
     // Cover should be inside moss-card-row alongside body
@@ -110,12 +112,12 @@ fn test_render_card_with_description() {
     let mut props = article_props("Deep Dive", "/blog/deep-dive/");
     props.description = Some("An in-depth exploration.".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"<p class="moss-card-description">An in-depth exploration.</p>"#));
 }
 
@@ -125,12 +127,12 @@ fn test_render_card_full() {
     props.description = Some("Everything included.".to_string());
     props.cover = Some("/cover.jpg".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains("moss-card-meta"));
     assert!(html.contains("moss-card-title"));
     assert!(html.contains("moss-card-description"));
@@ -144,12 +146,12 @@ fn test_render_folder_card_full() {
     props.description = Some("Delicious recipes.".to_string());
     props.cover = Some("/food.jpg".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"<div class="moss-card-meta">12 篇</div>"#), "{html}");
     assert!(html.contains("moss-card-title"));
     assert!(html.contains("moss-card-description"));
@@ -167,12 +169,12 @@ fn test_render_card_escapes_html() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     assert!(html.contains("a=1&amp;b=2"));
@@ -188,12 +190,12 @@ fn test_render_card_with_video_cover() {
     props.cover = Some("/media/clip.mp4".to_string());
     props.cover_type = Some(CoverType::Video);
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains("<video"),
         "Video should render as <video> tag"
@@ -209,12 +211,12 @@ fn test_render_card_with_iframe_cover() {
     props.cover = Some("/widgets/demo.html".to_string());
     props.cover_type = Some(CoverType::Iframe);
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains("<iframe"), "Should render an <iframe> tag");
     assert!(html.contains(r#"src="/widgets/demo.html""#));
     assert!(html.contains("moss-card-cover"));
@@ -235,12 +237,12 @@ fn test_render_card_cover_type_defaults_to_image() {
     props.cover = Some("/images/photo.jpg".to_string());
     // cover_type is None (default)
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains("<img"), "Should default to <img> tag");
     assert!(html.starts_with("<a "), "Image card should use <a> wrapper");
 }
@@ -251,12 +253,12 @@ fn test_render_card_no_cover_ignores_cover_type() {
     let mut props = article_props("No Cover", "/blog/no-cover/");
     props.cover_type = Some(CoverType::Video);
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(!html.contains("moss-card-cover"));
     assert!(!html.contains("<video"));
 }
@@ -265,22 +267,22 @@ fn test_render_card_no_cover_ignores_cover_type() {
 //
 // The previous CJK-numeral tests covered the "N 篇" count rendered
 // inside the meta slot. After Task 9 the count moves to a separate
-// subtitle slot (Task 10), and the meta slot is fully omitted on
+// subtitle slot, and the meta slot is fully omitted on
 // non-Date axes regardless of locale/typesetting. The tests below
 // pin that contract; the CJK numeral helper is still exercised by
-// `moss_core::numerals::to_chinese_numeral` unit tests directly.
+// `crate::numerals::to_chinese_numeral` unit tests directly.
 
 #[test]
 fn test_render_card_with_pipe_encoded_cover_strips_attrs_from_src() {
     let mut props = article_props("Photo Post", "/blog/photo/");
     props.cover = Some("/images/cover.jpg|left".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     // src should contain only the path, not the pipe attrs
     assert!(
         html.contains(r#"src="/images/cover.jpg""#),
@@ -299,12 +301,12 @@ fn test_render_card_with_pipe_encoded_cover_adds_style() {
     let mut props = article_props("Photo Post", "/blog/photo/");
     props.cover = Some("/images/cover.jpg|left".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"style="object-position:left""#),
         "Should add position style. Got: {}",
@@ -317,12 +319,12 @@ fn test_render_card_with_pipe_encoded_cover_fit_and_position() {
     let mut props = article_props("Photo Post", "/blog/photo/");
     props.cover = Some("/images/cover.jpg|contain top-right".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"src="/images/cover.jpg""#), "Got: {}", html);
     assert!(
         html.contains(r#"style="object-fit:contain;object-position:top right""#),
@@ -336,12 +338,12 @@ fn test_render_card_without_pipe_no_style() {
     let mut props = article_props("Photo Post", "/blog/photo/");
     props.cover = Some("/images/cover.jpg".to_string());
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHans,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHans,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"src="/images/cover.jpg""#));
     assert!(
         !html.contains("style="),
@@ -367,12 +369,12 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.starts_with(r#"<div class="moss-card" data-linkblog>"#),
         "linkblog card outer is a <div>, not <a>; got: {}",
@@ -417,12 +419,12 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         !html.contains("moss-card-permalink"),
         "no ★ when there's no kicker to host it; got: {}",
@@ -452,12 +454,12 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHant,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHant,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     // Linkblog card with CJK date: kicker (publisher only) inside
     // card-head with ★; meta renders separately also inside card-head.
     // Both are inside the card-body, no split across the card boundary.
@@ -488,12 +490,12 @@ fn omits_permalink_when_no_external_url() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         !html.contains("moss-card-permalink"),
         "no permalink mark when permalink is None; got: {}",
@@ -521,12 +523,12 @@ fn renders_kicker_above_title_horizontal() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     let kicker_pos = html
         .find(r#"<div class="moss-card-kicker""#)
         .expect("kicker present");
@@ -565,12 +567,12 @@ fn kicker_absorbing_the_date_still_shows_the_place() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(">ESSAYS · 2025</div>"),
         "kicker still combines publisher + year, got: {}",
@@ -597,12 +599,12 @@ fn vertical_head_order_matches_horizontal() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHant,
-        Some("vertical"),
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHant,
+            Some("vertical"),
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     let title_pos = html
         .find(r#"<h3 class="moss-card-title""#)
         .expect("title present");
@@ -635,12 +637,12 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::ZhHant,
-        Some("vertical"),
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::ZhHant,
+            Some("vertical"),
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"<div class="moss-card-meta">二〇二五·四 · Cambridge</div>"#),
         "Got: {html}"
@@ -662,12 +664,12 @@ fn meta_renders_date_when_axis_is_date() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(html.contains(r#"class="moss-card-meta""#));
     assert!(html.contains("2025 · 03"));
 }
@@ -685,12 +687,12 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"<div class="moss-card-meta">1924 · Cambridge</div>"#),
         "Got: {html}"
@@ -709,12 +711,12 @@ fn meta_never_shows_a_place_beside_a_folders_count() {
         ..folder_props("Kyoto Walk", "/works/kyoto-walk/", 2)
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         !html.contains(r#"<div class="moss-card-meta">2 articles · Kyoto</div>"#),
         "the count slot must be the count alone: {html}"
@@ -731,12 +733,12 @@ fn meta_collapses_when_axis_is_title() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Title,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Title,
+        );
     assert!(
         !html.contains(r#"class="moss-card-meta""#),
         "meta slot must be fully omitted (no empty div) when axis != Date"
@@ -751,12 +753,12 @@ fn meta_collapses_when_axis_is_weight() {
         ..Default::default()
     };
     let html = render_with_sort(
-        &props,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Weight,
-    );
+            &props,
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Weight,
+        );
     assert!(!html.contains(r#"class="moss-card-meta""#));
 }
 
@@ -775,52 +777,32 @@ fn folder(description: Option<&str>, date_display: Option<&str>) -> ChildItemPro
 #[test]
 fn folder_count_fills_the_meta_slot() {
     for (desc, date, axis) in [
-        (None, None, moss_core::sort::SortAxis::Title),
-        (Some("Get started"), None, moss_core::sort::SortAxis::Title),
-        (Some("Get started"), None, moss_core::sort::SortAxis::Date),
+        (None, None, crate::sort::SortAxis::Title),
+        (Some("Get started"), None, crate::sort::SortAxis::Title),
+        (Some("Get started"), None, crate::sort::SortAxis::Date),
     ] {
-        let html = render_with_sort(&folder(desc, date), crate::i18n::Language::En, None, None, axis);
+        let html = render_with_sort(&folder(desc, date), crate::i18n::Language::En, None, &(), axis);
         assert!(
             html.contains(r#"<div class="moss-card-meta">4 articles</div>"#),
             "axis {axis:?}, description {desc:?}: {html}"
         );
     }
     let html = render_with_sort(
-        &folder(Some("Get started"), Some("2025 · 04")),
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::sort::SortAxis::Date,
-    );
+            &folder(Some("Get started"), Some("2025 · 04")),
+            crate::i18n::Language::En,
+            None,
+            &(),
+            crate::sort::SortAxis::Date,
+        );
     assert!(
         html.contains(r#"<div class="moss-card-meta">2025 · 04 · 4 articles</div>"#),
         "a folder with its own date leads the count with it: {html}"
     );
 }
 
-/// The two card shapes agree. Asserted alone, each emitter looked right
-/// while the summary card silently dropped the count the grid card showed.
-#[test]
-fn grid_and_summary_folder_cards_carry_the_same_count() {
-    let props = folder(Some("Get started"), None);
-    let summary = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Title);
-    let grid = crate::build::components::grid_card::render_item_with_typesetting(
-        &props,
-        None,
-        crate::i18n::Language::En,
-        None,
-        None,
-        moss_core::render::image::Loading::Lazy,
-        false,
-        None,
-    );
-    assert!(summary.contains("4 articles"), "{summary}");
-    assert!(grid.contains("4 articles"), "{grid}");
-}
-
 fn event_when(start: &str) -> String {
-    let start = moss_core::event::EventTime::parse(start).unwrap();
-    moss_core::event::when::render_when(start, None, crate::i18n::Language::En)
+    let start = crate::event::EventTime::parse(start).unwrap();
+    crate::event::when::render_when(start, None, crate::i18n::Language::En)
 }
 
 #[test]
@@ -830,7 +812,7 @@ fn event_summary_card_shows_its_time_before_the_place() {
     props.date_raw = Some("2026-11-01 14:00".to_string());
     props.place = Some("Example Hall".to_string());
     props.when_html = Some(event_when("2026-11-01 14:00"));
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
     assert!(
         html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
             && html.contains(r#"</time><span class="moss-event-sep"> · </span><span class="moss-event-place">Example Hall</span></div>"#),
@@ -844,7 +826,7 @@ fn event_summary_card_with_a_publisher_kicker_keeps_its_time() {
     props.kicker = Some("Museum Press".to_string());
     props.place = Some("Example Hall".to_string());
     props.when_html = Some(event_when("2026-11-01 14:00"));
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
     assert!(
         html.contains(r#"<div class="moss-card-meta"><time class="moss-when""#)
             && html.contains("Example Hall</span></div>"),
@@ -857,7 +839,7 @@ fn non_event_summary_card_is_unchanged_by_the_event_time() {
     let mut props = article_props("Plain Post", "/blog/plain/");
     props.kicker = Some("Museum Press".to_string());
     props.place = Some("Example Hall".to_string());
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
     assert!(!html.contains("moss-when"), "got: {html}");
     assert!(html.contains(r#"<div class="moss-card-kicker">Museum Press · 2025</div><div class="moss-card-meta">Example Hall</div>"#), "got: {html}");
 }
@@ -873,13 +855,37 @@ fn event_summary_props(tickets: Option<&str>) -> ChildItemProps {
 }
 
 #[test]
+fn event_summary_card_without_tickets_keeps_its_whole_card_anchor() {
+    let props = event_summary_props(None);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
+    assert_eq!(
+        html,
+        r#"<a href="spring-gala.html" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Spring Gala</h3></div></div></a>"#
+    );
+}
+
+#[test]
+fn a_card_date_is_a_time_element_carrying_the_full_date() {
+    let props = ChildItemProps {
+        date_display: Some(crate::i18n::dates::time_html("March 2026", "2026-03-04")),
+        date_raw: Some("2026-03-04".to_string()),
+        ..article_props("Note", "/notes/note/")
+    };
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time datetime="2026-03-04">March 2026</time></div>"#),
+        "{html}"
+    );
+}
+
+#[test]
 fn event_summary_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
     let props = ChildItemProps {
         credits: None,
         description: Some("Doors open at seven.".to_string()),
         ..event_summary_props(Some("https://example.test/tickets"))
     };
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
     assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
     assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
     assert!(
@@ -894,7 +900,7 @@ fn event_summary_card_with_tickets_links_title_and_carries_its_own_tickets_link(
     let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
     let description_at = html.find(r#"<p class="moss-card-description">"#).unwrap();
     assert!(title_at < tickets_at && description_at < tickets_at, "got: {html}");
-    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+    assert_eq!(crate::render::cards::max_anchor_depth(&html), 1, "got: {html}");
 }
 
 #[test]
@@ -903,35 +909,30 @@ fn event_summary_card_with_only_online_links_title_and_carries_its_online_link()
         online: Some("https://example.test/live".to_string()),
         ..event_summary_props(None)
     };
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Date);
     assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
     assert!(
         html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
         "got: {html}"
     );
-    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+    assert_eq!(crate::render::cards::max_anchor_depth(&html), 1, "got: {html}");
 }
 
+/// The two card shapes agree. Asserted alone, each emitter looked right
+/// while the summary card silently dropped the count the grid card showed.
 #[test]
-fn event_summary_card_without_tickets_keeps_its_whole_card_anchor() {
-    let props = event_summary_props(None);
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
-    assert_eq!(
-        html,
-        r#"<a href="spring-gala.html" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Spring Gala</h3></div></div></a>"#
-    );
-}
-
-#[test]
-fn a_card_date_is_a_time_element_carrying_the_full_date() {
-    let props = ChildItemProps {
-        date_display: Some(moss_core::i18n::dates::time_html("March 2026", "2026-03-04")),
-        date_raw: Some("2026-03-04".to_string()),
-        ..article_props("Note", "/notes/note/")
-    };
-    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
-    assert!(
-        html.contains(r#"<div class="moss-card-meta"><time datetime="2026-03-04">March 2026</time></div>"#),
-        "{html}"
-    );
+fn grid_and_summary_folder_cards_carry_the_same_count() {
+    let props = folder(Some("Get started"), None);
+    let summary = render_with_sort(&props, crate::i18n::Language::En, None, &(), crate::sort::SortAxis::Title);
+    let grid = crate::render::cards::grid::render_item_with_typesetting(
+            &props,
+            &(),
+            crate::i18n::Language::En,
+            None,
+            crate::render::image::Loading::Lazy,
+            false,
+            None,
+        );
+    assert!(summary.contains("4 articles"), "{summary}");
+    assert!(grid.contains("4 articles"), "{grid}");
 }

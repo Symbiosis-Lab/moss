@@ -33,7 +33,7 @@ use moss_core::PageKind;
 use serde::{Deserialize, Serialize};
 
 use crate::build::facade::debug_hash;
-use crate::build::folder_embed::{card_excerpt, is_rich, select_children_by_slug};
+use crate::build::folder_embed::{excerpt_and_rich, select_children_by_slug};
 use moss_core::page::listing::{effective_group, listing_config};
 use crate::build::types::ParsedDocument;
 use crate::types::content::{MediaMetadata, ProjectStructure};
@@ -259,7 +259,7 @@ struct ChildProjection<'a> {
 }
 
 /// One child's [`ChildProjection`] hash, and whether it is rich
-/// ([`is_rich_child`]), read from the same excerpt.
+/// ([`excerpt_and_rich`]), read from the same excerpt.
 struct Projected {
     hash: String,
     rich: bool,
@@ -296,8 +296,7 @@ fn project_child(
     let folder_latest_date = article_count.and_then(|_| moss_core::page::card::folder_latest_date(doc, all_refs));
     let date_raw = moss_core::page::card::listing_date(doc);
 
-    let resolved_excerpt = card_excerpt(doc, math);
-    let rich = is_rich(doc, &resolved_excerpt);
+    let (resolved_excerpt, rich) = excerpt_and_rich(doc, math);
     let hash = debug_hash(&ChildProjection {
         stripped,
         resolved_excerpt,

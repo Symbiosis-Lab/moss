@@ -52,6 +52,7 @@
 
 use crate::build::served_path::ServedPath;
 use crate::build::page::meta::CoverRef;
+pub use moss_core::page::card_pictures::BodyPicture;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -87,13 +88,6 @@ const _: () = assert!(
     "the raster og:image fallback's long-edge cap dropped below the floor at \
      which a 2:1 cover still clears the 300x157 social-card minimum"
 );
-
-/// A raster picture in the page body, as its resolved address and its alt text.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct BodyPicture {
-    pub href: String,
-    pub alt: String,
-}
 
 /// The alt text of the body picture `cover` is, when it has one. A share
 /// image is described by what the author wrote for the picture; a cover
@@ -155,50 +149,6 @@ pub fn pick_body_cover<'a>(
             .is_some_and(|(w, h)| !needs_plate(w, h, share_cover) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
     };
     candidates.iter().find(as_is).map(|p| p.href.as_str()).or(first)
-}
-
-/// Whether a path names a raster picture. The share image and the listing card
-/// both take only these: most share targets cannot show a vector, and a card
-/// crops a picture, not a drawing or a video.
-pub fn is_raster_picture(path: &str) -> bool {
-    let bare = path.split(['#', '?']).next().unwrap_or("");
-    let ext = bare.rsplit('/').next().and_then(|f| f.rsplit_once('.')).map_or("", |(_, e)| e);
-    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif")
-}
-
-/// A page's own first picture as a listing-card source path, or `None`.
-/// Remote, `data:`, vector and video pictures make poor cards, so they are not taken.
-pub fn card_cover_from_page(hero_image_url: Option<&str>, body_cover_path: Option<&str>) -> Option<String> {
-    [hero_image_url, body_cover_path].into_iter().flatten().find_map(card_picture_path)
-}
-
-/// One picture reference as a listing-card source path, or `None` when a card
-/// cannot use it ([`card_cover_from_page`]).
-fn card_picture_path(raw: &str) -> Option<String> {
-    let (path, _attrs) = moss_core::media::split_pipe(raw);
-    let local = !(path.starts_with("http://") || path.starts_with("https://") || path.starts_with("//") || path.starts_with("data:"));
-    (local && is_raster_picture(path)).then(|| {
-        let decoded = urlencoding::decode(path).map(|d| d.into_owned()).unwrap_or_else(|_| path.to_string());
-        decoded.trim_start_matches('/').to_string()
-    })
-}
-
-/// The pictures after the listing cover that a strip of `n` draws, in reading
-/// order: the hero picture, then the body's raster pictures, none repeating the
-/// cover or each other. Empty when the page has no listing cover (a page that
-/// opted out with `cover: false` stays out).
-pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Option<&str>, body_images: &[BodyPicture], n: usize) -> Vec<String> {
-    let Some(cover) = listing_cover else { return Vec::new() };
-    let mut taken = vec![card_picture_path(cover).unwrap_or_else(|| cover.to_string())];
-    for path in hero_image_url.into_iter().chain(body_images.iter().map(|p| p.href.as_str())).filter_map(card_picture_path) {
-        if taken.len() >= n {
-            break;
-        }
-        if !taken.contains(&path) {
-            taken.push(path);
-        }
-    }
-    taken.split_off(1)
 }
 
 /// Resolve a frontmatter cover string to CoverRef. External http(s) URLs

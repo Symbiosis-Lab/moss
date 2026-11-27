@@ -1,5 +1,6 @@
 use super::*;
 
+
 #[test]
 fn test_render_empty_list() {
     // Empty input renders nothing — moss does not fabricate a placeholder.
@@ -233,7 +234,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
 /// The year came from `date_display`, and on a vertical CJK page that string
 /// is already `一七〇三年十二月` — four leading ASCII digits are the only shape
 /// `extract_year` reads, so every row returned `None` and 59 works collapsed
-/// into one headingless section (a vertical site's home, 2026-09-11). The raw ISO date is
+/// into one headingless section. The raw ISO date is
 /// the same string the sort already trusts.
 #[test]
 fn vertical_cjk_rows_still_group_by_year() {
