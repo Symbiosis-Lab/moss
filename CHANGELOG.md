@@ -4,6 +4,8 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.30] - 2026-11-27
+
 ### New
 
 - A plugin can mark an `acct` setting `"from": "account"` in `site_settings`: moss does not draw it, and the site's identity tags (`rel="me"`, `fediverse:creator`) are written from the account the folder is signed in to, until the person signs out; a value written under `[services.<plugin>]` still wins.
@@ -16,7 +18,9 @@ All notable changes to moss will be documented here.
 - A plugin can mark a `string` setting `"at_sign_in": true`: moss's sign-in row asks for it before the plugin's `login` runs, writes the answer to the plugin's `config.toml`, and the settings page does not draw it again. `login` and `logout` receive the plugin's settings as `ctx.config`.
 - A folder embed takes `repeat:none` to leave out the pages a listing higher on the same page already shows, with `limit:` counted after, so a wall of past events under a "next event" lead no longer repeats the event the lead fell back to once nothing is upcoming.
 - A Han font a theme hosts whole (one `@font-face`, a `.ttf` or `.otf` file, no `unicode-range`) is published in about a hundred slices, each with its own `unicode-range`, cut by the site's language, so a page downloads only the slices its text uses. Slices are encoded after the pages are written and kept on the computer for every site that uses the same font.
-- A `:::form` on a site published to mosspub.com works with no setting: entries go to the host, and `moss data pull` and every publish bring them into `.moss/data/forms/<form name>.csv`, one row per entry. An `endpoint` under `[services.forms]` still sends them elsewhere, and `enabled = false` turns forms off.
+- A `:::form` on a site published to mosspub.com works with no setting: entries go to the host, and `moss data pull` and every publish bring them into `.moss/data/forms/<form name>.csv`, one row per entry, columns in the order the form declares them. An `endpoint` under `[services.forms]` still sends them elsewhere, and `enabled = false` turns forms off.
+- `country_map:` takes `within: <country>` to shade that country's first-level regions instead of the world; Germany's 16 Länder are drawn, and a country moss has no pack for is a build problem naming the ones it has. The first column names regions by ISO 3166-2 code (with or without the country prefix) or by local or English name. A column of counts takes `binned: [1, 5, 10, 20]` in place of `levels`: half-open bins, the last open at the top; a count below the first bound is drawn plain, and `binned` together with `levels` is a build problem.
+- A folder's plugin trust follows the folder through a rename, and a copy of the folder is asked again.
 
 ### Changed
 
@@ -32,7 +36,7 @@ All notable changes to moss will be documented here.
 - `moss doctor --surface` also names the `{.class}` text and raw HTML blocks pages write, and exits 1 when it finds anything, so a script or a hook can hold a site to plain pages.
 - A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links.
 - Security: a plugin that lists a loopback address (`127.0.0.1`, `::1`, `localhost` or a name under it) in `network.hosts` reaches only the port it names there (`127.0.0.1:5001`), not every program listening on the computer. An entry may carry a port for any host; a loopback entry without one reaches nothing.
-- A site on moss hosting that has not been published yet is shown at `<name>.mosspub.page`, where new sites are now made. A site already published keeps the address the hosting service gave it.
+- A site on moss hosting that has not been published yet is shown at `<name>.mosspub.page`, where new sites are now made, also when you are not signed in and in the message that a name is taken. A site already published keeps the address the hosting service gave it, and its mosspub.com address keeps working.
 
 ### Fixed
 

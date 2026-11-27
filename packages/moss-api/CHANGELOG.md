@@ -13,6 +13,8 @@ release heading.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-27
+
 ### Added
 
 - `CopyJob.site.icon`: the absolute URL of the site's own icon as a square PNG of at least 256 px; absent when the site has none.
