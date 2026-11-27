@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Row {
-    /// Index into the shapes' countries.
+    /// Index into the model's atlas.
     pub country: usize,
     /// The country as the author wrote it.
     pub label: String,
@@ -26,8 +26,18 @@ pub(crate) struct Row {
 pub(crate) struct Model {
     pub spec: Spec,
     pub rows: Vec<Row>,
+    /// Under `within`, the alpha-3 code of the country whose regions the rows name.
+    #[serde(default)]
+    pub regions_of: Option<String>,
     /// Build problems, each naming the page, row and value.
     pub problems: Vec<String>,
+}
+
+impl Model {
+    /// The shapes the rows index: the world's countries, or one country's regions.
+    pub(crate) fn atlas(&self) -> &'static Atlas {
+        self.regions_of.as_deref().and_then(Atlas::regions).unwrap_or_else(Atlas::get)
+    }
 }
 
 /// A page's settings and body: the model (`None` for a page that is not a
@@ -63,8 +73,31 @@ fn first_table(markdown: &str) -> Option<(Cells, Vec<Cells>)> {
     })
 }
 
+/// The atlas `within` names, with its country's code and name; the problem when it names none moss has.
+fn regions_within(country: &str) -> Result<(&'static Atlas, String, String), String> {
+    let world = Atlas::get();
+    let Matched::Country(i) = world.find(country) else {
+        return Err(format!("country_map: `within: {country}` is not a country moss knows; use its English name or ISO 3166 alpha-3 code"));
+    };
+    let found = &world.shapes.countries[i];
+    match Atlas::regions(&found.code) {
+        Some(atlas) => Ok((atlas, found.code.clone(), found.name_long.clone())),
+        None => {
+            let known: Vec<String> = super::shapes::REGION_PACKS.iter().filter_map(|(code, _)| match world.find(code) {
+                Matched::Country(c) => Some(world.shapes.countries[c].name_long.clone()),
+                _ => None,
+            }).collect();
+            Err(format!("country_map: moss has no regions for {}; `within` can name {}", found.name_long, known.join(", ")))
+        }
+    }
+}
+
 fn resolve(page: &str, spec: Spec, header: &[String], table_rows: &[Cells]) -> Model {
-    let atlas = Atlas::get();
+    let (atlas, regions_of, area) = match spec.within.as_deref().map(regions_within) {
+        None => (Atlas::get(), None, None),
+        Some(Ok((atlas, code, name))) => (atlas, Some(code), Some(name)),
+        Some(Err(problem)) => return Model { spec, problems: vec![format!("[{page}] {problem}")], ..Model::default() },
+    };
     let mut problems = Vec::new();
     let by_col = header.iter().position(|h| same(h, &spec.by));
     if by_col.is_none() {
@@ -86,7 +119,10 @@ fn resolve(page: &str, spec: Spec, header: &[String], table_rows: &[Cells]) -> M
                 continue;
             }
             Matched::Unmatched => {
-                problems.push(format!("[{page}] row {number}: '{cell}' is not a country moss knows; use its English name or ISO 3166 alpha-3 code"));
+                problems.push(match &area {
+                    None => format!("[{page}] row {number}: '{cell}' is not a country moss knows; use its English name or ISO 3166 alpha-3 code"),
+                    Some(area) => format!("[{page}] row {number}: '{cell}' is not a region of {area} moss knows; use its name or ISO 3166-2 code"),
+                });
                 continue;
             }
         };
@@ -97,6 +133,12 @@ fn resolve(page: &str, spec: Spec, header: &[String], table_rows: &[Cells]) -> M
         let value = by_col.and_then(|c| cells.get(c)).map(String::as_str).unwrap_or("");
         let level = if value.is_empty() {
             None
+        } else if spec.binned.is_some() {
+            let count = value.parse::<u64>().ok();
+            if count.is_none() {
+                problems.push(format!("[{page}] row {number}: '{value}' for {cell} is not a whole number, which `binned` counts"));
+            }
+            count.and_then(|n| spec.bin_of(n))
         } else {
             let found = spec.levels.iter().position(|l| same(&l.name, value));
             if found.is_none() {
@@ -113,7 +155,7 @@ fn resolve(page: &str, spec: Spec, header: &[String], table_rows: &[Cells]) -> M
             .collect();
         rows.push(Row { country, label: cell.to_string(), level, columns });
     }
-    Model { spec, rows, problems }
+    Model { spec, rows, regions_of, problems }
 }
 
 #[cfg(test)]
@@ -176,5 +218,33 @@ mod tests {
         assert_eq!(model.unwrap().rows.len(), 1);
         assert!(body.starts_with("MOSS_MARKER") || body.contains("style=map"), "{body}");
         assert!(body.trim_end().ends_with("| Chile | Low |"));
+    }
+
+    fn laender(settings: &str, rows: &str) -> Model {
+        let md = format!("| Land | Count |\n|---|---|\n{rows}");
+        from_page("laender.md", &md, &serde_yaml::from_str(settings).unwrap())
+    }
+
+    #[test]
+    fn within_a_country_rows_name_its_regions_by_code_name_or_accented_name() {
+        let m = laender("by: Count\nbinned: [1, 5, 10, 20]\nwithin: Germany", "| DE-BY | 12 |\n| Hessen | 3 |\n| Baden-Württemberg | 25 |\n| Bremen | 0 |\n| Mexico | 4 |\n| Saarland | 2.5 |\n| Berlin | |\n");
+        let deu = m.atlas();
+        let code = |r: &Row| deu.shapes.countries[r.country].code.as_str();
+        let got: Vec<(&str, Option<usize>)> = m.rows.iter().map(|r| (code(r), r.level)).collect();
+        assert_eq!(got, [("DE-BY", Some(2)), ("DE-HE", Some(0)), ("DE-BW", Some(3)), ("DE-HB", None), ("DE-SL", None), ("DE-BE", None)]);
+        assert_eq!(m.regions_of.as_deref(), Some("DEU"));
+        let all = m.problems.join("\n");
+        assert!(all.contains("row 5: 'Mexico' is not a region of Germany moss knows"), "{all}");
+        assert!(all.contains("row 6: '2.5' for Saarland is not a whole number"), "{all}");
+        assert_eq!(m.problems.len(), 2, "{all}");
+    }
+
+    #[test]
+    fn within_a_country_without_a_pack_or_not_a_country_is_a_problem_and_draws_nothing() {
+        let m = laender("by: Count\nbinned: [1]\nwithin: France", "| Bretagne | 3 |\n");
+        assert!(m.rows.is_empty());
+        assert_eq!(m.problems, ["[laender.md] country_map: moss has no regions for France; `within` can name Germany"]);
+        let m = laender("by: Count\nbinned: [1]\nwithin: Atlantis", "| X | 3 |\n");
+        assert!(m.problems[0].contains("`within: Atlantis` is not a country moss knows"), "{:?}", m.problems);
     }
 }

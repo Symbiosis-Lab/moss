@@ -1150,6 +1150,19 @@ Above the map a search field finds every country, rated or not, by its name, a s
 
 The country column matches, ignoring case and accents, the ISO 3166 alpha-3 code or Natural Earth's English name (so "Côte d'Ivoire", "CIV" and "Cote d'Ivoire" all work), and a short list of common names: UK, USA, UAE, Ivory Coast, Turkey, Czech Republic, Burma, Swaziland, Macedonia, Cape Verde, East Timor and Vatican. An unknown name, a value outside `levels`, a country listed twice, Antarctica, and land that is disputed or breakaway throughout (such as Somaliland, Northern Cyprus and Western Sahara) are each a build problem naming the page, row and value, so `moss build --strict` fails on them. No borders are drawn: disputed land is cut out of every country and drawn as plain land, so a colour never assigns contested ground.
 
+To shade one country's regions instead of the world, add `within:` with the country, by any name or code its column takes. The first column then names that country's first-level regions, by ISO 3166-2 code (`DE-BY`), that code without the country (`BY`), or the region's local or English name (`Bayern`, `Bavaria`), ignoring case and accents. Only that country is drawn, framed to it in a conic equal-area projection, with no graticule. The legend, panel, search, list and addresses work as for countries, and a region's address is its local name, such as `#baden-wurttemberg`. moss has the regions of Germany. Any other `within`, and a cell that names no region of the country, is a build problem.
+
+For a column of counts, write `binned:` in place of `levels`. Each number starts a range that runs to the next one, and the last range has no top:
+
+```markdown
+country_map:
+  by: Entries
+  within: Germany
+  binned: [1, 5, 10, 20]
+```
+
+This colours 1–4, 5–9, 10–19 and 20+, and those ranges are the legend (at most seven). A count below the first number, or a blank cell, is listed without colour. A cell that is not a whole number, and `binned` together with `levels`, is a build problem.
+
 The map is drawn equal-area (Equal Earth), not in the Patterson projection of place maps, so area compares true. Style it with `--moss-country-land` (uncoloured and disputed land), `--moss-country-fill-low` and `--moss-country-fill-high` (the ends of the ramp, mixed in OKLCH; by default one warm hue, light to dark in light mode and dark to light in dark mode), `--moss-country-fill-1` to `-7` (one level's colour), `--moss-country-graticule` and `--moss-country-chosen`, all listed by `moss describe --json`. Keep each level at 3:1 against the land colour in light and dark if you change them.
 
 ### Events

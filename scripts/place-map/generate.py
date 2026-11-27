@@ -26,6 +26,8 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/source-manifest.toml"
 COUNTRIES_MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/countries-source-manifest.toml"
 COUNTRIES_NAMES = {"countries", "breakaway_disputed_areas", "populated_places"}
+ADMIN1_MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/admin1-source-manifest.toml"
+ADMIN1_NAMES = {"admin_1_states_provinces", "breakaway_disputed_areas"}
 ELEVATION_MANIFEST_ARTIFACT = "earth_gebco_server.txt"
 EXPECTED_NAMES = {
     "land",
@@ -128,26 +130,27 @@ def load_manifest(path: Path = MANIFEST) -> tuple[dict, str]:
         raise VerificationError(f"cannot read {path}: {error}") from error
 
 
-def validate_countries_manifest(manifest: dict) -> list[dict]:
-    """The country shapes' sources and the populated places the search index takes its cities from. Their manifest stays separate: listing them in the landscape pack's would change the manifest digest embedded in that pack and force regenerating it."""
+def validate_countries_manifest(manifest: dict, names: set[str] = COUNTRIES_NAMES) -> list[dict]:
+    """The country shapes' sources and the populated places the search index takes its cities from, or (with `ADMIN1_NAMES`) the region packs' sources. Each set keeps a manifest of its own: listing it in another's would change the digest embedded in that one's pack and force regenerating it."""
     if manifest.get("schema") != 1:
         raise VerificationError("unsupported country-shapes manifest schema")
     if "public domain" not in manifest.get("natural_earth_license", "").lower():
         raise VerificationError("Natural Earth public-domain notice is missing")
     sources = manifest.get("sources")
-    if not isinstance(sources, list) or {s.get("name") for s in sources} != COUNTRIES_NAMES or len(sources) != len(COUNTRIES_NAMES):
+    if not isinstance(sources, list) or {s.get("name") for s in sources} != names or len(sources) != len(names):
         raise VerificationError("country-shapes manifest source set differs from the pinned source set")
     for source in sources:
         name = source["name"]
-        if not source.get("url", "").startswith("https://naturalearth.s3.amazonaws.com/50m_cultural/"):
-            raise VerificationError(f"{name}: URL is not the pinned 50m cultural source")
+        prefixes = ("https://naturalearth.s3.amazonaws.com/50m_cultural/", "https://naturalearth.s3.amazonaws.com/10m_cultural/")
+        if not source.get("url", "").startswith(prefixes if names == ADMIN1_NAMES else prefixes[:1]):
+            raise VerificationError(f"{name}: URL is not a pinned Natural Earth cultural source")
         validate_source(source)
     return sources
 
 
-def verify_countries(source_dir: Path) -> dict:
-    manifest, manifest_sha256 = load_manifest(COUNTRIES_MANIFEST)
-    sources = validate_countries_manifest(manifest)
+def verify_countries(source_dir: Path, path: Path = COUNTRIES_MANIFEST, names: set[str] = COUNTRIES_NAMES) -> dict:
+    manifest, manifest_sha256 = load_manifest(path)
+    sources = validate_countries_manifest(manifest, names)
     receipts = [verify_source(source, source_dir) for source in sorted(sources, key=lambda item: item["name"])]
     return {"schema": 1, "generator": manifest["generator"], "generator_version": manifest["generator_version"], "source_manifest_sha256": manifest_sha256, "sources": receipts}
 
@@ -275,6 +278,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--source-dir", type=Path, default=None, help="offline cache containing the pinned source objects")
     parser.add_argument("--check", action="store_true", help="verify the manifest and every cached source")
     parser.add_argument("--countries", action="store_true", help="verify only the two country-shape sources (no elevation grid needed)")
+    parser.add_argument("--admin1", action="store_true", help="verify only the region packs' sources")
     parser.add_argument("--generate", type=Path, metavar="OUTPUT", help="write a deterministic verified-source receipt")
     args = parser.parse_args(argv)
     source_dir = args.source_dir or (Path(os.environ["MOSS_PLACE_MAP_SOURCE_DIR"]) if os.environ.get("MOSS_PLACE_MAP_SOURCE_DIR") else None)
@@ -283,7 +287,10 @@ def main(argv: list[str]) -> int:
     if not args.check and args.generate is None:
         parser.error("choose --check or --generate OUTPUT")
     try:
-        receipt = (verify_countries if args.countries else verify)(source_dir.resolve())
+        if args.admin1:
+            receipt = verify_countries(source_dir.resolve(), ADMIN1_MANIFEST, ADMIN1_NAMES)
+        else:
+            receipt = (verify_countries if args.countries else verify)(source_dir.resolve())
         if args.generate is not None:
             write_receipt(args.generate, receipt)
         print(f"verified {len(receipt['sources'])} sources; manifest {receipt['source_manifest_sha256']}")

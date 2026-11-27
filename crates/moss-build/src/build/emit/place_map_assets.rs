@@ -62,6 +62,7 @@ use crate::vault::places::Gazetteer;
 /// the pack's source manifest ships beside it.
 const NOTICE: &str = include_str!("../../../data/place-map/NOTICE");
 const COUNTRY_NOTICE: &str = include_str!("../../../data/place-map/country-NOTICE");
+const REGIONS_NOTICE: &str = include_str!("../../../data/place-map/regions-NOTICE");
 
 /// `tiles.json`'s own shape: `k` and the grid's `columns`/`rows` alongside
 /// the emitted cells, so the runtime never has to hardcode or re-derive the
@@ -234,32 +235,33 @@ impl Asset {
     }
 }
 
-/// `NOTICE.txt` for a site with a country map, in a directory named after the
-/// country shapes' source: the shapes are drawn inline, so nothing else is
-/// emitted for them.
-pub fn emit_country_notice(documents: &[crate::build::types::ParsedDocument], output_dir: &Path, pending: &mut PendingManifest) {
-    if !documents.iter().any(|d| d.country_map.is_some()) {
-        return;
+/// For each atlas a site's country maps draw (the world, or one country's
+/// regions): `NOTICE.txt` in a directory named after its shapes' source, and,
+/// when one of those maps has search on, its search index beside it. The
+/// shapes are drawn inline, so nothing else is emitted for them.
+pub fn emit_country_assets(documents: &[crate::build::types::ParsedDocument], output_dir: &Path, pending: &mut PendingManifest) {
+    let mut atlases: Vec<(&'static place_map::country_map::matching::Atlas, bool)> = Vec::new();
+    for model in documents.iter().filter_map(|d| d.country_map.as_ref()) {
+        let atlas = model.atlas();
+        match atlases.iter_mut().find(|(a, _)| std::ptr::eq(*a, atlas)) {
+            Some((_, search)) => *search |= model.spec.search,
+            None => atlases.push((atlas, model.spec.search)),
+        }
     }
-    let result = ServedPath::for_place_map_asset(&place_map::country_map::shapes::embedded().digest, "NOTICE.txt")
-        .map_err(|e| e.to_string())
-        .and_then(|sp| BuildContext::for_render(output_dir, pending).emit(&sp, COUNTRY_NOTICE.as_bytes(), HashBucket::Files).map_err(|e| e.to_string()));
-    if let Err(error) = result {
-        crate::build::cli_output::log_warn_problem!("country-map notice could not be emitted: {error}");
-    }
-}
-
-/// The country search index, once for the site, in the notice's directory. Only a
-/// site with a country map whose search is on pays for it.
-pub fn emit_country_search(documents: &[crate::build::types::ParsedDocument], output_dir: &Path, pending: &mut PendingManifest) {
-    if !documents.iter().filter_map(|d| d.country_map.as_ref()).any(|m| m.spec.search) {
-        return;
-    }
-    let result = ServedPath::for_place_map_asset(&place_map::country_map::shapes::embedded().digest, place_map::country_map::search::FILE)
-        .map_err(|e| e.to_string())
-        .and_then(|sp| BuildContext::for_render(output_dir, pending).emit(&sp, place_map::country_map::search::index().as_bytes(), HashBucket::Files).map_err(|e| e.to_string()));
-    if let Err(error) = result {
-        crate::build::cli_output::log_warn_problem!("country-map search index could not be emitted: {error}");
+    for (atlas, search) in atlases {
+        let notice = if atlas.regions_of.is_some() { REGIONS_NOTICE } else { COUNTRY_NOTICE };
+        let mut files = vec![("NOTICE.txt".to_string(), notice.to_string())];
+        if search {
+            files.push((place_map::country_map::search::file(atlas), place_map::country_map::search::index(atlas)));
+        }
+        for (name, body) in files {
+            let result = ServedPath::for_place_map_asset(&atlas.shapes.digest, &name)
+                .map_err(|e| e.to_string())
+                .and_then(|sp| BuildContext::for_render(output_dir, pending).emit(&sp, body.as_bytes(), HashBucket::Files).map_err(|e| e.to_string()));
+            if let Err(error) = result {
+                crate::build::cli_output::log_warn_problem!("country-map {name} could not be emitted: {error}");
+            }
+        }
     }
 }
 

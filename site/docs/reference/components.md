@@ -372,11 +372,12 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-form__help` | instance | A field's help text, tied to it with `aria-describedby`. |
 | `.moss-form__error` | instance | The message for a field the service refused; filled and shown by the form script. |
 | `.moss-form__status` | instance | The one live line under the button for errors that are not about a single field. |
-| `.moss-country-map` | container | A country map: inline SVG with one path per country, a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table. |
+| `.moss-country-map` | container | A country map: inline SVG with one path per country (or, under `within`, per region of one country), a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table. |
 | `.moss-country-own` | instance | The map on its own page, the page whose table it is drawn from. While script runs, the page's first table after it is clipped out of sight (kept for screen readers, shown on focus or when the search's see-the-list link targets it), so the map is the display and the rows are not repeated. |
+| `.moss-country-regions` | instance | A map of one country's regions (`within:`): it keeps the country's own shape at every width, no taller than 80% of the window, with no graticule. |
 | `.moss-country` | instance | One country's path. `data-level` (from 1, lowest) colours it; a country with no value carries none and shows the land colour. `data-box` is the area the map frames when it is chosen. Choosing it opens the panel (`is-chosen` outlines it); hovering lifts its colour (`is-lifted` does too, from the legend). |
 | `.moss-country-disputed` | instance | Land Natural Earth marks as disputed or breakaway, drawn as plain land and inert: no country is coloured over it. |
-| `.moss-country-graticule` | instance | The faint 30-degree grid under the land. |
+| `.moss-country-graticule` | instance | The faint 30-degree grid under the land, on a world map only. |
 | `.moss-country-land` | container | The group holding every country's path. |
 | `.moss-country-legend` | container | The levels in order, lowest first, each with its swatch and name, so colour is never the only carrier. |
 | `.moss-country-swatch` | instance | A level's colour chip; `data-level` picks the level. |

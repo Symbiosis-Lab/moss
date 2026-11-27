@@ -1,5 +1,6 @@
-//! Equal Earth (Savric, Patterson and Jenny 2018): an equal-area world
-//! projection. Constants and formula as published.
+//! Equal-area projections: Equal Earth (Savric, Patterson and Jenny 2018) for
+//! the world, constants and formula as published, and a conic equal-area one
+//! (Albers) fitted to one country for its regions.
 
 const A1: f64 = 1.340264;
 const A2: f64 = -0.081106;
@@ -33,6 +34,41 @@ pub(crate) fn frame(width: f64) -> (f64, impl Fn(f64, f64) -> (f64, f64)) {
     (height, move |lon, lat| {
         let (x, y) = equal_earth(lon, lat);
         ((x + half) * scale, (top - y) * scale)
+    })
+}
+
+/// Conic equal-area (Albers) for a box `[west, south, east, north]` in degrees:
+/// centred on the box, standard parallels a sixth of its latitude range in from
+/// each edge. The generator's `conicFor` simplifies the region packs in this
+/// projection, so the two must agree; both tests pin the same fixture.
+pub(crate) fn conic_equal_area([west, south, east, north]: [f64; 4]) -> impl Fn(f64, f64) -> (f64, f64) {
+    let span = north - south;
+    let (p1, p2) = ((south + span / 6.0).to_radians(), (north - span / 6.0).to_radians());
+    let n = (p1.sin() + p2.sin()) / 2.0;
+    let c = p1.cos().powi(2) + 2.0 * n * p1.sin();
+    let rho = move |lat: f64| (c - 2.0 * n * lat.sin()).sqrt() / n;
+    let rho0 = rho(((south + north) / 2.0).to_radians());
+    let lon0 = (west + east) / 2.0;
+    move |lon, lat| {
+        let (r, t) = (rho(lat.to_radians()), n * (lon - lon0).to_radians());
+        (r * t.sin(), rho0 - r * t.cos())
+    }
+}
+
+/// One country's regions framed as an SVG viewBox of the given width, with a
+/// margin of 2% of the width: returns `(height, project)` as [`frame`] does.
+pub(crate) fn fitted_frame<'a>(width: f64, rings: impl Iterator<Item = &'a [(f64, f64)]> + Clone) -> (f64, impl Fn(f64, f64) -> (f64, f64)) {
+    let bounds = |b: [f64; 4], (x, y): (f64, f64)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+    let empty = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let degrees = rings.clone().flatten().copied().fold(empty, bounds);
+    let conic = conic_equal_area(degrees);
+    let [x0, y0, x1, y1] = rings.flatten().map(|&(lon, lat)| conic(lon, lat)).fold(empty, bounds);
+    let scale = width / ((x1 - x0) * 1.04);
+    let (left, top) = (x0 - (x1 - x0) * 0.02, y1 + (x1 - x0) * 0.02);
+    let height = (y1 - y0 + (x1 - x0) * 0.04) * scale;
+    (height, move |lon, lat| {
+        let (x, y) = conic(lon, lat);
+        ((x - left) * scale, (top - y) * scale)
     })
 }
 
@@ -72,5 +108,33 @@ mod tests {
         assert!((project(0.0, SOUTH).1 - height).abs() < 1e-9);
         assert!((project(180.0, 0.0).0 - 1000.0).abs() < 1e-9);
         assert!(height > 400.0 && height < 600.0, "{height}");
+    }
+
+    #[test]
+    fn the_conic_keeps_area_true_across_its_box_and_centres_it() {
+        let project = conic_equal_area([5.9, 47.3, 15.0, 55.1]);
+        let (x, y) = project(10.45, 51.2);
+        assert!(x.abs() < 1e-12 && y.abs() < 1e-12, "{x},{y}");
+        let cell = |lat: f64| {
+            let ((ax, ay), (bx, _), (_, cy)) = (project(10.0, lat), project(11.0, lat), project(10.0, lat + 1.0));
+            ((bx - ax) * (cy - ay)).abs() / (lat + 0.5).to_radians().cos()
+        };
+        let ratio = cell(48.0) / cell(54.0);
+        assert!((ratio - 1.0).abs() < 0.01, "ratio {ratio}");
+        let (fx, fy) = project(8.0, 50.0);
+        assert!((fx + 0.027459197).abs() < 1e-9 && (fy + 0.02050663).abs() < 1e-9, "the generator's twin pins the same point: {fx},{fy}");
+    }
+
+    #[test]
+    fn a_fitted_frame_holds_the_rings_inside_its_margin() {
+        let ring = [(6.0, 47.0), (15.0, 47.0), (15.0, 55.0), (6.0, 55.0)];
+        let (height, project) = fitted_frame(1000.0, std::iter::once(&ring[..]));
+        for &(lon, lat) in &ring {
+            let (x, y) = project(lon, lat);
+            assert!((0.0..=1000.0).contains(&x) && (0.0..=height).contains(&y), "{lon},{lat} -> {x},{y}");
+        }
+        let west = ring.iter().map(|&(lon, lat)| project(lon, lat).0).fold(f64::MAX, f64::min);
+        assert!((west - 1000.0 * 0.02 / 1.04).abs() < 1e-6, "{west}");
+        assert!(height > 900.0 && height < 1400.0, "Germany is taller than wide: {height}");
     }
 }

@@ -1,0 +1,11 @@
+{
+  "DEU": {
+    "schema": 1,
+    "manifest_sha256": "8faa60b22d8dcad5f9cd0bf23b847719f84876af87c7060d021a3f2acdd94503",
+    "raw_bytes": 12331,
+    "brotli_bytes": 9852,
+    "budget_bytes": 10344,
+    "regions": 16,
+    "vertices": 5282
+  }
+}

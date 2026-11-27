@@ -1,17 +1,24 @@
-//! Decoder for the embedded country shapes (`MOSSCTY1`, written by
-//! `scripts/place-map/generate-countries.mjs`).
-
-use std::sync::OnceLock;
+//! Decoder for the embedded country shapes and region packs (`MOSSCTY1`,
+//! written by `scripts/place-map/generate-countries.mjs`).
 
 const MAGIC: &[u8; 8] = b"MOSSCTY1";
 const SCHEMA: u16 = 1;
 const PACKED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/place-map/countries-v1.bin.br"));
 
-/// One country as Natural Earth names it, with its outline in degrees.
+/// The countries whose first-level subdivisions moss can draw, by alpha-3 code.
+pub(crate) const REGION_PACKS: &[(&str, &[u8])] = &[("DEU", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/place-map/admin1-DEU-v1.bin.br")))];
+
+/// One country, or in a region pack one region, as Natural Earth names it,
+/// with its outline in degrees. Every name is a key the matcher folds; for a
+/// region the fields hold: `code` its ISO 3166-2 code (`DE-BY`), `adm0` that
+/// code without the country (`BY`), `name` and `name_long` its local name
+/// (`Bayern`), `admin` its English name (`Bavaria`), `formal` its GeoNames
+/// name (`Freistaat Bayern`).
 #[derive(Debug, Clone)]
 pub(crate) struct Country {
     /// ISO 3166 alpha-3 where Natural Earth has one, else its own admin code.
     pub code: String,
+    /// The admin-0 code the search index's cities name.
     pub adm0: String,
     pub name: String,
     pub name_long: String,
@@ -97,15 +104,21 @@ fn decode(bytes: &[u8]) -> Shapes {
     Shapes { digest, countries, disputed }
 }
 
-/// The embedded shapes, decoded once.
-pub(crate) fn embedded() -> &'static Shapes {
-    static SHAPES: OnceLock<Shapes> = OnceLock::new();
-    SHAPES.get_or_init(|| {
-        let mut raw = Vec::new();
-        brotli::BrotliDecompress(&mut std::io::Cursor::new(PACKED), &mut raw)
-            .expect("embedded country shapes must be valid brotli");
-        decode(&raw)
-    })
+fn unpack(packed: &[u8]) -> Shapes {
+    let mut raw = Vec::new();
+    brotli::BrotliDecompress(&mut std::io::Cursor::new(packed), &mut raw).expect("embedded country shapes must be valid brotli");
+    decode(&raw)
+}
+
+/// The embedded shapes, decoded on each call: [`super::matching::Atlas`] keeps
+/// the one copy of these and of each region pack.
+pub(crate) fn embedded() -> Shapes {
+    unpack(PACKED)
+}
+
+/// The regions of the country with this alpha-3 code, if moss has its pack.
+pub(crate) fn regions(code: &str) -> Option<Shapes> {
+    REGION_PACKS.iter().find(|(c, _)| *c == code).map(|(_, packed)| unpack(packed))
 }
 
 #[cfg(test)]
@@ -114,7 +127,7 @@ mod tests {
 
     #[test]
     fn decodes_the_embedded_shapes() {
-        let shapes = embedded();
+        let shapes = &embedded();
         assert!(shapes.countries.len() > 230);
         assert!(shapes.countries.iter().all(|c| c.name != "Antarctica"));
         let mexico = shapes.countries.iter().find(|c| c.code == "MEX").expect("Mexico");
@@ -126,7 +139,8 @@ mod tests {
 
     #[test]
     fn france_and_norway_have_codes_although_their_iso_column_is_blank() {
-        let codes: Vec<&str> = embedded().countries.iter().map(|c| c.code.as_str()).collect();
+        let shapes = embedded();
+        let codes: Vec<&str> = shapes.countries.iter().map(|c| c.code.as_str()).collect();
         for code in ["FRA", "NOR"] {
             assert!(codes.contains(&code), "{code} missing");
         }
@@ -135,7 +149,20 @@ mod tests {
 
     #[test]
     fn disputed_names_have_no_shape() {
-        let somaliland = embedded().countries.iter().find(|c| c.name == "Somaliland").expect("Somaliland");
+        let shapes = embedded();
+        let somaliland = shapes.countries.iter().find(|c| c.name == "Somaliland").expect("Somaliland");
         assert!(somaliland.disputed_name && somaliland.rings.is_empty());
+    }
+
+    #[test]
+    fn the_german_pack_holds_the_sixteen_laender_by_code_and_name() {
+        let deu = regions("DEU").expect("DEU pack");
+        assert_eq!(deu.countries.len(), 16);
+        let bayern = deu.countries.iter().find(|c| c.code == "DE-BY").expect("Bayern");
+        assert_eq!((bayern.adm0.as_str(), bayern.name.as_str(), bayern.admin.as_str()), ("BY", "Bayern", "Bavaria"));
+        let (lon, lat) = bayern.rings[0][0];
+        assert!((8.9..13.9).contains(&lon) && (47.2..50.6).contains(&lat), "{lon},{lat}");
+        assert!(deu.countries.iter().all(|c| !c.rings.is_empty()));
+        assert!(regions("FRA").is_none());
     }
 }

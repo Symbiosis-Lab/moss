@@ -23,7 +23,15 @@ pub(crate) struct Action {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Spec {
     pub by: String,
+    /// The ramp and legend, lowest first; under `binned`, one per bin, named by its range.
     pub levels: Vec<Level>,
+    /// `binned: [1, 5, 10, 20]`: the lower bounds that cut a column of counts
+    /// into half-open bins, the last open at the top.
+    #[serde(default)]
+    pub binned: Option<Vec<u64>>,
+    /// `within: Germany`: the country whose first-level regions the first column names.
+    #[serde(default)]
+    pub within: Option<String>,
     pub unrated: Option<String>,
     pub action: Option<Action>,
     /// The search field above the map; on unless the author sets `search: false`.
@@ -36,7 +44,7 @@ pub(crate) struct Spec {
 
 impl Default for Spec {
     fn default() -> Self {
-        Spec { by: String::new(), levels: Vec::new(), unrated: None, action: None, search: true, as_of_today: false }
+        Spec { by: String::new(), levels: Vec::new(), binned: None, within: None, unrated: None, action: None, search: true, as_of_today: false }
     }
 }
 
@@ -53,19 +61,14 @@ pub(crate) fn parse(value: &Value) -> Result<Spec, String> {
     let map = value.as_mapping().ok_or("country_map must be a block with `by` and `levels`")?;
     let get = |key: &str| map.get(Value::String(key.to_string()));
     let by = get("by").and_then(text_of).filter(|s| !s.is_empty()).ok_or("country_map needs `by`, the name of the column that colours the countries")?;
-    let list = get("levels").and_then(Value::as_sequence).filter(|l| !l.is_empty()).ok_or("country_map needs `levels`, the column's values lowest first")?;
-    let mut levels = Vec::new();
-    for item in list {
-        let level = match item {
-            Value::Mapping(m) => {
-                let name = m.get(Value::String("name".into())).and_then(text_of).filter(|s| !s.is_empty());
-                let text = m.get(Value::String("text".into())).and_then(text_of).filter(|s| !s.is_empty());
-                name.map(|name| Level { name, text })
-            }
-            other => text_of(other).filter(|s| !s.is_empty()).map(|name| Level { name, text: None }),
-        };
-        levels.push(level.ok_or("each of country_map's `levels` is a name or a {name, text} pair")?);
-    }
+    let (levels, binned) = match (get("levels"), get("binned")) {
+        (Some(_), Some(_)) => return Err("country_map takes `levels` or `binned`, not both".into()),
+        (None, Some(bounds)) => {
+            let bounds = parse_bins(bounds)?;
+            (bin_levels(&bounds), Some(bounds))
+        }
+        (levels, None) => (parse_levels(levels)?, None),
+    };
     if levels.len() > MAX_LEVELS {
         return Err(format!("country_map has {} levels; the most it can colour is {MAX_LEVELS}", levels.len()));
     }
@@ -90,10 +93,55 @@ pub(crate) fn parse(value: &Value) -> Result<Spec, String> {
         Some(Value::String(s)) if s.trim() == "today" => true,
         Some(_) => return Err("country_map's `as_of` is `today`; leave it out to stamp the page's `date:`".into()),
     };
-    Ok(Spec { by, levels, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action, search, as_of_today })
+    let within = match get("within") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(text_of(v).filter(|s| !s.is_empty()).ok_or("country_map's `within` is the name or alpha-3 code of a country")?),
+    };
+    Ok(Spec { by, levels, binned, within, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action, search, as_of_today })
+}
+
+fn parse_levels(list: Option<&Value>) -> Result<Vec<Level>, String> {
+    let list = list.and_then(Value::as_sequence).filter(|l| !l.is_empty()).ok_or("country_map needs `levels`, the column's values lowest first, or `binned`, the bounds that cut a column of counts")?;
+    let mut levels = Vec::new();
+    for item in list {
+        let level = match item {
+            Value::Mapping(m) => {
+                let name = m.get(Value::String("name".into())).and_then(text_of).filter(|s| !s.is_empty());
+                let text = m.get(Value::String("text".into())).and_then(text_of).filter(|s| !s.is_empty());
+                name.map(|name| Level { name, text })
+            }
+            other => text_of(other).filter(|s| !s.is_empty()).map(|name| Level { name, text: None }),
+        };
+        levels.push(level.ok_or("each of country_map's `levels` is a name or a {name, text} pair")?);
+    }
+    Ok(levels)
+}
+
+fn parse_bins(value: &Value) -> Result<Vec<u64>, String> {
+    let refused = || "country_map's `binned` is a list of whole numbers, smallest first, such as [1, 5, 10, 20]".to_string();
+    let bounds: Vec<u64> = value.as_sequence().filter(|l| !l.is_empty()).ok_or_else(refused)?.iter().map(Value::as_u64).collect::<Option<_>>().ok_or_else(refused)?;
+    if bounds.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(refused());
+    }
+    Ok(bounds)
+}
+
+/// "1–4", "5–9", "10–19", "20+" for `[1, 5, 10, 20]`; a bin of one number is that number.
+fn bin_levels(bounds: &[u64]) -> Vec<Level> {
+    let name = |i: usize| match bounds.get(i + 1) {
+        None => format!("{}+", bounds[i]),
+        Some(next) if next - 1 == bounds[i] => bounds[i].to_string(),
+        Some(next) => format!("{}–{}", bounds[i], next - 1),
+    };
+    (0..bounds.len()).map(|i| Level { name: name(i), text: None }).collect()
 }
 
 impl Spec {
+    /// The bin a count falls in: `None` below the first bound.
+    pub(crate) fn bin_of(&self, count: u64) -> Option<usize> {
+        self.binned.as_ref()?.iter().rposition(|&bound| count >= bound)
+    }
+
     /// The day the built stamp shows: the page's `date:`, or under `as_of: today`
     /// with no `date:`, the build day, so a reader without script still sees one.
     pub(crate) fn stamp_date<'a>(&self, page_date: Option<&'a str>, build_day: &'a str) -> Option<&'a str> {
@@ -157,6 +205,28 @@ mod tests {
     fn a_block_without_by_or_levels_is_refused_with_the_missing_key() {
         assert!(parse_yaml("levels: [a]").unwrap_err().contains("`by`"));
         assert!(parse_yaml("by: x").unwrap_err().contains("`levels`"));
+        assert!(parse_yaml("by: x\nlevels: [a]\nwithin: ''").unwrap_err().contains("`within`"));
         assert!(parse_yaml("by: x\nlevels: [a]\naction: {label: Go}").unwrap_err().contains("`link`"));
+    }
+
+    #[test]
+    fn binned_cuts_counts_into_half_open_bins_the_last_open_at_the_top() {
+        let spec = parse_yaml("by: Count\nbinned: [1, 5, 10, 20]\nwithin: Germany").unwrap();
+        let names: Vec<&str> = spec.levels.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["1–4", "5–9", "10–19", "20+"]);
+        assert_eq!(spec.within.as_deref(), Some("Germany"));
+        let bins: Vec<Option<usize>> = [0, 1, 4, 5, 9, 10, 19, 20, 500].map(|n| spec.bin_of(n)).to_vec();
+        assert_eq!(bins, [None, Some(0), Some(0), Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)]);
+        let ones: Vec<String> = parse_yaml("by: x\nbinned: [1, 2, 3]").unwrap().levels.into_iter().map(|l| l.name).collect();
+        assert_eq!(ones, ["1", "2", "3+"]);
+    }
+
+    #[test]
+    fn binned_with_levels_or_out_of_order_or_too_many_is_refused() {
+        assert!(parse_yaml("by: x\nlevels: [a]\nbinned: [1, 5]").unwrap_err().contains("not both"));
+        for bad in ["[5, 1]", "[1, 1]", "[1.5, 3]", "[-1, 3]", "[]", "five"] {
+            assert!(parse_yaml(&format!("by: x\nbinned: {bad}")).unwrap_err().contains("`binned`"), "{bad}");
+        }
+        assert!(parse_yaml("by: x\nbinned: [1, 2, 3, 4, 5, 6, 7, 8]").unwrap_err().contains("8 levels; the most it can colour is 7"));
     }
 }

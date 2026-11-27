@@ -3,10 +3,14 @@
 // disputed and breakaway land cut out of every country, Antarctica dropped,
 // simplified for a map about 1,300 px wide in Equal Earth. Writes the
 // brotli-compressed MOSSCTY1 asset and its size report, with a budget of its
-// own so the landscape pack's budget is untouched.
+// own so the landscape pack's budget is untouched. With `--admin1 <ISO3>` it
+// writes one country's first-level subdivisions instead (Natural Earth 1:10m
+// admin-1), simplified for that country drawn 1,300 px wide in its own conic
+// equal-area projection, in the same format.
 //
 //   MOSS_PLACE_MAP_SOURCE_DIR=<cache> python3 generate.py --check --countries
 //   MOSS_PLACE_MAP_SOURCE_DIR=<cache> node generate-countries.mjs
+//   MOSS_PLACE_MAP_SOURCE_DIR=<cache> node generate-countries.mjs --admin1 DEU
 //
 // Boolean operations use polygon-clipping (pinned in package.json).
 
@@ -86,8 +90,8 @@ async function readFeatures(artifact) {
   return Array.isArray(value) ? value.flatMap((layer) => layer.features ?? []) : value.features ?? [];
 }
 
-const q = (v) => Math.round(v * QUANT) / QUANT;
-const quantRing = (ring) => {
+const quantRing = (ring, quant = QUANT) => {
+  const q = (v) => Math.round(v * quant) / quant;
   const out = [];
   for (const [lon, lat] of ring) {
     const p = [q(lon), q(lat)];
@@ -113,8 +117,8 @@ function perpendicular(p, a, b) {
   const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
   return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
 }
-function douglasPeucker(points, tolerance) {
-  const px = points.map(toPx);
+function douglasPeucker(points, tolerance, project = toPx) {
+  const px = points.map(project);
   const keep = new Uint8Array(points.length);
   keep[0] = keep[points.length - 1] = 1;
   const stack = [[0, points.length - 1]];
@@ -134,7 +138,7 @@ const compare = (a, b) => a[0] - b[0] || a[1] - b[1];
  * "shared with another ring" starts or stops, and each shared arc is
  * simplified in a canonical direction and cached.
  */
-function simplifyRings(ringsByOwner, tolerance) {
+function simplifyRings(ringsByOwner, tolerance, project = toPx) {
   const owners = new Map();
   for (const [owner, rings] of ringsByOwner) for (const ring of rings) for (const p of ring) { const k = keyOf(p); (owners.get(k) ?? owners.set(k, new Set()).get(k)).add(owner); }
   const shared = (p) => owners.get(keyOf(p)).size > 1;
@@ -145,7 +149,7 @@ function simplifyRings(ringsByOwner, tolerance) {
     const canonical = flip ? [...arc].reverse() : arc;
     const k = canonical.map(keyOf).join(";");
     let result = cache.get(k);
-    if (!result) { result = douglasPeucker(canonical, tolerance); cache.set(k, result); }
+    if (!result) { result = douglasPeucker(canonical, tolerance, project); cache.set(k, result); }
     return flip ? [...result].reverse() : result;
   };
   const simplifyRing = (ring) => {
@@ -154,7 +158,7 @@ function simplifyRings(ringsByOwner, tolerance) {
     let start = -1;
     for (let i = 0; i < n; i++) if (flags[i] !== flags[(i + n - 1) % n]) { start = i; break; }
     if (start < 0) {
-      if (!flags[0]) return douglasPeucker([...ring, ring[0]], tolerance).slice(0, -1);
+      if (!flags[0]) return douglasPeucker([...ring, ring[0]], tolerance, project).slice(0, -1);
       let low = 0; for (let i = 1; i < n; i++) if (compare(ring[i], ring[low]) < 0) low = i;
       const rotated = [...ring.slice(low), ...ring.slice(0, low)];
       return simplifyArc([...rotated, rotated[0]]).slice(0, -1);
@@ -166,7 +170,7 @@ function simplifyRings(ringsByOwner, tolerance) {
     for (let i = 1; i <= n; i++) {
       if (i === n || rf[i] !== rf[i - 1]) {
         const arc = rotated.slice(from, Math.min(i + 1, n)).concat(i === n ? [rotated[0]] : []);
-        const simplified = rf[from] ? simplifyArc(arc) : douglasPeucker(arc, tolerance);
+        const simplified = rf[from] ? simplifyArc(arc) : douglasPeucker(arc, tolerance, project);
         out.push(...simplified.slice(0, -1));
         from = i;
       }
@@ -175,7 +179,7 @@ function simplifyRings(ringsByOwner, tolerance) {
   };
   const result = new Map();
   for (const [owner, rings] of ringsByOwner) {
-    const kept = rings.map((ring) => { const reduced = simplifyRing(ring); const simple = reduced.length >= 3 ? reduced : ring; return { ring: simple, area: Math.abs(signedArea(simple.map(toPx))) }; });
+    const kept = rings.map((ring) => { const reduced = simplifyRing(ring); const simple = reduced.length >= 3 ? reduced : ring; return { ring: simple, area: Math.abs(signedArea(simple.map(project))) }; });
     const largest = Math.max(...kept.map((r) => r.area), 0);
     result.set(owner, kept.filter((r) => r.ring.length >= 3 && (r.area === largest || r.area >= MIN_RING_AREA_PX2)).map((r) => r.ring));
   }
@@ -187,25 +191,25 @@ function simplifyRings(ringsByOwner, tolerance) {
 function varint(value) { const out = []; let x = value; while (x >= 128) { out.push((x & 127) | 128); x = Math.floor(x / 128); } out.push(x); return Buffer.from(out); }
 const zigzag = (v) => (v < 0 ? -v * 2 - 1 : v * 2);
 const text = (s) => { const b = Buffer.from(s ?? "", "utf8"); return Buffer.concat([varint(b.length), b]); };
-function encodeRings(rings) {
+function encodeRings(rings, quant = QUANT) {
   const chunks = [varint(rings.length)];
   let px = 0, py = 0;
   for (const ring of rings) {
     chunks.push(varint(ring.length));
     for (const [lon, lat] of ring) {
-      const x = Math.round(lon * QUANT), y = Math.round(lat * QUANT);
+      const x = Math.round(lon * quant), y = Math.round(lat * quant);
       chunks.push(varint(zigzag(x - px)), varint(zigzag(y - py)));
       px = x; py = y;
     }
   }
   return Buffer.concat(chunks);
 }
-function encodeAsset(countries, disputedRings, manifestDigest) {
-  const chunks = [MAGIC, Buffer.from([SCHEMA & 255, SCHEMA >> 8, QUANT & 255, QUANT >> 8]), manifestDigest, varint(countries.length)];
+function encodeAsset(countries, disputedRings, manifestDigest, quant = QUANT) {
+  const chunks = [MAGIC, Buffer.from([SCHEMA & 255, SCHEMA >> 8, quant & 255, quant >> 8]), manifestDigest, varint(countries.length)];
   for (const c of countries) {
-    chunks.push(text(c.code), text(c.adm0), text(c.name), text(c.nameLong), text(c.admin), text(c.formal), Buffer.from([c.disputedName ? 1 : 0]), encodeRings(c.rings));
+    chunks.push(text(c.code), text(c.adm0), text(c.name), text(c.nameLong), text(c.admin), text(c.formal), Buffer.from([c.disputedName ? 1 : 0]), encodeRings(c.rings, quant));
   }
-  chunks.push(encodeRings(disputedRings));
+  chunks.push(encodeRings(disputedRings, quant));
   return Buffer.concat(chunks);
 }
 
@@ -234,6 +238,27 @@ function cutCities(features, shaped) {
 
 // ---- build ----------------------------------------------------------------
 
+// Disputed and breakaway land is cut out of every shape and kept apart, to be
+// drawn as plain land; a shape that keeps under MIN_KEPT_SHARE of its area is a
+// disputed name with no rings.
+function disputedCutter(disputedFeatures, quant = QUANT) {
+  const disputed = polygonClipping.union(...disputedFeatures.map((f) => multiPolygon(f.geometry)));
+  const disputedBox = bbox(disputed);
+  const pieces = [];
+  const cut = (raw) => {
+    const geometry = multiPolygon(raw);
+    const touches = overlaps(bbox(geometry), disputedBox);
+    const kept = touches ? polygonClipping.difference(geometry, disputed) : geometry;
+    if (touches) { const piece = polygonClipping.intersection(geometry, disputed); if (piece.length) pieces.push(...piece); }
+    const share = geometryArea(kept) / geometryArea(geometry);
+    return {
+      disputedName: share < MIN_KEPT_SHARE,
+      rings: share < MIN_KEPT_SHARE ? [] : kept.flatMap((poly) => poly.map((ring) => quantRing(ring.slice(0, -1), quant))).filter((r) => r.length >= 3),
+    };
+  };
+  return { cut, pieces };
+}
+
 async function build() {
   const manifestBytes = await readFile(MANIFEST);
   const sources = parseManifest(manifestBytes.toString("utf8"));
@@ -241,25 +266,18 @@ async function build() {
   const countryFeatures = await readFeatures(artifact("countries"));
   const disputedFeatures = await readFeatures(artifact("breakaway_disputed_areas"));
 
-  const disputed = polygonClipping.union(...disputedFeatures.map((f) => multiPolygon(f.geometry)));
-  const disputedBox = bbox(disputed);
-  const disputedPieces = [];
+  const cutter = disputedCutter(disputedFeatures);
   const raw = [];
   for (const feature of countryFeatures) {
     const p = feature.properties;
     if (p.ADM0_A3 === "ATA") continue;
-    const geometry = multiPolygon(feature.geometry);
-    const cut = overlaps(bbox(geometry), disputedBox);
-    const kept = cut ? polygonClipping.difference(geometry, disputed) : geometry;
-    if (cut) { const piece = polygonClipping.intersection(geometry, disputed); if (piece.length) disputedPieces.push(...piece); }
-    const share = geometryArea(kept) / geometryArea(geometry);
     raw.push({
       code: p.ISO_A3_EH && p.ISO_A3_EH !== "-99" ? p.ISO_A3_EH : p.ADM0_A3,
       adm0: p.ADM0_A3, name: p.NAME, nameLong: p.NAME_LONG, admin: p.ADMIN, formal: p.FORMAL_EN ?? "",
-      disputedName: share < MIN_KEPT_SHARE,
-      rings: share < MIN_KEPT_SHARE ? [] : kept.flatMap((poly) => poly.map((ring) => quantRing(ring.slice(0, -1)))).filter((r) => r.length >= 3),
+      ...cutter.cut(feature.geometry),
     });
   }
+  const disputedPieces = cutter.pieces;
   const ringsByOwner = new Map(raw.map((c) => [c.code, c.rings]));
   ringsByOwner.set("\u0000disputed", disputedPieces.flatMap((poly) => poly.map((ring) => quantRing(ring.slice(0, -1)))).filter((r) => r.length >= 3));
   const simplified = simplifyRings(ringsByOwner, TOLERANCE_PX);
@@ -269,6 +287,81 @@ async function build() {
   const places = await readFeatures(artifact("populated_places"));
   const cities = cutCities(places, new Set(countries.filter((c) => c.rings.length).map((c) => c.adm0)));
   return { bytes, countries, cities, disputedRings: simplified.get("\u0000disputed"), manifestDigest: sha256(manifestBytes) };
+}
+
+// ---- regions --------------------------------------------------------------
+
+const ADMIN1_MANIFEST = resolve(DATA, "admin1-source-manifest.toml");
+const ADMIN1_REPORT = resolve(DATA, "admin1-size.json");
+const admin1Out = (iso3) => resolve(DATA, `admin1-${iso3}-v1.bin.br`);
+// A thousandth of a degree: a country drawn 1,300 px wide is far larger than
+// on the world map, so hundredths would show as steps.
+const ADMIN1_QUANT = 1000;
+// Each pack's first measured size plus 5% (DEU: 9,852 bytes); they only move down.
+const ADMIN1_BUDGET_BYTES = { DEU: 10344 };
+
+// Conic equal-area (Albers) fitted to a box [west, south, east, north] in
+// degrees, standard parallels a sixth of the latitude range in from each edge.
+// The same function as `conic_equal_area` in moss-build's projection.rs, which
+// draws the packs this simplifies; both tests pin the same fixture.
+function conicFor([west, south, east, north]) {
+  const rad = Math.PI / 180, span = north - south;
+  const p1 = (south + span / 6) * rad, p2 = (north - span / 6) * rad, p0 = ((south + north) / 2) * rad, l0 = (west + east) / 2;
+  const n = (Math.sin(p1) + Math.sin(p2)) / 2;
+  const c = Math.cos(p1) ** 2 + 2 * n * Math.sin(p1);
+  const rho = (p) => Math.sqrt(c - 2 * n * Math.sin(p)) / n;
+  const rho0 = rho(p0);
+  return (lon, lat) => { const r = rho(lat * rad), t = n * (lon - l0) * rad; return [r * Math.sin(t), rho0 - r * Math.cos(t)]; };
+}
+
+// The country's first-level subdivisions: ISO 3166-2 code, the code without
+// its country prefix, the local name (also what the map shows), the English
+// name and the GeoNames name, simplified to TOLERANCE_PX of the country drawn
+// MAP_WIDTH_PX wide in its own conic projection.
+async function buildRegions(iso3) {
+  const manifestBytes = await readFile(ADMIN1_MANIFEST);
+  const sources = parseManifest(manifestBytes.toString("utf8"));
+  const artifact = (name) => sources.find((s) => s.name === name)?.artifact ?? fail(`manifest has no ${name}`);
+  const features = (await readFeatures(artifact("admin_1_states_provinces"))).filter((f) => f.properties.adm0_a3 === iso3);
+  if (!features.length) fail(`Natural Earth has no admin-1 regions for ${iso3}`);
+  const cutter = disputedCutter(await readFeatures(artifact("breakaway_disputed_areas")), ADMIN1_QUANT);
+  const raw = features.map((f) => {
+    const p = f.properties;
+    return { code: p.iso_3166_2, adm0: p.iso_3166_2.split("-")[1] ?? "", name: p.name, nameLong: p.name, admin: p.name_en ?? "", formal: p.gn_name ?? "", ...cutter.cut(f.geometry) };
+  });
+  const box = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const r of raw) for (const ring of r.rings) for (const [x, y] of ring) [box[0], box[1], box[2], box[3]] = [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
+  const conic = conicFor(box);
+  const corners = raw.flatMap((r) => r.rings.flat()).map(([lon, lat]) => conic(lon, lat));
+  const width = Math.max(...corners.map((p) => p[0])) - Math.min(...corners.map((p) => p[0]));
+  const toRegionPx = ([lon, lat]) => { const [x, y] = conic(lon, lat); return [(x * MAP_WIDTH_PX) / width, (-y * MAP_WIDTH_PX) / width]; };
+  const ringsByOwner = new Map(raw.map((r) => [r.code, r.rings]));
+  ringsByOwner.set("\u0000disputed", cutter.pieces.flatMap((poly) => poly.map((ring) => quantRing(ring.slice(0, -1), ADMIN1_QUANT))).filter((r) => r.length >= 3));
+  const simplified = simplifyRings(ringsByOwner, TOLERANCE_PX, toRegionPx);
+  const regions = raw.map((r) => ({ ...r, rings: simplified.get(r.code) }));
+  const disputedRings = simplified.get("\u0000disputed");
+  const manifestDigest = sha256(manifestBytes);
+  return { bytes: encodeAsset(regions, disputedRings, manifestDigest, ADMIN1_QUANT), regions, disputedRings, manifestDigest };
+}
+
+async function writeRegions(iso3, { bytes, regions, disputedRings, manifestDigest }) {
+  const compressed = compress(bytes);
+  const budget = ADMIN1_BUDGET_BYTES[iso3];
+  if (budget === undefined) fail(`${iso3} has no budget in ADMIN1_BUDGET_BYTES; measure it and add one`);
+  if (compressed.length > budget) fail(`${iso3} regions are ${compressed.length} brotli bytes, over the ${budget} budget; nothing written`);
+  const reports = JSON.parse(await readFile(ADMIN1_REPORT, "utf8").catch(() => "{}"));
+  reports[iso3] = {
+    schema: SCHEMA,
+    manifest_sha256: manifestDigest.toString("hex"),
+    raw_bytes: bytes.length,
+    brotli_bytes: compressed.length,
+    budget_bytes: budget,
+    regions: regions.length,
+    vertices: regions.reduce((n, r) => n + r.rings.reduce((m, ring) => m + ring.length, 0), 0) + disputedRings.reduce((m, r) => m + r.length, 0),
+  };
+  await writeFile(admin1Out(iso3), compressed);
+  await writeFile(ADMIN1_REPORT, `${JSON.stringify(reports, null, 2)}\n`);
+  return reports[iso3];
 }
 
 async function writeAsset({ bytes, countries, cities, disputedRings, manifestDigest }, { out = OUT, reportPath = REPORT, budget = BUDGET_BYTES } = {}) {
@@ -292,19 +385,26 @@ async function writeAsset({ bytes, countries, cities, disputedRings, manifestDig
   return report;
 }
 
-function verifyCanonicalSources() {
-  const result = spawnSync("python3", ["-I", resolve(import.meta.dirname, "generate.py"), "--check", "--countries", "--source-dir", CACHE], { stdio: "inherit" });
+function verifyCanonicalSources(set) {
+  const result = spawnSync("python3", ["-I", resolve(import.meta.dirname, "generate.py"), "--check", set, "--source-dir", CACHE], { stdio: "inherit" });
   if (result.status !== 0) fail("country-shape source verification failed");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    verifyCanonicalSources();
-    console.log(JSON.stringify(await writeAsset(await build()), null, 2));
+    const at = process.argv.indexOf("--admin1");
+    if (at >= 0) {
+      const iso3 = process.argv[at + 1] ?? fail("--admin1 needs a country's ISO 3166 alpha-3 code");
+      verifyCanonicalSources("--admin1");
+      console.log(JSON.stringify(await writeRegions(iso3, await buildRegions(iso3)), null, 2));
+    } else {
+      verifyCanonicalSources("--countries");
+      console.log(JSON.stringify(await writeAsset(await build()), null, 2));
+    }
   } catch (error) {
     console.error(error.stack ?? error.message);
     process.exitCode = 1;
   }
 }
 
-export { BUDGET_BYTES, INDEX_BUDGET_BYTES, build, compress, cutCities, encodeAsset, encodeRings, equalEarth, simplifyRings, toPx, writeAsset, QUANT, NORTH, SOUTH, HALF_WIDTH };
+export { ADMIN1_BUDGET_BYTES, ADMIN1_QUANT, BUDGET_BYTES, buildRegions, conicFor, INDEX_BUDGET_BYTES, build, compress, cutCities, encodeAsset, encodeRings, equalEarth, simplifyRings, toPx, writeAsset, QUANT, NORTH, SOUTH, HALF_WIDTH };

@@ -240,6 +240,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "country_map_as_of" => ["As of {date}", "Stand: {date}", "截至 {date}", "截至 {date}"],
         "country_map_not_rated" => ["Not rated", "Nicht bewertet", "未评级", "未評級"],
         "country_map_search" => ["Search a country or city", "Land oder Stadt suchen", "搜索国家或城市", "搜尋國家或城市"],
+        "country_map_search_region" => ["Search a region", "Region suchen", "搜索地区", "搜尋地區"],
+        "country_map_no_match_region" => ["No region matches \u{201c}{q}\u{201d}.", "Keine Region passt zu \u{201e}{q}\u{201c}.", "没有与“{q}”匹配的地区。", "沒有與「{q}」相符的地區。"],
         "country_map_result_one" => ["{n} result", "{n} Treffer", "{n} 个结果", "{n} 個結果"],
         "country_map_result_other" => ["{n} results", "{n} Treffer", "{n} 个结果", "{n} 個結果"],
         "country_map_no_match" => ["No country or city matches \u{201c}{q}\u{201d}.", "Kein Land und keine Stadt passt zu \u{201e}{q}\u{201c}.", "没有与“{q}”匹配的国家或城市。", "沒有與「{q}」相符的國家或城市。"],

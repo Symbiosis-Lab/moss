@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
-import { BUDGET_BYTES, INDEX_BUDGET_BYTES, cutCities, equalEarth, HALF_WIDTH, simplifyRings } from "./generate-countries.mjs";
+import { ADMIN1_BUDGET_BYTES, BUDGET_BYTES, INDEX_BUDGET_BYTES, conicFor, cutCities, equalEarth, HALF_WIDTH, simplifyRings } from "./generate-countries.mjs";
 
 const DATA = resolve(import.meta.dirname, "../../crates/moss-build/data/place-map");
 
@@ -55,4 +55,27 @@ test("the city list, the largest part of the search index, fits the index's budg
   const cities = await readFile(resolve(DATA, "countries-cities-v1.json"));
   assert.equal(report.index_budget_bytes, INDEX_BUDGET_BYTES);
   assert.ok(cities.length < INDEX_BUDGET_BYTES, `${cities.length} bytes of cities leave no room for the names`);
+});
+
+test("the conic projection keeps a box's area true and puts its centre at the origin", () => {
+  const box = [5.9, 47.3, 15.0, 55.1];
+  const project = conicFor(box);
+  const [x0, y0] = project(10.45, 51.2);
+  assert.ok(Math.abs(x0) < 1e-12 && Math.abs(y0) < 1e-12, `${x0},${y0}`);
+  const cell = (lat) => { const [ax, ay] = project(10, lat), [bx, by] = project(11, lat), [, cy] = project(10, lat + 1); return Math.abs((bx - ax) * (cy - ay)) / Math.cos(((lat + 0.5) * Math.PI) / 180); };
+  assert.ok(Math.abs(cell(48) / cell(54) - 1) < 0.01, `ratio ${cell(48) / cell(54)}`);
+  const [fx, fy] = project(8, 50);
+  assert.ok(Math.abs(fx + 0.027459197) < 1e-9 && Math.abs(fy + 0.02050663) < 1e-9, `the Rust twin pins the same point: ${fx},${fy}`);
+});
+
+test("each checked-in region pack is within its budget and says what it holds", async () => {
+  const reports = JSON.parse(await readFile(resolve(DATA, "admin1-size.json"), "utf8"));
+  assert.deepEqual(Object.keys(reports).sort(), Object.keys(ADMIN1_BUDGET_BYTES).sort());
+  for (const [iso3, budget] of Object.entries(ADMIN1_BUDGET_BYTES)) {
+    const packed = await readFile(resolve(DATA, `admin1-${iso3}-v1.bin.br`));
+    assert.ok(packed.length <= budget, `${iso3}: ${packed.length} > ${budget}`);
+    assert.equal(reports[iso3].brotli_bytes, packed.length);
+    assert.equal(brotliDecompressSync(packed).subarray(0, 8).toString("ascii"), "MOSSCTY1");
+  }
+  assert.equal(reports.DEU.regions, 16);
 });
