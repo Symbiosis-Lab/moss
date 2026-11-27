@@ -315,7 +315,7 @@ impl BuildTrigger {
 ///
 /// The declarations live in `build/ports/` so the seam-width ratchet can see
 /// them; see that module for why.
-pub use ports::host::{HostPorts, HostStore, ServerDiff, ServerDiffFuture, ServerFuture};
+pub use ports::host::{HostPorts, HostStore, ServerFuture};
 
 /// Single configuration struct for all pipeline behavior.
 ///
@@ -1406,7 +1406,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let seal_ports = SealPorts {
                 events: config.host.events.clone(),
                 announcer: config.host.announcer.clone(),
-                server_diff: config.host.server_diff.clone(),
             };
             let store = config.host.store.clone();
             // Clone folder_path so the spawn can construct MossPaths for materialize.
@@ -1539,7 +1538,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         &SealPorts {
                             events: config.host.events.clone(),
                             announcer: config.host.announcer.clone(),
-                            server_diff: config.host.server_diff.clone(),
                         },
                         &mp,
                         &mp.hashes(),
@@ -1789,7 +1787,6 @@ impl SealWait {
 pub(crate) struct SealPorts {
     pub events: crate::build::ProgressSink,
     pub announcer: std::sync::Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
-    pub server_diff: Option<crate::build::ports::host::ServerDiff>,
 }
 
 /// The seal tail's one-off RAII permits plus passthrough values, bundled by

@@ -73,7 +73,6 @@ use std::sync::{LazyLock, Mutex};
 use super::change_set::{self, ChangeSet};
 use super::{published_record, SealedManifest};
 use crate::types::content::SiteHashes;
-use crate::build::ports::host::ServerDiff;
 use crate::build::assets::paths::compute_binary_hash_file;
 use crate::moss_paths::MossPaths;
 use crate::types::content::{file_entry, symlink_entry};
@@ -108,20 +107,6 @@ pub fn tail_speaks(
     (mat_ok && owns_shared).then_some(sealed)
 }
 
-/// What the local arms of [`for_seal`] decided.
-///
-/// `AskServer` means both local sources came up empty — no publish record, no
-/// generation on disk — and the caller may still ask the host's
-/// [`ServerDiff`] port. Split out of `for_seal` deliberately: the network ask
-/// must run AFTER the sealed manifest has been advertised to deploy, so a
-/// slow server can delay only the button decoration, never a publish. The
-/// caller with no port turns `AskServer` into `ChangeSet::default()` — the
-/// same honest blank this state produced before the port existed.
-pub enum SealVerdict {
-    Ready(ChangeSet),
-    AskServer,
-}
-
 /// The change set a completed seal advertises, or `None` when this tail has
 /// nothing to say — see [`tail_speaks`], which is how callers decide.
 ///
@@ -130,22 +115,21 @@ pub enum SealVerdict {
 /// (`AppState::current_change_set`).
 ///
 /// The record is the preferred input — it is the only one that can carry
-/// verbs. The backfill is the fallback; the host's [`ServerDiff`] port
-/// ([`from_server`], deferred — see [`SealVerdict`]) the fallback's fallback;
-/// and the blank default last, so a site with no record, no generation on
-/// disk, and no server to ask lands exactly where it landed before this
-/// module existed.
+/// verbs. The backfill is the fallback, and the blank default last: a site
+/// with no record and no generation on disk has nothing local to count
+/// against, and the server is not asked, since its only manifest diff opens
+/// a deploy, which would end another machine's publish in flight.
 ///
 /// The tree walk goes to the blocking pool: it hashes every file of a whole
 /// generation, which on a large vault is thousands of reads.
 pub async fn for_seal(
     mp: &MossPaths,
     describable: Option<&SiteHashes>,
-) -> Option<SealVerdict> {
+) -> Option<ChangeSet> {
     let sealed = describable?;
     let target = publish_target(mp);
     if let Some(record) = published_record::load_for(mp, target.as_deref()) {
-        return Some(SealVerdict::Ready(change_set::classify(Some(&record), sealed)));
+        return Some(change_set::classify(Some(&record), sealed));
     }
     let project_root = mp.project_root().to_path_buf();
     let previous = tokio::task::spawn_blocking(move || {
@@ -153,24 +137,7 @@ pub async fn for_seal(
     })
     .await
     .unwrap_or(None);
-    Some(match previous {
-        Some(files) => SealVerdict::Ready(change_set::flat_against(&files, sealed)),
-        None => SealVerdict::AskServer,
-    })
-}
-
-/// The change set a [`for_seal`] verdict becomes, carrying `removed`:
-/// `AskServer` is asked of `ask`'s port when there is one, else the blank
-/// default. `None` passes through: the caller has nothing to say.
-pub async fn settle(verdict: Option<SealVerdict>, ask: Option<(&ServerDiff, FileSet, String)>, removed: Vec<change_set::RemovedAddress>) -> Option<ChangeSet> {
-    let set = match verdict? {
-        SealVerdict::Ready(set) => set,
-        SealVerdict::AskServer => match ask {
-            Some((port, files, gen_id)) => from_server(port, files, gen_id).await,
-            None => ChangeSet::default(),
-        },
-    };
-    Some(set.with_removed(removed))
+    Some(previous.map_or_else(ChangeSet::default, |files| change_set::flat_against(&files, sealed)))
 }
 
 pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
@@ -182,51 +149,12 @@ pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
 /// The public addresses a seal would stop serving, against the most recent
 /// publish on any target. Separate from [`for_seal`] because the verdict there
 /// is target-strict, and this must reach every verdict, including the
-/// unclassified one and the ask-the-server path.
+/// unclassified one.
 pub fn removed_for_seal(mp: &MossPaths, sealed: &SiteHashes) -> Vec<change_set::RemovedAddress> {
     let Some(baseline) = published_record::load_address_baseline(mp, publish_target(mp).as_deref()) else {
         return Vec::new();
     };
     change_set::removed_addresses(&baseline, sealed, |src| mp.project_root().join(src).symlink_metadata().is_ok())
-}
-
-/// The server's own `(need, remove)` for a sealed manifest — the arm for a
-/// vault with NO local trace of its last publish: a re-cloned vault whose
-/// `state.toml` was gitignored and whose generations are gone, but whose site
-/// is live (a real vault's worst case). The counts pass through
-/// [`change_set::flat`] and stay verbless.
-///
-/// Advisory like everything here: no answer (host refusal, network failure,
-/// timeout) degrades to the blank default. And because the caller runs this
-/// only AFTER advertising the manifest to deploy, a slow server delays the
-/// stash refresh, never a publish.
-///
-/// The counts are the sync endpoint's, with its caveats: a partial upload of
-/// this exact manifest staged on the server shrinks `need` to the remainder
-/// (resume), so the badge can briefly under-report until that deploy
-/// finishes or is swept.
-///
-/// One ask per sealed generation, remembered in [`SERVER_MEMO`] — which
-/// bounds re-seals of UNCHANGED content only. Every content edit mints a new
-/// generation id and so a new ask; the host's port is expected to keep each
-/// ask cheap and bounded rather than rely on this memo for rate limiting.
-pub async fn from_server(
-    port: &ServerDiff,
-    files: FileSet,
-    gen_id: String,
-) -> ChangeSet {
-    let counts = match SERVER_MEMO.get(&gen_id) {
-        Some(hit) => hit,
-        None => {
-            let counts = port(files, gen_id.clone()).await;
-            SERVER_MEMO.put(&gen_id, &counts);
-            counts
-        }
-    };
-    match counts {
-        Some((need, remove)) => change_set::flat(need, remove),
-        None => ChangeSet::default(),
-    }
 }
 
 /// Output-path → manifest entry for the generation `state.toml` names as the
@@ -277,17 +205,6 @@ fn published_files_memoized(memo: &Memo<PathBuf, FileSet>, mp: &MossPaths) -> Op
 /// already accept for the same reason, and it is not worth re-walking a few
 /// thousand files on every seal to shave.
 static MEMO: LazyLock<Memo<PathBuf, FileSet>> = LazyLock::new(Memo::default);
-
-/// The last server-diff answer, keyed by generation id — the same
-/// outcome-not-just-success shape as [`MEMO`], for the same per-keystroke
-/// reason: seals recur on every rebuild, and this arm costs a network round
-/// trip where the other costs a tree walk. A generation id hashes the sealed
-/// manifest, so a hit is exact (the server's answer for these bytes), and a
-/// remembered failure expires after [`FAILURE_RETRY_AFTER`] like any other.
-/// Note what this does NOT bound: a content edit mints a new generation id,
-/// so the editing flow asks once per distinct content state — the per-ask
-/// cost is bounded at the port (single attempt, short timeout), not here.
-static SERVER_MEMO: LazyLock<Memo<String, (usize, usize)>> = LazyLock::new(Memo::default);
 
 /// A one-slot cache: a second key evicts the first and pays one
 /// recomputation, which suits callers that ask about the folder in the

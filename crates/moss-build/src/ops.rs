@@ -67,7 +67,6 @@ impl HostPorts {
             spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
             store,
             plugins: Arc::new(crate::plugins::manager::ManagerCache::headless(carrier)),
-            server_diff: None,
             launch_server: None,
             services,
         }

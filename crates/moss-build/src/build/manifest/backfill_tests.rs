@@ -206,10 +206,7 @@ async fn with_no_publish_record_a_seal_reports_the_backfilled_count() {
     );
 
     let current = sealed_of(&[("index.html", b"new home"), ("fresh/index.html", b"added page")]);
-    let set = match for_seal(&mp, Some(current.site_hashes_view())).await {
-        Some(SealVerdict::Ready(set)) => set,
-        _ => panic!("a materialized seal with a generation on disk answers locally"),
-    };
+    let set = for_seal(&mp, Some(current.site_hashes_view())).await.expect("a promoting tail speaks");
 
     assert!(!set.classified, "a file set can never justify a verb");
     assert_eq!(set.flat_upload, 2, "one changed page plus one new page");
@@ -218,12 +215,10 @@ async fn with_no_publish_record_a_seal_reports_the_backfilled_count() {
 }
 
 /// Generations are collectable, and a site published only from another machine
-/// has no pointer at all — a residual gap this backfill documents but cannot close. Both surface as
-/// `AskServer`, and a caller with no port renders that as the blank default —
-/// unclassified and zero, exactly where they landed before the backfill
-/// existed. Never a partial count.
+/// has no pointer at all — a residual gap this backfill documents but cannot close. Both are the
+/// blank default, unclassified and zero. Never a partial count.
 #[tokio::test]
-async fn a_pruned_or_absent_generation_degrades_to_ask_server_then_blank() {
+async fn a_pruned_or_absent_generation_degrades_to_blank() {
     let (_pruned, pruned_mp) = project_with_pointer("gen-collected");
     let (_none, no_pointer_mp) = project_with_pointer("gen-x");
     std::fs::remove_file(no_pointer_mp.project_root().join(".moss/state.toml")).unwrap();
@@ -231,10 +226,9 @@ async fn a_pruned_or_absent_generation_degrades_to_ask_server_then_blank() {
 
     for mp in [&pruned_mp, &no_pointer_mp] {
         assert!(published_files(mp).is_none());
-        assert!(
-            matches!(for_seal(mp, Some(current.site_hashes_view())).await, Some(SealVerdict::AskServer)),
-            "both local sources empty defers to the server, never a partial count"
-        );
+        let set = for_seal(mp, Some(current.site_hashes_view())).await.expect("a promoting tail speaks");
+        assert!(!set.classified, "no verb without a record");
+        assert_eq!((set.flat_upload, set.flat_remove), (0, 0), "both local sources empty is blank, never a partial count");
     }
 }
 
@@ -258,10 +252,7 @@ async fn a_publish_record_wins_over_the_generation_on_disk() {
     .unwrap();
 
     let current = sealed_of(&[("index.html", b"new home")]);
-    let set = match for_seal(&mp, Some(current.site_hashes_view())).await {
-        Some(SealVerdict::Ready(set)) => set,
-        _ => panic!("a record on disk answers locally"),
-    };
+    let set = for_seal(&mp, Some(current.site_hashes_view())).await.expect("a promoting tail speaks");
 
     assert!(set.classified, "a record carries authorship; only a file set does not");
     assert_eq!(
@@ -269,46 +260,6 @@ async fn a_publish_record_wins_over_the_generation_on_disk() {
         (0, 0),
         "flat counts are the backfill's signature — the generation tree was not consulted"
     );
-}
-
-/// The server's own diff is the LAST resort — `for_seal` defers to it only
-/// when there is no publish record and no generation on disk (the re-cloned
-/// vault whose `state.toml` was gitignored), and `from_server` asks at most
-/// once per sealed generation: a seal fires on every keystroke-driven
-/// rebuild, and this arm costs a network round trip. The counts pass through
-/// untouched and stay verbless.
-///
-/// Uses the process-global `SERVER_MEMO` deliberately (no other test calls
-/// `from_server`, so nothing else writes it): the claim under test is that
-/// the REAL path memoizes, not that some injected cache would.
-#[tokio::test]
-async fn the_server_diff_is_the_last_resort_and_is_asked_once_per_generation() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let (_dir, mp) = project_with_pointer("gen-remote"); // pointer set, tree pruned
-    let current = sealed_of(&[("remote.html", b"only the server knows")]);
-    let calls = std::sync::Arc::new(AtomicUsize::new(0));
-    let port: ServerDiff = {
-        let calls = calls.clone();
-        std::sync::Arc::new(move |files, _gen| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            assert!(files.contains_key("remote.html"), "the port gets the wire manifest");
-            Box::pin(async { Some((3usize, 1usize)) })
-        })
-    };
-
-    assert!(
-        matches!(for_seal(&mp, Some(current.site_hashes_view())).await, Some(SealVerdict::AskServer)),
-        "no record and no tree defers to the server"
-    );
-
-    let gen = "gen-remote-ask".to_string();
-    let set = from_server(&port, current.files().into_owned(), gen.clone()).await;
-    assert!(!set.classified, "a server count can never justify a verb");
-    assert_eq!((set.flat_upload, set.flat_remove), (3, 1), "counts pass through untouched");
-
-    let again = from_server(&port, current.files().into_owned(), gen).await;
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "one ask per sealed generation, not per seal");
-    assert_eq!((again.flat_upload, again.flat_remove), (3, 1));
 }
 
 /// The step-5b contract (and the superseded-tail defect beside it).

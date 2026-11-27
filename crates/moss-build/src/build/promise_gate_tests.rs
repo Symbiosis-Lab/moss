@@ -248,7 +248,7 @@ async fn seal_keeps_evidence(promised: bool) -> bool {
     }
     let mut host = crate::build::ports::host::test_host_ports();
     let adopted = crate::deploy::one_shot::capture_seal(&mut host);
-    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
+    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone() };
     let folder = mp.project_root().to_string_lossy().to_string();
     let tail = advertise_sealed(
         &ports,

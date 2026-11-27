@@ -461,12 +461,10 @@ impl ChangeSet {
     }
 }
 
-/// Degraded construction from the server's own diff.
-///
-/// The server's `need`/`remove` is ground truth for what will transfer; it just
-/// cannot say *why*. `classified: false` is what stops the surfaces inventing a
+/// Degraded construction from file counts, which say what will transfer but
+/// not *why*. `classified: false` is what stops the surfaces inventing a
 /// reason.
-pub fn flat(need: usize, remove: usize) -> ChangeSet {
+fn flat(need: usize, remove: usize) -> ChangeSet {
     ChangeSet {
         classified: false,
         flat_upload: need as u32,

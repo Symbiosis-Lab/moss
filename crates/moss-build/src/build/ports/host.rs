@@ -22,25 +22,6 @@ use crate::vault::paths::VaultRoot;
 pub type ServerFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<u16, String>> + Send>>;
 
-/// The future a [`HostPorts::server_diff`] closure returns: the hosting
-/// server's own `(need, remove)` counts for a sealed manifest, or `None`
-/// when the host cannot or will not ask (not moss-hosted, no identity,
-/// network failure). `None` is indistinguishable from "no such surface" on
-/// purpose — the consumer degrades to a blank either way, never to an error.
-pub type ServerDiffFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = Option<(usize, usize)>> + Send>>;
-
-/// Ask the hosting server what publishing this manifest would transfer:
-/// `(files map, generation id)` in, [`ServerDiffFuture`] out. The map is the
-/// sealed manifest's `files()` — the exact wire manifest deploy itself sends
-/// to the sync endpoint, so the counts are the server's own answer. With the
-/// endpoint's caveat: a partial upload of this exact manifest staged on the
-/// server shrinks `need` to the remainder (resume), so the counts can briefly
-/// under-report a transfer that is already half done.
-pub type ServerDiff = Arc<
-    dyn Fn(std::collections::HashMap<String, String>, String) -> ServerDiffFuture + Send + Sync,
->;
-
 /// The host's own records and the two user-owned files only the host may write.
 ///
 /// These six were six separate `Arc<dyn Fn…>` fields on [`HostPorts`] until
@@ -111,10 +92,6 @@ pub struct HostPorts {
     /// is — the `PluginRuntime` trait that used to sit here retired on
     /// 2026-09-05 when the manager crossed into this crate.
     pub plugins: Arc<crate::plugins::manager::ManagerCache>,
-    /// See [`ServerDiff`]. `None` (headless, or a shell with no hosted site)
-    /// means the last-resort change-set arm in `manifest::backfill::for_seal`
-    /// is skipped and the surfaces stay honestly blank.
-    pub server_diff: Option<ServerDiff>,
     /// Start (or reuse) the preview server for `moss_dir`, sharing the given
     /// serve-dir cell. The server is host territory (its core relocates there
     /// later); the pipeline only asks for a port.
@@ -165,7 +142,6 @@ pub(crate) fn test_host_ports() -> HostPorts {
         spawner: Arc::new(NoSpawner),
         store: Arc::new(NoStore),
         plugins: Arc::new(crate::plugins::manager::ManagerCache::headless(crate::build::null_sink())),
-        server_diff: None,
         launch_server: None,
         services: crate::types::services::BuildServices::headless(),
     }

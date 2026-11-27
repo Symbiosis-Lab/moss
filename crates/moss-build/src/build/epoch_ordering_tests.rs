@@ -386,7 +386,6 @@ async fn tail_with(
     let ports = crate::build::SealPorts {
         events: crate::build::null_sink(),
         announcer: crate::build::ports::host::test_host_ports().announcer.clone(),
-        server_diff: None,
     };
     crate::build::advertise_sealed(
         &ports,

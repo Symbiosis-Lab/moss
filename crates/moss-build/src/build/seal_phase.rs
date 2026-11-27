@@ -438,8 +438,8 @@ async fn run_materialize_phase(req: PendingSeal) {
     }
 
     // Release the stage-write guard now — everything below (advertising the
-    // manifest, progress events, the backfill network ask) doesn't touch the
-    // filesystem, so there's nothing left to protect.
+    // manifest, progress events) doesn't touch the filesystem, so there's
+    // nothing left to protect.
     drop(_stage_write_guard);
 
     // Classify what publishing this generation would change on the live
@@ -447,18 +447,11 @@ async fn run_materialize_phase(req: PendingSeal) {
     // record, against the last deployed generation still on disk
     // (`manifest::backfill`). `tail_speaks` decides whether this phase may
     // describe a publish at all.
-    use crate::build::manifest::backfill::{self, SealVerdict};
+    use crate::build::manifest::backfill;
     let backfill_verdict =
         backfill::for_seal(&mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared).map(SealedManifest::site_hashes_view)).await;
     // Computed once per build by `advertise_sealed`, which always runs first.
     let removed = crate::system::build_records::records().removed_addresses(&folder_path).unwrap_or_default();
-    let server_ask = match (&backfill_verdict, &ports.server_diff) {
-        (Some(SealVerdict::AskServer), Some(port)) => {
-            Some((port, sealed.files().into_owned(), sealed.generation_id().to_string()))
-        }
-        _ => None,
-    };
-
     // Advertise the sealed manifest to deploy ONLY when its generation
     // materialized on disk (mat_ok).
     if mat_ok {
@@ -471,7 +464,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     // advertised (if any) is still publishable and the standing stash
     // describes it.
     // The removed addresses ride on whichever set results, classified or not.
-    let change_set = backfill::settle(backfill_verdict, server_ask, removed).await;
+    let change_set = backfill_verdict.map(|set| set.with_removed(removed));
     announcer.publish_change_set(mp.project_root(), change_set).await;
 
     // Emit the "Sealed" progress tick (mat_ok-gated) — the counterpart of the

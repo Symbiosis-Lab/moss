@@ -64,7 +64,6 @@ fn seal_ports() -> SealPorts {
     SealPorts {
         events: crate::build::null_sink(),
         announcer: std::sync::Arc::new(crate::build::ports::announcer::LogAnnouncer),
-        server_diff: None,
     }
 }
 
@@ -224,7 +223,7 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
 
     let mut host = crate::build::ports::host::test_host_ports();
     let adopted = crate::deploy::one_shot::capture_seal(&mut host);
-    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
+    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone() };
     let session = FolderSession::new(mp.project_root().to_path_buf());
 
     let pending = advertise_sealed(

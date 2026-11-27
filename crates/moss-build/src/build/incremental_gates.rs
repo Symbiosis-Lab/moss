@@ -449,12 +449,8 @@ async fn hand_over(config: &PipelineConfig, pass: Pass, seal: &LastSeal, port: O
     let removed = backfill::removed_for_seal(&paths, manifest);
     records.record_removed_addresses(folder, removed.clone());
     let verdict = backfill::for_seal(&paths, Some(manifest)).await;
-    let ask = match (&verdict, &config.host.server_diff) {
-        (Some(backfill::SealVerdict::AskServer), Some(port)) => Some((port, manifest.files().into_owned(), generation)),
-        _ => None,
-    };
     config.host.announcer.adopt_sealed(sealed.clone()).await;
-    config.host.announcer.publish_change_set(config.source(), backfill::settle(verdict, ask, removed).await).await;
+    config.host.announcer.publish_change_set(config.source(), verdict.map(|set| set.with_removed(removed))).await;
     if config.start_server {
         if !matches!(pass.plugins, crate::build::PluginMode::SlotsOnly) {
             let domain = crate::build::site_config::get_domain_config(folder).unwrap_or_default();
