@@ -90,6 +90,7 @@ All notable changes to moss will be documented here.
 - A `style:map` embed at phone width no longer hides most of its map under the row of cards: a collapsed map under 20rem tall leaves the row out, and expanding it brings the row back.
 - In `.moss/data/forms/<scope>.csv`, an answer that picks several choices reads "Print; Web" instead of `["Print","Web"]`, and a cell starting with a tab or carriage return is quoted against spreadsheet formulas like one starting with `=`.
 - A place page's map pins a work with several places at its place inside that region, instead of at its first place, which could lie in another region.
+- On a place's own page, a map dot that stands for several of its places links to the explorer or to one of those places, never to the page above.
 
 ### Removed
 

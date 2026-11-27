@@ -122,3 +122,20 @@ fn nearby_dots_cluster_at_the_narrowest_drawn_scale() {
         assert!(figure(&page).contains(&format!("<a href=\"{href}\" aria-label=\"Harbor, Harbor Annex\">")), "cluster destination: {href}");
     }
 }
+
+#[test]
+fn a_cluster_on_its_parents_page_never_links_up_past_that_page() {
+    let tmp = std::env::temp_dir().join(format!("moss_dot_up_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write_site(&tmp);
+    let places = PLACES
+        .replace("[\"Harbor\"]", "[\"Region\"]\n\n[\"District\"]\nparent = \"Region\"\n\n[\"Harbor\"]\nparent = \"District\"")
+        .replace("[\"Harbor Annex\"]\nlat = 35.0\nlng = 135.0", "[\"Harbor Annex\"]\nparent = \"District\"\nlat = 35.4\nlng = 135.4");
+    write(&tmp, ".moss/places.toml", &places);
+    assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&MossPaths::new(&tmp).staging_dir(), "places/district/index.html");
+    let map = figure(&page);
+    assert!(map.contains("<a href=\"/places/harbor/\" aria-label=\"Harbor, Harbor Annex\">"), "{map}");
+    assert!(!map.contains("href=\"/places/region/\""), "{map}");
+}
