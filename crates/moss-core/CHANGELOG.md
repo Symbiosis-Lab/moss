@@ -7,14 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `ast::shortcode_extract::stray_closer_lines` gives the lines of the bare `:::` closers that close nothing, the ones the extractor warns about; the warning now ends by naming `moss migrate --apply`.
-
 ## [0.30.0] - 2026-11-27
 
 ### Added
 
+- `ast::shortcode_extract::stray_closer_lines` gives the lines of the bare `:::` closers that close nothing, the ones the extractor warns about; the warning now ends by naming `moss migrate --apply`.
 - `page::listing::select` picks the pages a folder listing shows, generic over `SitePage`, so the build and a host's preview select the same pages; `own_listing` gives the listing a page ends in (its folder, depth and edition scoping), with `own_listing_target`, `named_edition_home`, `home_defaults` and `is_listing_nav_item` beside it. `page::listing::keep`, `order` and `host_listing` apply a listing's `covers`, `when`, sort, limit, style and group, and `event::EventSpan` says when an event ends. `SitePage` gains `also_in`, `translation_urls`, `children_source`, `children_depth`, `children_listed`, `term_listing`, `children_style`, `children_group`, `children_covers`, `children_when`, `children_limit`, `event_span`, `awaits_event_date` and `is_pageless_entry`, and `PageFacts` carries them (**BREAKING** for an implementor: thirteen required methods; `is_pageless_entry` has a default); `site_pages` fills them, cascading `children_depth`, `children_style` and `children_group` and reading `sidebar:` as the build does.
 - `frontmatter_typed::project_typed` sets `children_source` from a `children: "[[Folder]]"` value, which the lenient `children` field alone cannot carry.
 - `heading::folder_title` and `heading::folder_heading` draw a folder home's `<h1 class="moss-folder-title">`: none when the body's own `# Heading` or an opening hero's heading stands in, hidden behind a hero, and hidden on a site or edition home whose header names the site. `SitePages::folder_heading` gives it for a page of the site, so a host's preview of a folder home carries the title the build draws.

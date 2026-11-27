@@ -4,11 +4,6 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links, or run `moss migrate --apply`, which adds it to each such folder; the first build after an older moss names them.
-- A bare `:::` line with nothing left to close shows as written. Right under a paragraph it used to turn that paragraph into a definition list holding `::`. `moss migrate --apply` deletes each such line, and the build's warning about it says so.
-
 ## [0.15.30] - 2026-11-27
 
 ### New
@@ -29,6 +24,8 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A folder ordered by `weight:` or by a typed list (`sort: [first, second]`) no longer links its pages to the previous and next one. Add `series: true` to the folder's home page to keep the links, or run `moss migrate --apply`, which adds it to each such folder; the first build after an older moss names them.
+- A bare `:::` line with nothing left to close shows as written. Right under a paragraph it used to turn that paragraph into a definition list holding `::`. `moss migrate --apply` deletes each such line, and the build's warning about it says so.
 - A `.moss/config.toml` that still sets `domain` under `[site]` gets a note that the key is now `url`. It still works.
 - The plugin catalog shows each plugin as a tile with a round logo. A circled plus at the logo's lower left adds it: it bends into a ring round the logo while it installs and closes into a circled minus.
 - The header's search, language and theme buttons come before the site name in the page, so the Tab key reaches them first, and they are no longer inside `.nav-right`. A theme that styled them through `.nav-right` reaches them as `.nav-content > .nav-icons`.
