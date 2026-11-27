@@ -3172,6 +3172,16 @@ body > header .site-name {
   display: none;
 }
 
+/* A plain name on a themed split wraps in the room row 1 leaves beside the
+   toggles. The base rule's flex-shrink: 0 keeps it at its one-line width,
+   `.main-nav a` sets nowrap on it, and .nav-left's overflow: clip would cut
+   the rest off. */
+.nav-content[data-nav-split]:not(:has(.breadcrumb-segment)) .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  white-space: normal;
+}
+
 /* A theme that flattens .nav-right (`data-nav-flat`, set by nav-split.ts) lays
    the masthead out itself; the name only loses the one-line hold, and the
    theme's own white-space decides whether it wraps. */
@@ -3180,8 +3190,9 @@ body > header .site-name {
   min-inline-size: 0;
 }
 
-/* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
-.nav-content[data-nav-compact] {
+/* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. On a themed masthead the toggle gap is `.nav-right`'s. */
+.nav-content[data-nav-compact],
+.nav-content[data-nav-compact] .nav-right {
   column-gap: var(--moss-space-xs);
 }
 

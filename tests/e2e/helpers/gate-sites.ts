@@ -5625,6 +5625,19 @@ export const NAV_THEMED_SPLIT_GATE: ScratchSiteSpec = {
   },
 };
 
+// A themed breadcrumb masthead with one link: on a phone, the trail, the link and the toggles share a row once both
+// gaps tighten, the one before the links and the one before the toggles. Served by playwright/nav-themed.config.ts.
+export const NAV_THEMED_COMPACT_GATE: ScratchSiteSpec = {
+  name: "nav-themed-compact-gate",
+  files: {
+    "index.md": `---\ntitle: Field Notes from the Northern Coast\nuid: "nth0c101"\nbreadcrumb: true\n---\n\n# Field Notes from the Northern Coast\n`,
+    "Blog.md": `---\ntitle: Blog\nuid: "nth0c102"\nnav: true\n---\n\n# Blog\n`,
+    "Awards/index.md": `---\ntitle: Awards\nuid: "nth0c103"\n---\n\n# Awards\n`,
+    "Awards/Writing.md": `---\ntitle: Writing\nuid: "nth0c104"\n---\n\n# Writing\n`,
+    ".moss/theme/style.css": `.site-name { font-weight: 500; }\n`,
+  },
+};
+
 // A long site name over a trail two ancestors deep: at a phone width the row runs out of room even after the
 // middle crumb has collapsed to its "…", and something must give before the parent crumb is clipped.
 // Served by playwright/nav-trail-clip.config.ts.

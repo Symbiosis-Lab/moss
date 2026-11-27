@@ -3882,7 +3882,13 @@ fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
 fn compact_masthead_never_widens_the_link_gap() {
     // The links' default column gap floors at --moss-space-sm; any value a
     // compact rule sets there can exceed it on a phone and widen the row.
-    assert!(DEFAULT_CSS.contains(".nav-content[data-nav-compact] {"));
+    // The outer gap and, on a themed masthead, `.nav-right`'s toggle gap are
+    // the ones compact mode tightens.
+    for selector in [".nav-content[data-nav-compact]", ".nav-content[data-nav-compact] .nav-right"] {
+        let rule = get_css_rule(DEFAULT_CSS, selector)
+            .unwrap_or_else(|| panic!("compact mode should tighten {selector}"));
+        assert_eq!(decl(&rule, "column-gap"), "var(--moss-space-xs)", "{selector}");
+    }
     assert!(
         !DEFAULT_CSS.contains("[data-nav-compact] .nav-links"),
         "compact mode must leave .nav-links' own clamp()ed column gap alone"

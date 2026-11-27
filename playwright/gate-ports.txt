@@ -135,3 +135,4 @@ nav-first-paint:owned
 nav-trail-clip
 nav-themed
 nav-themed:split
+nav-themed:compact
