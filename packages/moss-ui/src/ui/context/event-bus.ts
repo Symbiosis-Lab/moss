@@ -144,18 +144,6 @@ export const Events = {
   EMAIL_SUBSCRIBERS_CHANGED: "email:subscribersChanged",
 
   /**
-   * Emitted after the email api_key has been saved (or cleared) via the
-   * settings UI. Lets the email-tab dot re-derive immediately without
-   * waiting for SETTINGS_MODAL_CLOSED — the dot must flip the moment the
-   * user types a key and saves, not on modal close.
-   *
-   * Bridged from a Rust `app.emit_to("preview", "email-api-key-changed", ())`
-   * inside the save command (see `domain::email_api_key::save_email_api_key`
-   * and `domain::commands::save_service_config_value`).
-   */
-  EMAIL_API_KEY_CHANGED: "email:apiKeyChanged",
-
-  /**
    * Emitted when a config surface that may flip the email-tab dot's verdict
    * changes (deploy method switch, channel install state change captured via
    * the more specific events above). Currently fired by app.ts after a
