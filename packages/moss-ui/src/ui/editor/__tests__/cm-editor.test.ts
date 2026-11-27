@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Transaction, StateField, StateEffect, ChangeSet } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { forceParsing, syntaxTree } from '@codemirror/language';
 import { undo, undoDepth } from '@codemirror/commands';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { CmEditor, applyEmbedWidth } from '../cm-editor';
@@ -15,9 +15,16 @@ vi.mock('../../engine', async (orig) => {
 });
 import { engine } from '../../engine';
 
+/** Parse to the end whatever the machine's load, so the state carries the whole tree: the first parse stops at a 20 ms budget. */
+const parsed = (editor: CmEditor): EditorView => {
+  const view = editor.getView();
+  forceParsing(view, view.state.doc.length, 1e9);
+  return view;
+};
+
 function nodeNames(editor: CmEditor): Set<string> {
   const names = new Set<string>();
-  syntaxTree(editor.getView().state).iterate({ enter: (n) => { names.add(n.name); } });
+  syntaxTree(parsed(editor).state).iterate({ enter: (n) => { names.add(n.name); } });
   return names;
 }
 
@@ -68,6 +75,7 @@ describe('CmEditor', () => {
       onChange: () => {},
       getFromFile: () => 'note.md',
     });
+    parsed(editor);
 
     expect(container.querySelector('.cm-line.cm-lp-h1')).not.toBeNull();
     expect(container.querySelector('.cm-line.cm-callout-block')).not.toBeNull();

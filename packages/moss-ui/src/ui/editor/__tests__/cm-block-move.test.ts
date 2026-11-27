@@ -3,7 +3,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { forceParsing } from '@codemirror/language';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
 import { formatKeysExtension, blockUnitAt, moveToGap, siblingsAt } from '../cm-format-keys';
 
@@ -28,7 +28,7 @@ function mount(src: string): void {
     parent,
     state: EditorState.create({ doc, selection: sel, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), formatKeysExtension()] }),
   });
-  ensureSyntaxTree(view.state, doc.length, 1000);
+  forceParsing(view, doc.length, 1e9);
 }
 const press = (key: 'ArrowUp' | 'ArrowDown'): boolean =>
   runScopeHandlers(view, new KeyboardEvent('keydown', { key, altKey: true, bubbles: true, cancelable: true }), 'editor');

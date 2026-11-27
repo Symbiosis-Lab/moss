@@ -3,7 +3,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { history } from '@codemirror/commands';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { forceParsing } from '@codemirror/language';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
 import { formatKeysExtension, lineIndicatorExtension } from '../cm-format-keys';
 import { markdownStyleExtension } from '../cm-markdown-style';
@@ -31,7 +31,7 @@ function mount(readOnly = false): void {
       extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), formatKeysExtension(), lineIndicatorExtension(), markdownStyleExtension(), EditorState.readOnly.of(readOnly)],
     }),
   });
-  ensureSyntaxTree(view.state, SRC.length, 1000);
+  forceParsing(view, SRC.length, 1e9);
   view.coordsAtPos = (pos) => ({ left: 0, right: 0, top: row(pos) - 10, bottom: row(pos) }) as DOMRect;
 }
 

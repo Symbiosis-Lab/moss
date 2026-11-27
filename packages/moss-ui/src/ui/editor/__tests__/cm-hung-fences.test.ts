@@ -3,7 +3,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { forceParsing } from '@codemirror/language';
 import { collectShortcodeBlocks, shortcodeFences } from '@symbiosis-lab/moss-syntax/cm6';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
 import { formatKeysExtension, lineIndicatorExtension, toggleHeading } from '../cm-format-keys';
@@ -19,8 +19,8 @@ beforeAll(() => {
 let view: EditorView;
 afterEach(() => { view?.destroy(); document.body.innerHTML = ''; });
 
-/** `¦` marks the caret. */
-function mount(src: string, parsed = true): void {
+/** `¦` marks the caret. The view parses to `parseTo` whatever the machine's load, and its state carries that tree. */
+function mount(src: string, parseTo = Infinity): void {
   const doc = src.replace('¦', '');
   const parent = document.createElement('div');
   document.body.appendChild(parent);
@@ -32,7 +32,7 @@ function mount(src: string, parsed = true): void {
       extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), formatKeysExtension(), lineIndicatorExtension(), markdownStyleExtension()],
     }),
   });
-  if (parsed) ensureSyntaxTree(view.state, doc.length, 1000);
+  forceParsing(view, Math.min(parseTo, doc.length), 1e9);
 }
 const key = (k: string, mods: { altKey?: boolean; ctrlKey?: boolean } = {}): boolean =>
   runScopeHandlers(view, new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...mods }), 'editor');
@@ -147,21 +147,22 @@ describe('Alt-arrow still moves a block whole, from a hung fence', () => {
 });
 
 describe('a block whose close the parse has not reached', () => {
-  const body = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join('\n');
+  const body = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
   const src = `a\n\n:::¦grid\nx\n${body}\n:::\n\nb`;
+  const pastOpening = src.replace('¦', '').indexOf('line 0');
 
   test('the field has not paired it yet, so the fence hangs on its own', () => {
-    mount(src, false);
+    mount(src, pastOpening);
     expect(collectShortcodeBlocks(view.state)).toHaveLength(0);
     expect(hangsAt(':::grid')).toEqual([['fence-open', 1, ':::']]);
   });
   test('Backspace still unwraps the whole block', () => {
-    mount(src, false);
+    mount(src, pastOpening);
     expect(key('Backspace')).toBe(true);
     expect(doc()).toBe(`a\n\nx\n${body}\n\nb`);
   });
   test('Alt-Up still moves the whole block', () => {
-    mount(src, false);
+    mount(src, pastOpening);
     expect(key('ArrowUp', { altKey: true })).toBe(true);
     expect(doc()).toBe(`:::grid\nx\n${body}\n:::\n\na\n\nb`);
   });

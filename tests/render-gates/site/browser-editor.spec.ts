@@ -199,12 +199,17 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
 });
 
 /**
- * Open the file tree's list from the root crumb and wait for the panel to
- * finish growing. Its rows move while it grows, so a click made then can press
- * one row and release on another, which the tree takes as a click on no row.
+ * Open the file tree's list from the root crumb, unless it is open, and wait
+ * for the panel to finish growing. The crumb is a folder, with
+ * `aria-expanded`, only once the file list has arrived; a click before that
+ * opens nothing. Rows move while the panel grows, so a click made then can
+ * press one row and release on another, which the tree takes as a click on no row.
  */
 async function openTreeRoot(editor: Frame) {
-  await editor.click('.seg.bc[data-path=""]');
+  const root = editor.locator('.seg.bc[data-path=""][aria-expanded]');
+  await expect(root).toBeVisible({ timeout: 30_000 });
+  if ((await root.getAttribute('aria-expanded')) === 'false') await root.click();
+  await expect(root).toHaveAttribute('aria-expanded', 'true');
   await editor.waitForFunction(() => document.querySelector('.nav-surface')?.getAnimations().length === 0);
 }
 
@@ -294,7 +299,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     // The footer asks before it opens; answered "don't ask again" here.
     await editor.evaluate(() => localStorage.setItem('moss.specialFile.skipConfirm.footer', '1'));
     // The root crumb toggles the list: open it only when it is closed.
-    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await openTreeRoot(editor);
+    await openTreeRoot(editor);
     await editor.click('.seg[data-path="footer.md"]');
     // The editor's own address names a file only when the preview follows to it, so the text is read.
     await expect(editor.locator('.cm-content')).toContainText('Tended by hand', { timeout: 15_000 });
@@ -347,7 +352,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
 test('a click on text in the page washes its line in the editor and brings it into view', async ({ page }) => {
   const { editor, preview } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
-  if ((await editor.locator('.seg[data-path="almanac.md"]').count()) === 0) await openTreeRoot(editor);
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="almanac.md"]');
   await preview.waitForFunction(() => document.body?.innerText.includes('Entry 1 of the almanac'), null, { timeout: 30_000 });
   await expect(editor.locator('.cm-content')).toContainText('Entry 1 of the almanac', { timeout: 15_000 });
@@ -380,7 +385,7 @@ test('a click on text in the page washes its line in the editor and brings it in
 test('Alt with an arrow moves a ::: block whole from its fence, and keeps a body block inside it', async ({ page }) => {
   const { editor } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
-  if ((await editor.locator('.seg[data-path="blocks.md"]').count()) === 0) await openTreeRoot(editor);
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="blocks.md"]');
   await expect(editor.locator('.cm-content')).toContainText('Second inside.', { timeout: 15_000 });
   const file = () => readFileSync(join(serve.site, 'blocks.md'), 'utf8');
@@ -406,7 +411,7 @@ test('Alt with an arrow moves a ::: block whole from its fence, and keeps a body
 test('paired ::: fences hang in the margin beside a rail, an unpaired one stays text, and Backspace unwraps the block', async ({ page }) => {
   const { editor } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
-  if ((await editor.locator('.seg[data-path="fences.md"]').count()) === 0) await openTreeRoot(editor);
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="fences.md"]');
   await expect(editor.locator('.cm-content')).toContainText('A paragraph.', { timeout: 15_000 });
   const file = () => readFileSync(join(serve.site, 'fences.md'), 'utf8');
@@ -478,7 +483,7 @@ test('paired ::: fences hang in the margin beside a rail, an unpaired one stays 
 for (const width of [420, 1280]) test(`a block is dragged by its margin grip at ${width}px: a ::: block among its siblings, a heading's section whole, Esc cancels`, async ({ page }) => {
   const { editor } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
-  if ((await editor.locator('.seg[data-path="drag.md"]').count()) === 0) await openTreeRoot(editor);
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="drag.md"]');
   await expect(editor.locator('.cm-content')).toContainText('two text', { timeout: 15_000 });
   await page.setViewportSize({ width, height: 1600 }); // real mouse moves do not scroll: the whole page stays on screen
@@ -723,7 +728,7 @@ test("a page's problem count shows once, and steps through its problems", async 
   await expect.poll(caretLine).toContain('slide-02.jpg');
 
   // The tree: a closed folder carries its total, an open one leaves it to its rows.
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await expect(count('drafts')).toHaveText('2');
   await editor.locator('.seg[data-path="drafts"]').scrollIntoViewIfNeeded();
   await shots(page, 'count-tree-closed', browserName);
