@@ -1,7 +1,5 @@
 //! The role a name holds in a term field: the heading a term page gives each
 //! field's section, and the role a listing card shows beside a credited name.
-//! The card credits (`set_card_credits`) read the same labels, so they live
-//! with the labels rather than beside the term model in `terms.rs`.
 
 use super::{field_names, TermKind};
 use crate::build::media::cover::html_escape;
@@ -18,17 +16,7 @@ pub fn term_role_heading(lang: crate::i18n::Language, field: &str) -> String {
     )
 }
 
-/// The plain label a field's role carries: the translated copy for a
-/// built-in, the field's name capitalized for a declared one. The heading
-/// above a term page's section and the role beside a card's name both read it.
-pub fn term_role_label(lang: crate::i18n::Language, field: &str) -> String {
-    match field {
-        "author" | "tags" | "editor" | "jury" | "location" => {
-            crate::i18n::t(lang, &format!("term_role_{}", field)).to_string()
-        }
-        declared => moss_core::fields::name_label(declared),
-    }
-}
+pub use moss_core::terms::lines::term_role_label;
 
 /// Set [`ParsedDocument::card_extras`] on every page to its card credits, from the
 /// kinds that declare `cards = true`; a site with no such kind sets `None` everywhere.

@@ -96,6 +96,22 @@ pub fn work_groups<P: super::site_page::SitePage>(pages: &[P], location: impl Fn
     works
 }
 
+/// Maps read a page's places from `location`, so the names a place-typed kind
+/// takes from any other field are added there too.
+pub fn mirror_place_fields_into_location<P: super::site_page::SitePage>(pages: &mut [P], kinds: &[crate::terms::kinds::TermKind], location_mut: impl Fn(&mut P) -> &mut Vec<String>) {
+    let fields: Vec<&str> = kinds.iter().filter(|k| k.is_place).flat_map(|k| k.fields.iter().map(String::as_str)).filter(|f| *f != "location").collect();
+    for page in pages.iter_mut() {
+        for field in &fields {
+            for name in page.term_values(field) {
+                let location = location_mut(page);
+                if !location.contains(&name) {
+                    location.push(name);
+                }
+            }
+        }
+    }
+}
+
 /// Each work's companions with no `location:` of their own take the home's.
 pub fn inherit_work_locations<P: super::site_page::SitePage>(pages: &mut [P], location: impl Fn(&P) -> &[String], location_mut: impl Fn(&mut P) -> &mut Vec<String>) {
     for work in work_groups(pages, &location).into_values() {

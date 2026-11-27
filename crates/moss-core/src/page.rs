@@ -44,6 +44,9 @@ pub struct SiteBundle {
     pub schema: Option<crate::schema::ContentSchema>,
     #[serde(default)]
     pub declared_name_lists: Vec<String>,
+    /// The term kinds, resolved from `[terms]` in the site language.
+    #[serde(default)]
+    pub terms: Vec<crate::terms::kinds::TermKind>,
     #[serde(default)]
     pub plugins: Vec<BundlePlugin>,
     #[serde(default)]
@@ -102,7 +105,7 @@ impl SiteBundle {
         let blocks = block_names::BlockNames::from_contributions(self.plugins.iter().flat_map(|p| {
             p.blocks.iter().map(|short| (p.name.as_str(), short.as_str()))
         }));
-        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang, blocks }
+        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang, blocks, terms: self.terms }
     }
 }
 
@@ -118,6 +121,8 @@ pub struct SiteInputs {
     pub lang: String,
     /// Fence names the installed plugins own.
     pub blocks: block_names::BlockNames,
+    /// The site's term kinds.
+    pub terms: Vec<crate::terms::kinds::TermKind>,
 }
 
 /// Check frontmatter, moss syntax and page links. Lines count from the file's start.

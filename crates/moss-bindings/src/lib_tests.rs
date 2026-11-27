@@ -245,3 +245,19 @@ fn preview_draws_a_folder_home_s_listing_with_each_page_s_excerpt_and_picture() 
     assert!(guide.contains(r#"src="guide/mast.jpg""#), "{guide}");
     assert!(!json_value(&site.preview("guide/one.md", texts["guide/one.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().contains("moss-cards"));
 }
+
+#[test]
+fn preview_cards_name_each_page_s_places() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "posts/index.md": "---\ntitle: Posts\n---\n",
+        "posts/a.md": "---\ntitle: A\ndate: 2026-01-02\nlocation: Kyoto\n---\nBody.\n",
+    });
+    let files = json!(["index.md", "posts/index.md", "posts/a.md"]);
+    let sources = json!({"files": files, "texts": texts, "config_toml": "[terms.places]\ntype = \"place\"\nfields = [\"location\"]"});
+    let bundle = json_value(&crate::site_bundle(&sources.to_string()).unwrap())["bundle"].to_string();
+    let mut site = Site::from_json(&bundle).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let posts = json_value(&site.preview("posts/index.md", texts["posts/index.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    assert!(posts.contains("Kyoto"), "{posts}");
+}

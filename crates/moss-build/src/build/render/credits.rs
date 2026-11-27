@@ -115,7 +115,7 @@ pub fn render_byline_html(rows: &[String], emit_source_fm: bool, term_lines: &[T
     if byline.is_none() && term_lines.is_empty() {
         return None;
     }
-    let lines: String = term_lines.iter().map(|line| render_term_line(line, emit_source_fm)).collect();
+    let lines: String = term_lines.iter().map(|line| line.html(emit_source_fm)).collect();
     Some(byline.unwrap_or_default() + &lines)
 }
 
@@ -197,21 +197,6 @@ pub fn external_home_link(doc: &crate::build::types::ParsedDocument, body: &crat
         r#"<p class="moss-external-link"><a {attr}>{}<span aria-hidden="true"> ↗&#xFE0E;</span></a></p>"#,
         crate::build::features::html_escape(host.trim_start_matches("www.")),
     ))
-}
-
-/// One term line: the field's label, then its names as links through the one
-/// markdown path, so a link reads as it does in the body.
-fn render_term_line(line: &TermLine, emit_source_fm: bool) -> String {
-    use crate::build::features::html_escape;
-    let (term, field) = (html_escape(&line.term), html_escape(&line.field));
-    let source = if emit_source_fm { format!(r#" data-source-fm="{field}""#) } else { String::new() };
-    format!(
-        r#"<div class="{}" data-term="{term}" data-field="{field}"{source}><span class="moss-term-line-label">{}</span>{}{}</div>"#,
-        line.class(),
-        html_escape(&line.label),
-        html_escape(&line.separator),
-        render_row(&line.links),
-    )
 }
 
 /// Append the colophon to the end of a page's content — the one placement it

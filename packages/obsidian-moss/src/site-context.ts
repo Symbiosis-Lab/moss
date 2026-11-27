@@ -74,6 +74,7 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
   if (!await ownsMoss(adapter, root)) return null;
   const at = root === "/" ? "" : `${root}/`;
   const config = await adapter.exists(`${at}.moss/config.toml`) ? await adapter.read(`${at}.moss/config.toml`) : "";
+  const places = await adapter.exists(`${at}.moss/places.toml`) ? await adapter.read(`${at}.moss/places.toml`) : null;
   // The build serves only style.css; other sheets reach a page through its @import.
   const css = await themeCss(adapter, `${at}.moss/theme/style.css`);
   const owners = roots.map((owner) => ({ root: owner }));
@@ -96,7 +97,7 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
     plugins.push({ folder: folder.split("/").pop() ?? folder, manifest_json, entry_present, admission: { status: "admitted" } });
   }
   const result: { bundle: SiteContext; warnings: string[] } = JSON.parse(siteBundle(JSON.stringify({
-    files, texts, config_toml: config, plugins, theme_style_css: css,
+    files, texts, config_toml: config, places_toml: places, plugins, theme_style_css: css,
   })));
   for (const warning of result.warnings) console.warn(`[moss] ${warning}`);
   return result.bundle;

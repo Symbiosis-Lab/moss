@@ -13,6 +13,9 @@ pub struct SiteSources {
     #[serde(default)]
     pub texts: HashMap<String, String>,
     pub config_toml: Option<String>,
+    /// The text of `.moss/places.toml`, the gazetteer.
+    #[serde(default)]
+    pub places_toml: Option<String>,
     pub detected_lang: Option<String>,
     #[serde(default)]
     pub plugins: Vec<PluginSource>,
@@ -119,8 +122,19 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let site_lang = resolve_site_lang(config.site_lang(),
         || elect_home(&sources.files, &sources.texts).and_then(|p| declared_lang_in_text(sources.texts.get(&p)?)),
         || sources.detected_lang.take());
-    let (declared_name_lists, problems) = crate::terms::config::declared_name_list_fields(&config.terms_kinds());
+    let raw_kinds = config.terms_kinds();
+    // The resolver reports the same refused fields, and more.
+    let (declared_name_lists, _) = crate::terms::config::declared_name_list_fields(&raw_kinds);
+    let (mut terms, problems) = crate::terms::kinds::resolve_kinds(&raw_kinds, &site_lang.code);
     warnings.extend(problems);
+    if let Some(text) = sources.places_toml.as_deref() {
+        let (gazetteer, said) = crate::terms::places::parse_gazetteer_text(text);
+        warnings.extend(said.into_iter().filter_map(|m| match m {
+            crate::terms::places::PlaceMessage::Problem(problem) => Some(problem),
+            crate::terms::places::PlaceMessage::Note(_) => None,
+        }));
+        warnings.extend(crate::terms::places::attach_parents(&mut terms, &gazetteer));
+    }
     let mut manifests = Vec::new();
     // Folder order also makes warnings and equal-name ties independent of discovery order.
     sources.plugins.sort_by(|a, b| a.folder.cmp(&b.folder));
@@ -165,7 +179,7 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let listing_styles = styles.ids().map(str::to_string).collect();
     sources.files.sort();
     let bundle = SiteBundle {
-        files: sources.files, lang: site_lang.code, lang_declared: site_lang.declared, declared_name_lists, plugins, listing_styles,
+        files: sources.files, lang: site_lang.code, lang_declared: site_lang.declared, declared_name_lists, terms, plugins, listing_styles,
         theme_css: sources.theme_style_css.unwrap_or_default(),
         detected: sources.detected, derived: sources.derived,
         derivable, math: Some(config.math()), passthrough: config.passthrough().to_vec(), ..Default::default()

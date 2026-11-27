@@ -18,6 +18,10 @@ pub(crate) struct Captured {
     /// from the cards it draws rather than from its facts.
     pub cards: HashMap<String, (bool, bool)>,
     pub has_language_trees: bool,
+    /// The kinds the build derived its terms from.
+    pub kinds: Vec<crate::build::terms::TermKind>,
+    /// Each page's term lines and place names, by source path.
+    pub lines: BTreeMap<String, (Vec<moss_core::terms::lines::TermLine>, Option<String>)>,
 }
 
 pub(crate) struct Listing {
@@ -44,15 +48,9 @@ pub(crate) fn record(
     terms: &crate::build::terms::TermIndex,
     project: &crate::types::content::ProjectStructure,
 ) {
-    // Core derives no term pages yet, so a page's term memberships are the build's alone.
+    let pages = docs.iter().filter_map(|d| Some((d.source_path.clone()?, PageFacts::from_page(d)))).collect();
+    // Core draws no term page's listing yet.
     let term_folders: std::collections::HashSet<&str> = terms.term_keys().chain(terms.roots_in_use()).collect();
-    let facts = |d| {
-        let mut facts = PageFacts::from_page(d);
-        facts.also_in.retain(|f| !term_folders.contains(f.as_str()));
-        facts.term_listing = None;
-        facts
-    };
-    let pages = docs.iter().filter_map(|d| Some((d.source_path.clone()?, facts(d)))).collect();
     use crate::build::render::incremental::listing::{own_listing_key, Depth};
     let listings = docs.iter()
         .filter_map(|d| Some((d.source_path.clone()?, own_listing_key(d, docs)?)))
@@ -70,7 +68,8 @@ pub(crate) fn record(
     let cards = docs.iter()
         .map(|d| (d.url_path.clone(), (crate::build::folder_embed::is_rich_child(d, true), d.listing_cover().is_some())))
         .collect();
-    let captured = Captured { root_name: root.name().to_string(), pages, listings, cards, has_language_trees: project.has_language_trees };
+    let lines = docs.iter().filter_map(|d| Some((d.source_path.clone()?, (d.term_lines.clone(), d.place_names.clone())))).collect();
+    let captured = Captured { root_name: root.name().to_string(), pages, listings, cards, has_language_trees: project.has_language_trees, kinds: terms.kinds().to_vec(), lines };
     if let Ok(mut all) = CAPTURED.lock() {
         all.push((root.path().to_path_buf(), captured));
     }
@@ -169,6 +168,7 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     let (mut headings, mut explorer_roots, mut heading_report) = (0, 0, String::new());
     let (mut listings, mut listing_report) = (0, String::new());
     let (mut shown_rows, mut styles) = (0, std::collections::BTreeSet::new());
+    let (mut term_lines, mut place_names, mut lines_report) = (0, 0, String::new());
     for name in &names {
         let folder = scratch.join(name).join("site");
         copy_dir(&fixtures.join(name).join("input"), &folder);
@@ -186,15 +186,20 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
             .filter_map(|f| Some((f.clone(), std::fs::read_to_string(folder.join(f)).ok()?)))
             .collect();
         let config_toml = std::fs::read_to_string(folder.join(".moss/config.toml")).ok();
+        let places_toml = std::fs::read_to_string(folder.join(".moss/places.toml")).ok();
         let markdown: Vec<crate::types::content::FileInfo> = files.iter().filter(|f| f.ends_with(".md"))
             .map(|f| crate::types::content::FileInfo { path: f.clone(), file_type: "md".into(), size: 0, modified: None })
             .collect();
         let detected_lang = Some(crate::i18n::detect::resolve_site_lang(None, None, &markdown, &folder.to_string_lossy()).code);
         let (bundle, _) = moss_core::page::site_bundle(moss_core::page::SiteSources {
-            files, texts: texts.clone(), config_toml, detected_lang,
+            files, texts: texts.clone(), config_toml, places_toml, detected_lang,
             detected: texts.iter().map(|(p, t)| (p.clone(), crate::i18n::detect::detected(t))).collect(),
             ..Default::default()
         });
+        if bundle.terms != captured.kinds {
+            report.push_str(&format!("{name}: term kinds\n  build {:?}\n  core  {:?}\n", captured.kinds, bundle.terms));
+            failures += 1;
+        }
         let site = moss_core::page::site_page::site_pages(&texts, &bundle, &captured.root_name);
         for (path, page) in site.paths.iter().zip(&site.pages) {
             let pretty = moss_core::resolve::output_url::to_pretty_url(&page.url_path);
@@ -259,6 +264,15 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
                 listing_report.push_str(&format!("{name} {path} shown\n  build {:?}\n  core  {shown:?}\n", listing.shown));
             }
         }
+        for (path, page) in site.paths.iter().zip(&site.pages) {
+            let Some((built_lines, built_places)) = captured.lines.get(path) else { continue };
+            let core = (moss_core::terms::lines::term_lines(page, &site.terms, site.site_lang), moss_core::terms::lines::place_names(page, &site.terms));
+            term_lines += built_lines.len();
+            place_names += usize::from(built_places.is_some());
+            if (&core.0, &core.1) != (built_lines, built_places) {
+                lines_report.push_str(&format!("{name} {path}\n  build {built_lines:?} {built_places:?}\n  core  {:?} {:?}\n", core.0, core.1));
+            }
+        }
         let core: BTreeMap<String, PageFacts> = site.paths.into_iter().zip(site.pages).collect();
         assert!(!captured.pages.is_empty() || texts.is_empty(), "{name}: the build captured no pages");
         compared += captured.pages.len();
@@ -306,6 +320,9 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     assert!(headings > 0, "no folder heading was compared");
     eprintln!("listings compared {listings}, {shown_rows} rows shown, styles/groups {styles:?}");
     assert!(listings > 0, "no listing was compared");
+    eprintln!("term lines compared {term_lines}, place names {place_names}");
+    assert!(term_lines > 0 && place_names > 0, "no term line or place name was compared");
+    assert!(lines_report.is_empty(), "core's term lines differ from the build's:\n{lines_report}");
     assert!(listing_report.is_empty(), "core's listing selection differs from the build's:\n{listing_report}");
     assert!(heading_report.is_empty(), "the preview's folder heading differs from the build's:\n{heading_report}");
     assert!(masthead_report.is_empty(), "the preview's masthead differs from the build's:\n{masthead_report}");

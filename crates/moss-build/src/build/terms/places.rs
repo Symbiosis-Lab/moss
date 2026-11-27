@@ -8,36 +8,11 @@
 //! convention, because the gazetteer type never crosses into `terms.rs`.
 
 use super::TermKind;
-use moss_core::terms::term_folder_key;
 
-/// Fill `kind.parents` for every place-typed kind from the gazetteer's own
-/// `parent` links, keyed by the SAME pseudo-folder key `derive_terms` will
-/// later compute for a real `location:` value naming the same place — a
-/// folded, slugged key, not a display-string lookup.
-///
-/// Pure: the gazetteer is already loaded by the caller, so this does no I/O
-/// of its own. Detects and breaks a parent-chain cycle here, before
-/// `derive_terms` ever runs, by walking each key's `parents` chain to a
-/// fixed point (capped at 8 hops — deeper than the four-rung precision
-/// ladder ever needs); a walk that revisits a key already seen is a cycle,
-/// diagnosed and that one link removed rather than looped.
+/// [`moss_core::terms::places::attach_parents`], logging each broken cycle.
 pub fn attach_parents(kinds: &mut [TermKind], gaz: &crate::vault::places::Gazetteer) {
-    for kind in kinds.iter_mut() {
-        if !kind.is_place {
-            continue;
-        }
-        kind.slugs = gaz.slug_overrides().clone();
-        for (name, entry) in gaz.iter() {
-            let Some(parent) = &entry.parent else { continue };
-            let key = kind.key_in("", name);
-            kind.parents.insert(key, parent.clone());
-        }
-    }
-    for kind in kinds.iter_mut() {
-        if !kind.is_place {
-            continue;
-        }
-        break_cycles(kind);
+    for problem in moss_core::terms::places::attach_parents(kinds, gaz) {
+        crate::build::cli_output::log_warn_problem!("{problem}");
     }
 }
 
@@ -92,38 +67,11 @@ pub fn used_places(documents: &[crate::build::types::ParsedDocument], kinds: &[T
     used.into_iter().collect()
 }
 
-/// Walk every key's `parents` chain to a fixed point; a key that revisits
-/// one already seen on its own walk is a cycle. Breaks it by removing the
-/// one link that closed the loop, with a diagnostic naming the place whose
-/// chain was cut.
-fn break_cycles(kind: &mut TermKind) {
-    const MAX_HOPS: usize = 8;
-    let keys: Vec<String> = kind.parents.keys().cloned().collect();
-    for start in keys {
-        let mut seen = std::collections::HashSet::new();
-        seen.insert(start.clone());
-        let mut current = start.clone();
-        for _ in 0..MAX_HOPS {
-            let Some(parent_display) = kind.parents.get(&current) else { break };
-            let parent_key = kind.key_in("", parent_display);
-            if seen.contains(&parent_key) {
-                let name = current.rsplit_once('/').map_or(current.as_str(), |(_, n)| n);
-                crate::build::cli_output::log_warn_problem!(
-                    "place '{name}''s parent chain cycles back to itself; breaking the chain at '{name}'"
-                );
-                kind.parents.remove(&current);
-                break;
-            }
-            seen.insert(parent_key.clone());
-            current = parent_key;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vault::places::Gazetteer;
+    use moss_core::terms::term_folder_key;
 
     fn place_kind(key: &str) -> TermKind {
         TermKind { cards: false, key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None, slugs: Default::default() }

@@ -7,228 +7,26 @@
 
 use std::path::Path;
 
-/// How precisely a gazetteer entry may be shown — the privacy control, not a
-/// display preference. A missing or unrecognized value coarsens to
-/// `Country`, the widest ring, never defaults to `Exact`: the fail-safe
-/// direction for a malformed `.moss/places.toml` has to be the coarse one, or
-/// a typo becomes a privacy leak instead of a build warning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Precision {
-    Exact,
-    City,
-    Region,
-    Country,
-}
+pub use moss_core::terms::kinds::slugged_key;
+pub use moss_core::terms::places::{Gazetteer, PlaceRecord, Precision};
+#[cfg(test)]
+use moss_core::terms::places::precision_diagnostic;
 
-/// One quoted-key table in `.moss/places.toml`. Coordinates live only here —
-/// a claimed place page (`place_page: true`) supplies prose and a cover,
-/// never a coordinate of its own.
-#[derive(Debug, Clone)]
-pub struct PlaceRecord {
-    /// `None` when `lat`/`lng` were missing or non-numeric; the entry is kept,
-    /// so its `parent` and `precision` still drive the breadcrumb and roll-up.
-    pub coords: Option<(f64, f64)>,
-    pub precision: Precision,
-    /// Another place's display name, exactly as written in
-    /// `.moss/places.toml` — resolved into a pseudo-folder key by
-    /// `build::terms::places::attach_parents`, never here; this struct is a
-    /// plain parse of one table.
-    pub parent: Option<String>,
-    /// An explicit URL segment for this place's page, replacing the one its
-    /// name would give (`slug = "shanghai"` for `上海`). Already validated by
-    /// `parse_gazetteer`: never a slug that is malformed or shared with
-    /// another place.
-    pub slug: Option<String>,
-}
-
-/// The parsed, validated `.moss/places.toml`. Missing the whole file is not
-/// an error (a site with no gazetteer yet is normal); a malformed whole-file
-/// parse is a diagnostic plus an empty gazetteer, never a build failure; an
-/// individual bad entry is dropped or coarsened with a diagnostic, never a
-/// crash.
-#[derive(Debug, Clone, Default)]
-pub struct Gazetteer {
-    places: std::collections::BTreeMap<String, PlaceRecord>,
-    slugs: std::collections::BTreeMap<String, String>,
-}
-
-/// The key of the place `name` in `ns`, honouring an explicit slug from
-/// `slugs` (keyed by the slug the name derives, so case variants of one name
-/// share it).
-pub fn slugged_key(slugs: &std::collections::BTreeMap<String, String>, ns: &str, name: &str) -> String {
-    let derived = moss_core::terms::term_slug(name);
-    format!("{ns}/{}", slugs.get(&derived).unwrap_or(&derived))
-}
-
-impl Gazetteer {
-    /// The record for a place's exact display name, if the gazetteer has one.
-    pub fn get(&self, name: &str) -> Option<&PlaceRecord> {
-        self.places.get(name)
-    }
-
-    /// The entry for `name` as a page may spell it: compared by
-    /// `moss_core::terms::term_fold`, so case and spacing do not matter.
-    /// Returns the entry's display name beside its record.
-    pub fn find(&self, name: &str) -> Option<(&String, &PlaceRecord)> {
-        let folded = moss_core::terms::term_fold(name);
-        self.places.iter().find(|(display, _)| moss_core::terms::term_fold(display) == folded)
-    }
-
-    /// The pseudo-folder key of the place `name` in `ns`: `places/shanghai`
-    /// for a row with `slug = "shanghai"`, else the key its name gives. The
-    /// one rule every link, roll-up and map id goes through, so they agree.
-    pub fn term_key(&self, ns: &str, name: &str) -> String {
-        slugged_key(&self.slugs, ns, name)
-    }
-
-    /// Explicit slugs by the slug their place's name derives, the form
-    /// `slugged_key` looks them up in.
-    pub fn slug_overrides(&self) -> &std::collections::BTreeMap<String, String> {
-        &self.slugs
-    }
-
-    /// Every entry, in name order.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &PlaceRecord)> {
-        self.places.iter()
-    }
-}
-
-/// Every precision value `.moss/places.toml` accepts, in ladder order
-/// (narrowest to widest) rather than `Precision`'s declaration order — a
-/// diagnostic listing them should read as the ladder an author can pick a
-/// rung from, not as an arbitrary enum dump.
-const ALLOWED_PRECISIONS: &str = "exact, city, region, country";
-
-/// The diagnostic text for an unrecognized `precision` value. Previously this
-/// named only the place and the bad value, leaving an author who mistyped
-/// (`"town"`) with no indication of WHERE to fix it or WHAT to fix it to —
-/// the downgrade to `country` (the privacy floor) still happened, just
-/// without enough in the message to tell a typo from an intentional choice.
-/// Pure and separately testable so the message's content — not just that
-/// some diagnostic fired — is what a test pins.
-fn precision_diagnostic(place: &str, bad: &str) -> String {
-    format!(
-        "'.moss/places.toml': place '{place}' has an invalid precision '{bad}' (allowed: {ALLOWED_PRECISIONS}); treating it as 'country'"
-    )
-}
-
-/// Turn an already-loaded `.moss/places.toml` table into a [`Gazetteer`].
-/// Pure — no I/O of its own — so it is covered by unit tests with no temp
-/// files; [`load_gazetteer`] is the thin I/O wrapper around it.
+/// [`moss_core::terms::places::parse_gazetteer`] over a table the build's
+/// TOML parser read, logging what it found.
 pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
-    let mut out = std::collections::BTreeMap::new();
-    for (name, value) in table {
-        let Some(entry) = value.as_table() else { continue };
-        let lat = entry.get("lat").and_then(toml_as_f64);
-        let lng = entry.get("lng").and_then(toml_as_f64);
-        let coords = match (lat, lng) {
-            (Some(lat), Some(lng)) => Some((lat, lng)),
-            _ => None,
-        };
-        let precision = match entry.get("precision").and_then(|v| v.as_str()) {
-            Some("exact") => Precision::Exact,
-            Some("city") => Precision::City,
-            Some("region") => Precision::Region,
-            Some("country") => Precision::Country,
-            Some(bad) => {
-                crate::build::cli_output::log_warn_problem!("{}", precision_diagnostic(name, bad));
-                Precision::Country
-            }
-            // No `precision` key at all is not itself a mistake worth a
-            // diagnostic — it still coarsens to the safe default.
-            None => Precision::Country,
-        };
-        let parent = entry.get("parent").and_then(|v| v.as_str()).map(str::to_string);
-        let slug = entry.get("slug").and_then(|v| v.as_str()).map(str::to_string);
-        out.insert(name.clone(), PlaceRecord { coords, precision, parent, slug });
-    }
-    for name in unmapped(&out) {
-        crate::build::cli_output::log_note!(
-            "place '{name}' in .moss/places.toml has no coordinates (lat/lng); its parent and precision still apply, but it will not appear on a map"
-        );
-    }
-    let slugs = check_slugs(&mut out);
-    Gazetteer { places: out, slugs }
+    let (gazetteer, said) = moss_core::terms::places::parse_gazetteer(&crate::config::core_entries(table));
+    log_place_messages(said);
+    gazetteer
 }
 
-/// The places without coordinates that no other place names as its parent. A
-/// parent without a point is a grouping on purpose (a region its towns roll up
-/// to), so only a leaf without one is worth a note.
-fn unmapped(rows: &std::collections::BTreeMap<String, PlaceRecord>) -> Vec<&str> {
-    let parents: std::collections::BTreeSet<&str> = rows.values().filter_map(|r| r.parent.as_deref()).collect();
-    rows.iter()
-        .filter(|(name, record)| record.coords.is_none() && !parents.contains(name.as_str()))
-        .map(|(name, _)| name.as_str())
-        .collect()
-}
-
-/// Whether `slug` is one URL segment of lowercase ASCII letters, digits and
-/// single hyphens, not starting or ending with one.
-fn is_valid_slug(slug: &str) -> bool {
-    !slug.is_empty()
-        && !slug.starts_with('-')
-        && !slug.ends_with('-')
-        && !slug.contains("--")
-        && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
-/// Drop every explicit slug that cannot be served, each with a build problem
-/// that names the row, and return the survivors keyed by the slug their place's
-/// name derives. A malformed slug, and a slug that is another place's address
-/// (an explicit slug, or the one its name derives), would otherwise send two
-/// places to one page. Both rows of a clash lose their slug, so the outcome
-/// does not depend on row order.
-fn check_slugs(rows: &mut std::collections::BTreeMap<String, PlaceRecord>) -> std::collections::BTreeMap<String, String> {
-    for (name, record) in rows.iter_mut() {
-        if let Some(bad) = record.slug.as_deref().filter(|s| !is_valid_slug(s)) {
-            crate::build::cli_output::log_warn_problem!(
-                "'.moss/places.toml': place '{name}' has an invalid slug '{bad}' (use lowercase letters, digits and hyphens, like 'new-york'); using the address its name gives"
-            );
-            record.slug = None;
+pub fn log_place_messages(said: Vec<moss_core::terms::places::PlaceMessage>) {
+    for message in said {
+        match message {
+            moss_core::terms::places::PlaceMessage::Note(note) => crate::build::cli_output::log_note!("{note}"),
+            moss_core::terms::places::PlaceMessage::Problem(problem) => crate::build::cli_output::log_warn_problem!("{problem}"),
         }
     }
-    // Who answers to each address: every row (by its explicit slug, else its
-    // derived one) and every parent named only by a `parent` link.
-    let mut holders: std::collections::BTreeMap<String, Vec<(String, bool)>> = Default::default();
-    for (name, record) in rows.iter() {
-        let derived = moss_core::terms::term_slug(name);
-        holders.entry(record.slug.clone().unwrap_or(derived)).or_default().push((name.clone(), record.slug.is_some()));
-    }
-    for parent in rows.values().filter_map(|r| r.parent.as_deref()) {
-        if !rows.contains_key(parent) {
-            holders.entry(moss_core::terms::term_slug(parent)).or_default().push((parent.to_string(), false));
-        }
-    }
-    for (address, who) in &holders {
-        // Case variants of one name derive one address on purpose; only a
-        // clash that involves an explicit slug is a mistake.
-        let distinct: std::collections::BTreeSet<_> = who.iter().map(|(n, _)| moss_core::terms::term_slug(n)).collect();
-        if !who.iter().any(|(_, explicit)| *explicit) || distinct.len() < 2 {
-            continue;
-        }
-        let names: Vec<String> = who.iter().map(|(n, _)| format!("'{n}'")).collect();
-        crate::build::cli_output::log_warn_problem!(
-            "'.moss/places.toml': places {} would all be served at the address '{address}'; their slugs are ignored, so each keeps the address its name gives",
-            names.join(" and ")
-        );
-        for (n, explicit) in who {
-            if *explicit {
-                if let Some(r) = rows.get_mut(n) {
-                    r.slug = None;
-                }
-            }
-        }
-    }
-    rows.iter()
-        .filter_map(|(name, r)| Some((moss_core::terms::term_slug(name), r.slug.clone()?)))
-        .collect()
-}
-
-/// TOML stores a whole number written without a decimal point (`lat = 35`) as
-/// an integer, not a float — `Value::as_float` alone would miss it.
-fn toml_as_f64(v: &toml::Value) -> Option<f64> {
-    v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
 }
 
 /// Load and parse `.moss/places.toml`, or an empty gazetteer when the file is
@@ -277,15 +75,6 @@ mod tests {
         assert_eq!(kyoto.precision, Precision::City);
         assert_eq!(kyoto.parent.as_deref(), Some("Japan"));
         assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a place without coordinates is a note, not a --strict problem");
-    }
-
-    #[test]
-    fn only_a_place_without_coordinates_that_is_nobody_s_parent_is_unmapped() {
-        let rows = parse_gazetteer(&table(
-            "[\"Japan\"]\nprecision = \"country\"\n\n[\"Kansai\"]\nprecision = \"region\"\nparent = \"Japan\"\n\n[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nparent = \"Kansai\"\n\n[\"Nara\"]\nparent = \"Kansai\"\n",
-        ))
-        .places;
-        assert_eq!(unmapped(&rows), vec!["Nara"], "Japan and Kansai group other places; Nara is a town missing its point");
     }
 
     #[test]

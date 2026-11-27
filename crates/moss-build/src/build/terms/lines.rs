@@ -1,27 +1,9 @@
-//! A page's terms drawn as links: the place line, and a line for every kind
-//! that sets `line = true`.
+//! Every page's term lines and place names, stored where the renderer reads them.
 
-use super::{field_names, term_role_label, TermIndex, TermKind};
+use super::TermIndex;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
-
-/// One field's names on one page, ready for the credit area.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TermLine {
-    pub term: String,
-    pub field: String,
-    pub label: String,
-    pub separator: String,
-    /// The linked names as inline markdown.
-    pub links: String,
-    pub is_place: bool,
-}
-
-impl TermLine {
-    pub fn class(&self) -> &'static str {
-        if self.is_place { "moss-term-line moss-place-line" } else { "moss-term-line" }
-    }
-}
+pub use moss_core::terms::lines::TermLine;
 
 impl ParsedDocument {
     /// Whether this page draws its place line, which already names its places.
@@ -30,79 +12,24 @@ impl ParsedDocument {
     }
 }
 
-/// Set every page's [`ParsedDocument::term_lines`], and
-/// [`ParsedDocument::place_names`] from the same resolved names.
+/// Set every page's [`ParsedDocument::term_lines`] and [`ParsedDocument::place_names`].
 pub fn set_term_lines(documents: &mut [ParsedDocument], index: &TermIndex, site_lang: Language) {
-    let place_kind = index.kinds.iter().find(|k| k.is_place);
-    // Every place-typed kind reads `location`, so only the first draws a line.
-    let line_kinds: Vec<&TermKind> = index
-        .kinds
-        .iter()
-        .filter(|k| k.draws_line() && (!k.is_place || place_kind.is_some_and(|first| k.key == first.key)))
-        .collect();
+    use moss_core::terms::lines::{place_names, term_lines};
     for doc in documents.iter_mut() {
-        if let Some(kind) = place_kind {
-            let names: Vec<String> = linked_names(doc, index, kind, "location").into_iter().map(|(name, _)| name).collect();
-            if !names.is_empty() {
-                doc.place_names = Some(names.join(", "));
-            }
-        }
-        let lines = line_kinds
-            .iter()
-            .flat_map(|kind| kind.line_fields().into_iter().filter_map(|field| term_line(doc, index, kind, field, site_lang)).collect::<Vec<_>>())
-            .collect();
-        doc.term_lines = lines;
+        doc.place_names = place_names(doc, index);
+        doc.term_lines = term_lines(doc, index, site_lang);
     }
-}
-
-/// The field's names that have a term page, each with that page's address.
-/// [`TermIndex::term_url_in`] keeps a place-typed kind's links site-wide.
-fn linked_names(doc: &ParsedDocument, index: &TermIndex, kind: &TermKind, field: &str) -> Vec<(String, String)> {
-    field_names(doc, field)
-        .iter()
-        .filter_map(|name| {
-            let name = name.trim();
-            Some((name.to_string(), index.term_url_in(&doc.edition, &kind.key, name)?))
-        })
-        .collect()
-}
-
-fn term_line(doc: &ParsedDocument, index: &TermIndex, kind: &TermKind, field: &str, site_lang: Language) -> Option<TermLine> {
-    let title = doc.title.trim().to_lowercase();
-    let links: Vec<String> = linked_names(doc, index, kind, field)
-        .into_iter()
-        // A page titled with a name already says it; the line would only repeat the title.
-        .filter(|(name, _)| name.to_lowercase() != title)
-        .map(|(name, url)| format!("[{}]({url})", link_text(&name)))
-        .collect();
-    if links.is_empty() {
-        return None;
-    }
-    // A place-typed kind has one site-wide namespace, labelled in the site's language.
-    let lang = if kind.is_place { site_lang } else { doc.lang };
-    Some(TermLine {
-        term: kind.key.clone(),
-        field: field.to_string(),
-        label: term_role_label(lang, field),
-        separator: crate::i18n::t(lang, "term_line_separator").to_string(),
-        links: links.join(", "),
-        is_place: kind.is_place,
-    })
-}
-
-/// A name as link text: brackets would otherwise end the link early.
-fn link_text(name: &str) -> String {
-    name.replace('\\', r"\\").replace('[', r"\[").replace(']', r"\]")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::terms::TermKind;
     use crate::build::terms::derive_terms;
     use moss_core::terms::TermClaim;
 
     fn doc(url: &str, title: &str) -> ParsedDocument {
-        ParsedDocument { url_path: url.to_string(), title: title.to_string(), ..Default::default() }
+        ParsedDocument { url_path: url.to_string(), title: title.to_string(), label: title.to_string(), ..Default::default() }
     }
 
     fn kind(key: &str, fields: &[&str]) -> TermKind {

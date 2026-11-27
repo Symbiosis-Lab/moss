@@ -624,7 +624,11 @@ impl ConfigFile {
 /// `Value` hands a datetime to a deserializer as a string, so `lang = 1979-05-27`
 /// would read as a language instead of a value to warn about.
 fn core_table(table: &toml::Table) -> ConfigValue {
-    ConfigValue::Table(table.iter().map(|(key, value)| (key.clone(), core_value(value))).collect())
+    ConfigValue::Table(core_entries(table))
+}
+
+pub(crate) fn core_entries(table: &toml::Table) -> std::collections::BTreeMap<String, ConfigValue> {
+    table.iter().map(|(key, value)| (key.clone(), core_value(value))).collect()
 }
 
 fn core_value(value: &Value) -> ConfigValue {

@@ -21,6 +21,8 @@ pub const NOT_FOUND_PAGE: &str = "404/index.html";
 /// Every method returns a borrow, so a pass that walks every page allocates
 /// nothing per page.
 pub trait SitePage: SortableDoc + SortableLabel {
+    /// The title: [`crate::heading::page_title`].
+    fn title(&self) -> &str;
     /// The layout the author wrote.
     fn layout(&self) -> Option<&str>;
     fn series(&self) -> Option<&SeriesField>;
@@ -71,6 +73,12 @@ pub trait SitePage: SortableDoc + SortableLabel {
     fn children_covers(&self) -> Option<&str>;
     fn children_when(&self) -> Option<&str>;
     fn children_limit(&self) -> Option<u32>;
+    /// The names the page gives the name-list field `field`.
+    fn term_values(&self, field: &str) -> Vec<String>;
+    /// The term name the page claims through `field`'s claim key.
+    fn term_claim(&self, field: &str) -> Option<String>;
+    /// `children: false`: the page lists nothing, even as a term's claimer.
+    fn children_off(&self) -> bool;
     /// The event's times when the page is an event.
     fn event_span(&self) -> Option<EventSpan>;
     /// A `start:` with no usable value: an event still waiting for its date.
@@ -146,6 +154,8 @@ pub struct PageFacts {
     pub is_folder_index: bool,
     pub order_match_name: String,
     pub label: String,
+    /// What a term claim and a term line read as the page's title.
+    pub title: String,
     pub layout: Option<String>,
     pub series: Option<SeriesField>,
     pub draft: Option<bool>,
@@ -176,6 +186,10 @@ pub struct PageFacts {
     pub children_covers: Option<String>,
     pub children_when: Option<String>,
     pub children_limit: Option<u32>,
+    pub children_off: bool,
+    /// What the term index reads, checked through what it derives.
+    #[serde(skip)]
+    pub terms: TermFacts,
     pub event: Option<EventSpan>,
     pub awaits_event_date: bool,
     pub card: super::card::CardFacts,
@@ -192,6 +206,7 @@ impl PageFacts {
             is_folder_index: page.is_folder_index(),
             order_match_name: page.order_match_name().to_string(),
             label: page.label().to_string(),
+            title: page.title().to_string(),
             layout: page.layout().map(str::to_string),
             series: page.series().cloned(),
             draft: page.draft(),
@@ -222,6 +237,8 @@ impl PageFacts {
             children_covers: page.children_covers().map(str::to_string),
             children_when: page.children_when().map(str::to_string),
             children_limit: page.children_limit(),
+            children_off: page.children_off(),
+            terms: TermFacts::default(),
             event: page.event_span(),
             awaits_event_date: page.awaits_event_date(),
             card: page.card_facts().into_owned(),
@@ -244,6 +261,7 @@ impl SortableLabel for PageFacts {
 }
 
 impl SitePage for PageFacts {
+    fn title(&self) -> &str { &self.title }
     fn layout(&self) -> Option<&str> { self.layout.as_deref() }
     fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
     fn draft(&self) -> Option<bool> { self.draft }
@@ -274,6 +292,16 @@ impl SitePage for PageFacts {
     fn children_covers(&self) -> Option<&str> { self.children_covers.as_deref() }
     fn children_when(&self) -> Option<&str> { self.children_when.as_deref() }
     fn children_limit(&self) -> Option<u32> { self.children_limit }
+    fn term_values(&self, field: &str) -> Vec<String> {
+        if field == "location" {
+            return self.card.location.clone();
+        }
+        self.terms.values.iter().find(|(f, _)| f == field).map(|(_, names)| names.clone()).unwrap_or_default()
+    }
+    fn term_claim(&self, field: &str) -> Option<String> {
+        self.terms.claims.iter().find(|(f, _)| f == field).map(|(_, name)| name.clone())
+    }
+    fn children_off(&self) -> bool { self.children_off }
     fn event_span(&self) -> Option<EventSpan> { self.event }
     fn awaits_event_date(&self) -> bool { self.awaits_event_date }
     fn card_facts(&self) -> std::borrow::Cow<'_, super::card::CardFacts> { std::borrow::Cow::Borrowed(&self.card) }
@@ -326,9 +354,11 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
         cascades.push(fm.cascade.take());
         translation_keys.push(fm.translation_key.clone());
         fill_inferred(&mut fm, &path, texts, &graph, bundle);
-        let (mut page, lang_tag) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
-        // An empty `start:` parses to nothing, yet it still marks an event waiting for its date.
         let text = &texts[path.as_str()];
+        let (term_facts, claims) = term_facts(&fm, text, &bundle.terms);
+        let (mut page, lang_tag) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
+        page.terms = TermFacts { claims: claims.into_iter().map(|(f, c)| (f, c.name(&page.title).to_string())).collect(), ..term_facts };
+        // An empty `start:` parses to nothing, yet it still marks an event waiting for its date.
         page.awaits_event_date = page.event.is_none() && text.contains("start") && crate::frontmatter::key_spans(text).iter().any(|(key, _)| key == "start");
         pages.push(page);
         lang_tags.push(lang_tag);
@@ -353,7 +383,13 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     }
 
     apply_folder_cascades(&mut pages, &cascades);
+    super::inherit::mirror_place_fields_into_location(&mut pages, &bundle.terms, |p| &mut p.card.location);
     super::inherit::inherit_work_locations(&mut pages, |p| &p.card.location, |p| &mut p.card.location);
+    let derived = crate::terms::index::derive_index(&pages, bundle.terms.clone());
+    for (page, added) in pages.iter_mut().zip(derived.pages) {
+        page.also_in.extend(added.also_in);
+        page.term_listing = added.term_listing.or(page.term_listing.take());
+    }
 
     let sorts: Vec<(usize, ResolvedSort)> = crate::sort::direct_children_sorts(&pages).into_iter().map(|(i, s, _)| (i, s)).collect();
     for (i, sort) in sorts {
@@ -366,7 +402,7 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     let has_language_trees = content_files().any(|f| crate::home::lang_tree_prefix(f).is_some());
     let home = pages.iter().find(|p| p.url_path == "index.html");
     let site_name = crate::home::site_name(home.and_then(|p| p.source_path.as_deref()), home.map(|p| p.label.as_str()), root_name);
-    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, site_lang, has_content_folders, has_language_trees, site_name }
+    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, site_lang, has_content_folders, has_language_trees, site_name, terms: derived.index }
 }
 
 /// Each page's language edition, and the passthrough folder it sits in,
@@ -427,6 +463,46 @@ fn apply_folder_cascades(pages: &mut [PageFacts], cascades: &[Option<HashMap<Str
     }
 }
 
+/// A page's names and claims per name-list field, `location` aside (it is
+/// [`super::card::CardFacts::location`]).
+#[derive(Debug, Clone, Default)]
+pub struct TermFacts {
+    pub values: Vec<(String, Vec<String>)>,
+    pub claims: Vec<(String, String)>,
+}
+
+/// What a page gives each field the site's kinds read.
+/// The claims stay unresolved until the page's title is known.
+fn term_facts(fm: &FrontMatter, text: &str, kinds: &[crate::terms::kinds::TermKind]) -> (TermFacts, Vec<(String, crate::terms::TermClaim)>) {
+    let mut raw = None;
+    let mut raw_value = |key: &str| raw.get_or_insert_with(|| crate::frontmatter::frontmatter_map(text)).get(key).cloned();
+    let mut facts = TermFacts::default();
+    let mut claims = Vec::new();
+    for field in kinds.iter().flat_map(|k| &k.fields).filter(|f| *f != "location") {
+        let values = match field.as_str() {
+            "author" => fm.author.clone().unwrap_or_default(),
+            "tags" => fm.tags.clone().unwrap_or_default(),
+            "editor" => fm.editor.clone().unwrap_or_default(),
+            "jury" => fm.jury.clone().unwrap_or_default(),
+            declared => raw_value(declared).and_then(|v| crate::frontmatter_union::normalize_name_list(&v).ok()).unwrap_or_default(),
+        };
+        facts.values.push((field.clone(), values));
+    }
+    for field in kinds.iter().flat_map(|k| &k.fields) {
+        let claim = match field.as_str() {
+            "author" => fm.author_page.clone(),
+            "tags" => fm.tag_page.clone(),
+            "editor" => fm.editor_page.clone(),
+            "jury" => fm.jury_page.clone(),
+            "location" => fm.place_page.clone(),
+            declared => raw_value(&crate::terms::claim_field_key(declared))
+                .and_then(|v| crate::frontmatter_union::normalize_term_claim(&v).ok().flatten()),
+        };
+        claims.extend(claim.map(|claim| (field.clone(), claim)));
+    }
+    (facts, claims)
+}
+
 /// Every page of a site, in the build's walk order: each one's source path
 /// and facts at the same index.
 #[derive(Debug, Clone, Default)]
@@ -438,6 +514,7 @@ pub struct SitePages {
     pub has_language_trees: bool,
     /// The home page's title, else the folder's name.
     pub site_name: String,
+    pub terms: crate::terms::index::TermIndex,
 }
 
 impl SitePages {
@@ -487,7 +564,7 @@ impl SitePages {
     /// its title is hidden.
     pub fn folder_heading(&self, path: &str, body_markdown: &str) -> Option<String> {
         let page = &self.pages[self.paths.iter().position(|p| p == path)?];
-        page.is_folder_index.then(|| crate::heading::folder_heading(body_markdown, &page.label, false, crate::home::is_language_root(&page.url_path)))
+        page.is_folder_index.then(|| crate::heading::folder_heading(body_markdown, &page.title, false, crate::home::is_language_root(&page.url_path)))
     }
 
     /// The site's name on a page in `lang`: its edition home's own title, else the site name.
@@ -612,7 +689,7 @@ fn one_page(
     let label = if heading::is_untitled_stamp(path, fm.title.as_deref(), dated) {
         // The build reads the body after source hygiene, before link resolution.
         let (source, _) = crate::resolve::prepare_markdown_source(body, 0);
-        heading::opening_words(&super::excerpt::extract_description(&source, bundle.math.unwrap_or(true))).unwrap_or(filename_title)
+        heading::opening_words(&super::excerpt::extract_description(&source, bundle.math.unwrap_or(true))).unwrap_or_else(|| filename_title.clone())
     } else {
         let state = heading::compute(heading::HeadingInputs {
             file_path: path,
@@ -623,7 +700,7 @@ fn one_page(
             slot_only,
             dated,
         });
-        if state.text.is_empty() { filename_title } else { state.text }
+        if state.text.is_empty() { filename_title.clone() } else { state.text }
     };
     let order_match_name = crate::sort::order_match_name(is_folder_index, Some(path), &url_path, &clean_stem).to_string();
     let nav_label = fm.nav_label.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
@@ -648,6 +725,7 @@ fn one_page(
         is_folder_index,
         order_match_name,
         clean_stem,
+        title: crate::heading::page_title(is_folder_index, fm.title.as_deref(), &filename_title, &label),
         label,
         layout: fm.layout,
         series: fm.series,
@@ -679,6 +757,8 @@ fn one_page(
         children_covers: fm.children_covers,
         children_when: fm.children_when,
         children_limit: fm.children_limit,
+        children_off: fm.children == Some(false),
+        terms: TermFacts::default(),
         awaits_event_date: false,
         event,
         url_path,

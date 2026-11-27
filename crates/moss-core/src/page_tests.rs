@@ -9,6 +9,7 @@ fn site(files: &[&str]) -> SiteInputs {
         files: files.iter().map(|path| path.to_string()).collect(),
         schema: crate::schema::builtin_schema(),
         lang: "en".into(),
+        terms: Vec::new(),
     }
 }
 

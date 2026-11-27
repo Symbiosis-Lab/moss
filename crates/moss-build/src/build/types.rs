@@ -1265,6 +1265,7 @@ impl SourceMetadata {
 }
 
 impl moss_core::page::site_page::SitePage for ParsedDocument {
+    fn title(&self) -> &str { &self.title }
     fn layout(&self) -> Option<&str> { self.layout.as_deref() }
     fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
     fn draft(&self) -> Option<bool> { self.draft }
@@ -1295,6 +1296,11 @@ impl moss_core::page::site_page::SitePage for ParsedDocument {
     fn children_covers(&self) -> Option<&str> { self.children_covers.as_deref() }
     fn children_when(&self) -> Option<&str> { self.children_when.as_deref() }
     fn children_limit(&self) -> Option<u32> { self.children_limit }
+    fn term_values(&self, field: &str) -> Vec<String> { crate::build::terms::field_names(self, field) }
+    fn term_claim(&self, field: &str) -> Option<String> {
+        crate::build::terms::term_claim_of(self, field).map(|claim| claim.name(&self.title).to_string())
+    }
+    fn children_off(&self) -> bool { self.children == Some(false) }
     fn event_span(&self) -> Option<moss_core::event::EventSpan> { self.event.as_ref().map(|e| moss_core::event::EventSpan { start: e.start, end: e.end }) }
     fn awaits_event_date(&self) -> bool { self.event.is_none() && self.raw_frontmatter.contains_key("start") }
     fn card_facts(&self) -> std::borrow::Cow<'_, moss_core::page::card::CardFacts> {

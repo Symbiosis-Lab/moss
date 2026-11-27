@@ -7,159 +7,8 @@
 //! (this one from config-reading concerns, the other from per-document
 //! derivation passes) and neither needs the other's internals.
 
-use moss_core::terms::{AUTHOR_NS, TAGS_NS};
-
 pub use moss_core::terms::config::BUILTIN_DEFAULT_FIELDS;
-
-/// One term kind: a URL namespace fed by one or more name-list schema
-/// fields. Built once per build from `.moss/config.toml`. Replaces
-/// `AUTHOR_NS`/`TAGS_NS` as the derivation loop's only input.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TermKind {
-    /// URL namespace / pseudo-folder prefix: `"authors"`, `"tags"`, `"people"`.
-    pub key: String,
-    /// Frontmatter field names feeding this kind, in the order their
-    /// sections render (`["author", "editor", "jury"]`).
-    pub fields: Vec<String>,
-    /// The kind's name in the site language, resolved once at construction.
-    /// Persisted with the kind; read it through [`Self::title_in`].
-    pub title: String,
-    /// The config `title` as `(language tag, title)` pairs; a plain string is
-    /// the `en` entry, which every language falls back to.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub titles: Vec<(String, String)>,
-    /// `type = "place"` in `[terms.<key>]`. The only typed kind — a plain
-    /// bool, not an enum, because a place is the only kind type moss
-    /// recognizes so far. Drives which kinds `build::terms::places::attach_parents`
-    /// fills; render-time code does NOT gate on this field — it gates on
-    /// whether `parents` or its inverse actually has an entry for the term
-    /// in question, so a non-place kind renders no breadcrumb/children by
-    /// simply having nothing recorded, not by an extra check.
-    ///
-    /// `skip_serializing_if` on the negation, not a plain `#[serde(default)]`
-    /// alone: without it every kind in every article map, place or not,
-    /// gains a literal `"is_place": false`, which is not byte-identical to a
-    /// pre-places-slice map.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub is_place: bool,
-    /// Generic parent hierarchy: term key (already `term_folder_key`-shaped,
-    /// e.g. `places/kyoto`) → parent's DISPLAY NAME (not yet a key —
-    /// resolving a display name to its own key, to keep walking upward, is
-    /// `derive_terms` pass 2's job, once it already has the fully-built
-    /// kinds table in scope). Only place kinds are ever filled; every other
-    /// kind carries an empty map and pays nothing. Filled once, at the
-    /// config stage, by `build::terms::places::attach_parents` —
-    /// `derive_terms` itself never reads the gazetteer.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub parents: std::collections::BTreeMap<String, String>,
-    /// `[terms.<key>] explorer`, carried through only for the place-typed
-    /// kind — `term_kinds` drops a declared value for every other kind, the
-    /// same way `parents` is only ever filled for one. `None` means
-    /// "default on" (`explorer_enabled` resolves the default); `Some(false)`
-    /// is the only way to see the interactive layer turned off. Always
-    /// `None` for a non-place kind, so the key is accepted without error but
-    /// has no effect there.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explorer: Option<bool>,
-    /// `[terms.<key>] line`, read through [`Self::draws_line`]. `None` is the
-    /// default, so a kind that sets none serializes as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub line: Option<bool>,
-    /// Explicit slugs from `.moss/places.toml`, keyed by the slug the place's
-    /// name derives. Only a place-typed kind is ever filled, by `attach_parents`.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub slugs: std::collections::BTreeMap<String, String>,
-    /// `[terms.<key>] cards = true`: every listing card for a page with values
-    /// in this kind's fields shows those names in its meta. Read by
-    /// `build::terms::roles::set_card_credits`; `false` for a value that is
-    /// not a bool, with a diagnostic from `term_kinds`.
-    ///
-    /// `skip_serializing_if` for the same reason as `is_place`: an unset
-    /// default must not add a key to every serialized kind.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub cards: bool,
-    /// `[terms.<key>] count`, the card count wording per language tag, as
-    /// `titles` is. Read through [`Self::count_in`]. Skipped when empty, so a
-    /// kind that sets none serializes as before.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub counts: Vec<(String, String)>,
-}
-
-impl TermKind {
-    /// The card count wording for a page in `lang`, `None` when the kind sets
-    /// none. `false` comes back as empty text, which hides the count.
-    pub fn count_in(&self, lang: &str) -> Option<moss_core::frontmatter_union::ChildrenCount> {
-        moss_core::fields::label_in(&self.counts, lang)
-            .map(|text| moss_core::frontmatter_union::ChildrenCount(text.to_string()))
-    }
-
-    /// Whether the places explorer should activate for this kind: only ever
-    /// true for the place-typed kind, default-on absent an explicit
-    /// `explorer = false`. The one place both the injection predicate
-    /// (`features::should_inject_places_explorer`) and the markup handshake
-    /// (`PlaceMapRenderContext`) read this, so they cannot resolve the
-    /// default differently.
-    pub fn explorer_enabled(&self) -> bool {
-        self.is_place && self.explorer.unwrap_or(true)
-    }
-
-    /// Whether pages draw this kind's names as a line of links: only a
-    /// place-typed kind does unless `line` says otherwise.
-    pub fn draws_line(&self) -> bool {
-        self.line.unwrap_or(self.is_place)
-    }
-
-    /// The fields a line is drawn for. A place-typed kind's fields all feed
-    /// `location` (mirrored, then inherited by a work's companions), so its
-    /// line is that one field.
-    pub fn line_fields(&self) -> Vec<&str> {
-        if self.is_place { vec!["location"] } else { self.fields.iter().map(String::as_str).collect() }
-    }
-
-    /// The kind's name in `edition` (`""` is the default edition), which its
-    /// root page is headed and its nav entry labelled with. An edition moss
-    /// has no interface strings for is dressed in the site language's, so
-    /// without a label of its own it takes the site language's name.
-    pub fn title_in(&self, edition: &str) -> String {
-        let labelled = moss_core::fields::label_in(&self.titles, edition).is_some();
-        if edition.is_empty() || (!labelled && crate::i18n::Language::from_code(edition).is_none()) {
-            return self.title.clone();
-        }
-        kind_title(&self.key, &self.titles, edition)
-    }
-
-    /// A built-in kind as config would make it, for a map written before
-    /// kinds were recorded.
-    pub fn builtin(key: &str, field: &str, site_lang: &str) -> TermKind {
-        TermKind {
-            key: key.to_string(),
-            fields: vec![field.to_string()],
-            title: kind_title(key, &[], site_lang),
-            titles: Vec::new(),
-            counts: Vec::new(),
-            is_place: false,
-            parents: Default::default(),
-            explorer: None,
-            line: None,
-            slugs: Default::default(),
-            cards: false,
-        }
-    }
-}
-
-/// A kind's name in `lang`: its config `title` for that language by the rule a
-/// declared field's labels follow, else a built-in's translated title, else
-/// its key as a label.
-fn kind_title(key: &str, titles: &[(String, String)], lang: &str) -> String {
-    if let Some(label) = moss_core::fields::label_in(titles, lang) {
-        return label.to_string();
-    }
-    if key == AUTHOR_NS || key == TAGS_NS {
-        let lang = crate::i18n::Language::from_code(lang).unwrap_or_default();
-        return crate::i18n::term_root_title(lang, key).to_string();
-    }
-    moss_core::fields::name_label(key)
-}
+pub use moss_core::terms::kinds::TermKind;
 
 /// The name-list fields a config declares beyond the built-in five, in
 /// declaration order, deduplicated. The editor's schema adds them.
@@ -167,84 +16,20 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
     moss_core::terms::config::declared_name_list_fields(&cfg.terms_kinds()).0
 }
 
-/// Turn config into the kinds table [`super::derive_terms`] derives from —
-/// the one unified read of `.moss/config.toml`'s `[terms]` section
-/// ([`crate::config::ConfigFile::terms_kinds`]).
-///
-/// The name-list set for this build is the built-in five (the `name_list`
-/// flag in [`moss_core::schema_fields::BUILTIN_FIELDS`]) plus every name a declared
-/// `fields` list names: a declared field is a name-list field for this site.
-/// A name refused by [`moss_core::terms::config::name_list_refusal`] (a built-in non-list field such as
-/// `title`, or a name claiming a built-in's term page) is a diagnostic, not a
-/// silent drop. A field a
-/// DECLARED (non-built-in) kind claims is removed from any built-in kind
-/// that would otherwise list it by default, so a field belongs to at most
-/// one kind — naming `author` in `[terms.people]` takes it out of
-/// `authors/`. `title` is resolved here, in the site language (see
-/// `kind_title`).
-/// Nothing about the result is patched later.
-///
-/// A declared kind that reuses a built-in's own key (`[terms.tags]`,
-/// `[terms.authors]`) never reaches this function as a *separate* `RawKind`
-/// sharing that key — `ConfigFile::terms_kinds` already resolved that one
-/// key to one `RawKind` before this ever iterates it. `is_builtin` here is
-/// keyed on `kind.key`, not on which branch produced the `RawKind`, so a
-/// declared `[terms.tags]` with no explicit `title` still falls back to the
-/// i18n default correctly.
+/// The kinds table [`super::derive_terms`] derives from, resolved in core
+/// ([`moss_core::terms::kinds::resolve_kinds`]); its problems are logged.
 pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermKind> {
-    let raw_kinds = cfg.terms_kinds();
-    let (filtered, warnings) = moss_core::terms::config::filter_fields(&raw_kinds);
+    let (kinds, warnings) = moss_core::terms::kinds::resolve_kinds(&cfg.terms_kinds(), site_lang);
     for warning in warnings {
         crate::build::cli_output::log_warn_problem!("{warning}");
     }
-
-    let claimed_by_a_declared_kind: std::collections::HashSet<String> = filtered
-        .iter()
-        .filter(|(kind, _)| kind.key != AUTHOR_NS && kind.key != TAGS_NS)
-        .flat_map(|(_, fields)| fields.iter().cloned())
-        .collect();
-
-    filtered
-        .into_iter()
-        .map(|(kind, fields)| {
-            let is_builtin = kind.key == AUTHOR_NS || kind.key == TAGS_NS;
-            let fields = if is_builtin {
-                fields.into_iter().filter(|f| !claimed_by_a_declared_kind.contains(f)).collect()
-            } else {
-                fields
-            };
-            let title = kind_title(&kind.key, &kind.titles, site_lang);
-            if kind.counts.iter().any(|(_, text)| moss_core::frontmatter_union::ChildrenCount(text.clone()).lacks_placeholder()) {
-                crate::build::cli_output::log_warn_problem!(
-                    "[terms.{}] count has no {{n}}, so every card shows the same text",
-                    kind.key
-                );
-            }
-            let is_place = match kind.kind_type.as_deref() {
-                Some("place") => true,
-                Some(other) => {
-                    crate::build::cli_output::log_warn_problem!(
-                        "[terms.{}] has type = \"{}\", which moss does not recognize; ignoring",
-                        kind.key,
-                        other
-                    );
-                    false
-                }
-                None => false,
-            };
-            // Dropped for every non-place kind: `explorer` is ignored, not an
-            // error, on a kind that isn't `type = "place"` (there is nothing
-            // for it to turn off), the same posture `is_place` itself takes
-            // toward an unrecognized `type`.
-            let explorer = is_place.then_some(kind.explorer).flatten();
-            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line: kind.line, slugs: Default::default(), cards: kind.cards.unwrap_or(false) }
-        })
-        .collect()
+    kinds
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moss_core::terms::{AUTHOR_NS, TAGS_NS};
 
     #[test]
     fn fixture_site_language_and_name_lists_match_core_bundle() {
@@ -265,6 +50,7 @@ mod tests {
         assert_eq!(bundle.lang, lang);
         assert_eq!(declared_name_list_fields(&cfg), ["tags", "editor", "jury"]);
         assert_eq!(bundle.declared_name_lists, declared_name_list_fields(&cfg));
+        assert_eq!(bundle.terms, term_kinds(&cfg, &lang));
     }
 
     #[test]
@@ -277,12 +63,6 @@ mod tests {
         assert!(authors.fields.is_empty(), "author moved into people: {:?}", authors.fields);
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(people.fields, vec!["author".to_string(), "editor".to_string()]);
-    }
-
-    #[test]
-    fn a_kind_and_a_role_with_no_title_read_their_name_with_spaces() {
-        assert_eq!(kind_title("angabe_ort", &[], "de"), "Angabe ort");
-        assert_eq!(super::super::term_role_label(crate::i18n::Language::De, "angabe_ort"), "Angabe ort");
     }
 
     #[test]

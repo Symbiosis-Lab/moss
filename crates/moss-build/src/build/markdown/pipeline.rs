@@ -1229,20 +1229,7 @@ pub fn process_markdown_file(
         moss_core::heading::opening_words(&excerpt).unwrap_or_else(|| filename_title.clone())
     } else if heading.text.is_empty() { filename_title.clone() } else { heading.text.clone() };
 
-    // Title source: NEVER the document body. For index/folder pages,
-    // `title:` if set, else the filename/folder name (`filename_title`,
-    // which resolves index/self-named notes to their folder name). For
-    // articles, the chrome `label` (which itself derives from
-    // `title:`/filename via heading::compute). Matches Obsidian: a body
-    // `# H1` is content, not the page title.
-    let title = if is_index_file {
-        match frontmatter.title.as_deref() {
-            Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-            _ => filename_title.clone(),
-        }
-    } else {
-        label.clone()
-    };
+    let title = moss_core::heading::page_title(is_index_file, frontmatter.title.as_deref(), &filename_title, &label);
 
     // Top of the page's edition: the site root, or directly inside a language
     // tree. Feeds the nav membership check below and auto-navigation downstream.

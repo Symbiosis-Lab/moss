@@ -118,7 +118,7 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 650,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 350,

@@ -24,6 +24,7 @@ struct PreviewCards<'a> {
     site: &'a SiteInputs,
     graph: ContentGraph,
     typesetting: Option<&'a str>,
+    terms: &'a crate::terms::index::TermIndex,
     /// Each listed page's pictures and listing cover, once read.
     pictures: RefCell<HashMap<String, (PagePictures, Option<String>)>>,
 }
@@ -65,7 +66,7 @@ impl CardHost<PageFacts> for PreviewCards<'_> {
     fn body_cover(&self, page: &PageFacts) -> Option<String> {
         self.with_pictures(page, |_, cover| cover.map(str::to_string)).flatten()
     }
-    fn place_names(&self, _: &PageFacts) -> Option<String> { None }
+    fn place_names(&self, page: &PageFacts) -> Option<String> { crate::terms::lines::place_names(page, self.terms) }
     fn credits(&self, _: &PageFacts) -> Option<String> { None }
     fn section(&self, _: &PageFacts) -> Option<SectionAccent> { None }
     fn pictures_after_cover(&self, page: &PageFacts, n: usize) -> Vec<String> {
@@ -82,7 +83,7 @@ impl SitePages {
     /// page's source by path; `None` when it ends in none.
     pub fn own_listing(&self, path: &str, texts: &HashMap<String, String>, site: &SiteInputs, typesetting: Option<&str>) -> Option<String> {
         let host = &self.pages[self.paths.iter().position(|p| p == path)?];
-        let cards = PreviewCards { texts, site, graph: super::graph(site), typesetting, pictures: RefCell::default() };
+        let cards = PreviewCards { texts, site, graph: super::graph(site), typesetting, terms: &self.terms, pictures: RefCell::default() };
         // The preview parses with math on (`super::parse_config`), so its excerpts read `$…$` the same way.
         let math = true;
         let ordered = super::listing::host_listing(

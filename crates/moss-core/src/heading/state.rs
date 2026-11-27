@@ -151,6 +151,15 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
     source_name.replace('-', " ").replace('_', " ")
 }
 
+/// The page's title: a folder index's `title:`, else its folder or file name;
+/// an article's chrome label. Never the body's heading.
+pub fn page_title(is_folder_index: bool, frontmatter_title: Option<&str>, filename_title: &str, label: &str) -> String {
+    if !is_folder_index {
+        return label.to_string();
+    }
+    frontmatter_title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(filename_title).to_string()
+}
+
 /// Whether the page is untitled: no `title:`, no `date:` or `start:` of its
 /// own (`dated`), and a file stem that is nothing but a date stamp. Its
 /// heading is hidden and its label comes from the body.

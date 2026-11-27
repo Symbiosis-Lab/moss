@@ -231,6 +231,7 @@ impl crate::sort::SortableLabel for Page {
 }
 
 impl SitePage for Page {
+    fn title(&self) -> &str { self.label }
     fn layout(&self) -> Option<&str> { self.layout }
     fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
     fn draft(&self) -> Option<bool> { self.draft }
@@ -261,6 +262,9 @@ impl SitePage for Page {
     fn children_covers(&self) -> Option<&str> { None }
     fn children_when(&self) -> Option<&str> { None }
     fn children_limit(&self) -> Option<u32> { None }
+    fn term_values(&self, _: &str) -> Vec<String> { Vec::new() }
+    fn term_claim(&self, _: &str) -> Option<String> { None }
+    fn children_off(&self) -> bool { false }
     fn event_span(&self) -> Option<crate::event::EventSpan> { None }
     fn awaits_event_date(&self) -> bool { false }
     fn card_facts(&self) -> std::borrow::Cow<'_, crate::page::card::CardFacts> { Default::default() }
