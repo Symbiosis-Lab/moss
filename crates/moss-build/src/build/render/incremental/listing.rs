@@ -33,9 +33,8 @@ use moss_core::PageKind;
 use serde::{Deserialize, Serialize};
 
 use crate::build::facade::debug_hash;
-use crate::build::folder_embed::{
-    card_excerpt, effective_group, is_rich, resolve_children_config_by, select_children_by_slug,
-};
+use crate::build::folder_embed::{card_excerpt, is_rich, select_children_by_slug};
+use moss_core::page::listing::{effective_group, listing_config};
 use crate::build::types::ParsedDocument;
 use crate::types::content::{MediaMetadata, ProjectStructure};
 
@@ -199,7 +198,7 @@ fn digest_of(
     // Richness reads `resolve_page_description(.., content)`, taken once per
     // child in its projection — a body-derived input, and the reason the plan half
     // exists at all rather than falling out of the projection.
-    let (style, group) = resolve_children_config_by(members, None, None, |d| {
+    let (style, group) = listing_config(members, None, None, |d: &ParsedDocument| {
         projections
             .get(d.url_path.as_str())
             .expect("every member was projected from the same documents")
@@ -343,17 +342,15 @@ pub fn draws_own_listing(doc: &ParsedDocument, is_explorer_root: bool) -> bool {
         && !is_explorer_root
 }
 
-/// The one listing a host's page ends in, as the renderer chooses it
-/// (`render::html::own_listing_target`), with the filters its marker carries.
+/// The one listing a host's page ends in, as the renderer chooses it, with
+/// the filters its marker carries.
 pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<GroupKey> {
-    let (folder_slug, names_scoped_home) = crate::build::render::html::own_listing_target(doc, documents)?;
-    let home = crate::build::folder_embed::home_defaults(doc);
-    let scoped = home.scoped || names_scoped_home;
+    let own = moss_core::page::listing::own_listing(doc, documents)?;
     Some(GroupKey {
-        folder_slug,
-        depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
-        scope_default_tree: scoped,
-        exclude_nav: scoped,
+        folder_slug: own.folder,
+        depth: if own.flatten { Depth::All } else { Depth::Direct },
+        scope_default_tree: own.scoped,
+        exclude_nav: own.scoped,
         edition: doc.edition.clone(),
     })
 }
@@ -464,25 +461,14 @@ fn sidebar_reference(doc: &ParsedDocument) -> Option<&str> {
     }
 }
 
-/// Mirrors `render/html.rs`'s `resolve_children_source_folder_path` lookup
-/// for `children_source:`.
+/// The folder `children_source:` names, as the renderer reads it. Core falls
+/// back to the bare stem when no folder matches; that guess is kept only when
+/// it names a page that exists, otherwise the host's shape is not modelled
+/// and it must render.
 fn resolve_children_source_slug(reference: &str, documents: &[ParsedDocument]) -> Option<String> {
-    let stem = crate::build::markdown::frontmatter_ref_to_stem(reference);
-    let found = documents.iter().find(|d| {
-        let d_stem = d.url_path.trim_end_matches("/index.html").trim_end_matches('/');
-        d_stem.eq_ignore_ascii_case(&stem) && d.kind == PageKind::Folder
-    });
-    match found {
-        Some(d) => Some(d.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string()),
-        // html.rs falls back to `{stem}/` here. Keep the fallback only when it
-        // names a folder that exists in URL space; otherwise the host's shape
-        // is not modelled and it must render.
-        None => {
-            let guess = stem.to_lowercase();
-            let target = format!("{}/index.html", guess);
-            documents.iter().any(|d| d.url_path == target).then_some(guess)
-        }
-    }
+    let (path, _) = moss_core::page::listing::children_source_folder(reference, documents);
+    let target = if path.is_empty() { "index.html".to_string() } else { format!("{path}/index.html") };
+    documents.iter().any(|d| d.url_path == target).then_some(path)
 }
 
 /// Mirrors `render/html.rs`'s sidebar target lookup (last url segment OR

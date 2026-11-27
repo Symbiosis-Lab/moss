@@ -123,7 +123,9 @@ fn first_page<'a>(
         .clone()
         .or_else(|| (parsed.when == Some("upcoming")).then(|| "upcoming".to_string()))
         .map(moss_core::Resolved::frontmatter);
-    let ordered = members::order(&pages, target_doc, is_flatten, parsed.sort, None, group.as_ref(), None, None, math, now);
+    let now = super::upcoming::minute(now);
+    let ask = moss_core::page::listing::OrderAsk { flatten: is_flatten, sort: parsed.sort, style: None, group: group.as_ref(), limit: None, when: None, now: &now };
+    let ordered = members::order(&pages, target_doc, &ask, math);
     ordered.limited.first().copied()
 }
 

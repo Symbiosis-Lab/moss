@@ -44,7 +44,6 @@ pub(crate) use nav_note::note_home_map_of_nav_root;
 pub(crate) use stream::is_stream_host;
 pub(crate) use repeat_note::{note_repeated_child_listing, ListingHost};
 use maps::place_map_with_placement;
-use moss_core::page::site_page::SitePage;
 
 use std::path::Path;
 
@@ -253,20 +252,15 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
 
 /// Auto-detect children rendering style and grouping.
 ///
-/// Checks whether children have "rich" metadata (covers or descriptions)
-/// and whether any child carries a date to pick the best defaults.
-/// Author-provided overrides (frontmatter or cascade) take priority
-/// over auto-detection; the returned `Resolved<String>` carries the
-/// origin so downstream renderers can branch on `is_explicit()`. The
-/// axis-driven group override (auto-detected `year` suppressed under a
-/// non-Date axis) lives in `effective_group` below.
+/// The style and group a listing of `docs` draws: the author's override when
+/// set, else detected from whether its children are rich and dated.
 pub(crate) fn resolve_children_config(
     docs: &[&ParsedDocument],
     style_override: Option<&moss_core::Resolved<String>>,
     group_override: Option<&moss_core::Resolved<String>>,
     math: bool,
 ) -> (moss_core::Resolved<String>, moss_core::Resolved<String>) {
-    resolve_children_config_by(docs, style_override, group_override, |d| is_rich_child(d, math))
+    moss_core::page::listing::listing_config(docs, style_override, group_override, |d| is_rich_child(d, math))
 }
 
 /// The first-paragraph (or explicit) description a listing card shows.
@@ -283,66 +277,6 @@ pub(crate) fn is_rich(d: &ParsedDocument, excerpt: &Option<String>) -> bool {
 /// A child with a cover or a description, which a listing can show as a card.
 pub(crate) fn is_rich_child(d: &ParsedDocument, math: bool) -> bool {
     is_rich(d, &card_excerpt(d, math))
-}
-
-/// [`resolve_children_config`] for a caller that already knows which children
-/// are rich: the description is a first-paragraph excerpt, so asking it again
-/// for each group a child is listed in costs a scan of its body each time.
-pub(crate) fn resolve_children_config_by(
-    docs: &[&ParsedDocument],
-    style_override: Option<&moss_core::Resolved<String>>,
-    group_override: Option<&moss_core::Resolved<String>>,
-    is_rich: impl Fn(&ParsedDocument) -> bool,
-) -> (moss_core::Resolved<String>, moss_core::Resolved<String>) {
-    let style = match style_override {
-        Some(r) => r.clone(),
-        None => {
-            // Bulk, not exceptions: one claimed term must not turn 55 bare labels
-            // into empty archive rows. Mostly-rich is an archive at any size, and
-            // so is a rich page beside at most 3 bare ones; what summary cannot
-            // survive is a screenful of them. Boundary pinned by
-            // bulk_style_tests.
-            let rich = docs.iter().filter(|d| is_rich(d)).count();
-            let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
-            let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
-            // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
-            // those out one per row.
-            let auto_value = match (has_rich, any_has_date) {
-                (false, false) => "grid".to_string(),
-                (true, _) => "summary".to_string(),
-                (false, true) => "list".to_string(),
-            };
-            moss_core::Resolved::auto(auto_value)
-        }
-    };
-    let group = match group_override {
-        Some(r) => r.clone(),
-        None => {
-            // Any dated child under a non-summary style auto-groups by year
-            // (matching the schema default "year (default for list)" and the
-            // contract). A single dated post gets a year heading too; a
-            // dateless listing stays flat. Auto-detected `year` is still
-            // suppressed under a non-Date sort axis in `effective_group`.
-            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead" | "stream") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
-                "year".to_string()
-            } else {
-                "none".to_string()
-            };
-            moss_core::Resolved::auto(auto_value)
-        }
-    };
-    (style, group)
-}
-
-/// The `children_group` a listing draws: an explicit one always, a detected
-/// one only on a date order (a title, weight or typed order is a sequence,
-/// which year sections would regroup).
-pub(crate) fn effective_group(group_resolved: &moss_core::Resolved<String>, sort: &ResolvedSort) -> String {
-    if !sort.is_date_order() && !group_resolved.is_explicit() {
-        "none".to_string()
-    } else {
-        group_resolved.value.clone()
-    }
 }
 
 /// Compute the latest article date within a folder.
@@ -1216,16 +1150,9 @@ fn is_index_source(from_path: &str, all_docs: &[ParsedDocument]) -> bool {
     moss_core::home::is_home_file(&stem_lower, &parent_name)
 }
 
-/// Select the child documents a listing resolves to — the SINGLE source of
-/// truth for "which docs does this listing contain", keyed on an
-/// ALREADY-SLUGIFIED folder id (`""` for the site root).
-///
-/// Three consumers: `render_one` (the marker path), the synthetic
-/// folder-index loop in `render/blocking.rs`, and the listing-group digest in
-/// `render/incremental/listing.rs`. The blocking loop used to
-/// carry an inlined second copy — so "one selector, therefore no drift" was
-/// false, and the rule that the digest honours every rule the renderer
-/// honours, structurally, could not hold.
+/// The documents a listing of the slugged folder (`""` for the root) shows:
+/// core's selector, which the renderer, the folder-index loop and the
+/// listing-group digest all ask, so they cannot disagree.
 pub(crate) fn select_children_by_slug<'a>(
     folder_id_slug: &str,
     is_flatten: bool,
@@ -1235,148 +1162,18 @@ pub(crate) fn select_children_by_slug<'a>(
     all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
 ) -> Vec<&'a ParsedDocument> {
-    let target_url = if folder_id_slug.is_empty() {
-        "index.html".to_string()
-    } else {
-        format!("{}/index.html", folder_id_slug)
+    let scope = moss_core::page::listing::ListingScope {
+        folder: folder_id_slug,
+        flatten: is_flatten,
+        default_tree_only: scope_default_tree,
+        exclude_nav,
+        edition,
     };
-    // A page of the site language's own tree is in the default edition, and
-    // sits under that tree's folder, so only another edition's page differs.
-    let own_tree = moss_core::home::lang_tree_prefix(&target_url).unwrap_or("");
-
-    // For root folder (folder_id_slug = ""), prefix is empty so that all
-    // non-homepage docs are considered candidates; starts_with("") is always true.
-    // For non-root, prefix includes the trailing slash to avoid partial matches
-    // (e.g. "blog/" doesn't match "blog-extra/index.html").
-    let folder_prefix = if folder_id_slug.is_empty() {
-        String::new()
-    } else {
-        format!("{}/", folder_id_slug)
+    let site = moss_core::page::listing::ListingSite {
+        has_language_trees: project.has_language_trees,
+        has_content_folders: project.has_content_folders,
     };
-    // Folders whose home says `children_listed: here`: their pages stay out of
-    // a flattened listing of any folder above them. A listing of the folder
-    // itself, or of one inside it, is not above it.
-    let kept_here: Vec<&str> = if is_flatten {
-        all_docs
-            .iter()
-            .filter(|d| d.kind == PageKind::Folder && d.children_listed.as_deref() == Some("here"))
-            .filter_map(|d| d.url_path.strip_suffix("index.html"))
-            .filter(|prefix| !prefix.is_empty() && !folder_prefix.starts_with(prefix))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let picked: Vec<&ParsedDocument> = all_docs
-        .iter()
-        .filter(|d| {
-            if d.url_path == target_url {
-                return false;
-            }
-            // Folder embeds publish a list of articles — `is_listable_in`
-            // covers draft/slot_only and hidden folders in one shot. A
-            // page-less entry is a row in its own folder only, never a term
-            // page or an `also_in` one.
-            if !d.is_listable_in(&folder_prefix)
-                && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix) && d.reaches(&folder_prefix))
-            {
-                return false;
-            }
-            // scope_default_tree: a home lists its own edition only (gated by
-            // `has_language_trees`). Set by `home_defaults` for a home in
-            // default mode only.
-            if scope_default_tree
-                && project.has_language_trees
-                && !d.edition.is_empty()
-                && !d.edition.eq_ignore_ascii_case(own_tree)
-            {
-                return false;
-            }
-            // exclude_nav: skip folder pages that act as top-level nav items.
-            // Only set by synthesize_children_marker for homepage default-mode.
-            if exclude_nav
-                && crate::build::components::nav::is_listing_nav_item(d, project.has_content_folders)
-            {
-                return false;
-            }
-            // also_in: include docs that declare membership in this folder
-            let in_folder = (d.url_path.starts_with(&folder_prefix)
-                && !kept_here.iter().any(|prefix| d.url_path.starts_with(prefix)))
-                || d.also_in.as_ref().map_or(false, |folders| {
-                    folders.contains(&folder_id_slug.to_string())
-                });
-            if !in_folder {
-                return false;
-            }
-            if is_flatten {
-                d.kind.is_listable_at_depth_all()
-            } else {
-                if !d.kind.is_listable_at_depth_direct() {
-                    return false;
-                }
-                // An `also_in` doc need not live under this folder at all — its
-                // declaration IS the membership claim, nothing to depth-check.
-                d.url_path
-                    .strip_prefix(folder_prefix.as_str())
-                    .is_none_or(|rem| {
-                        !rem.trim_end_matches("/index.html")
-                            .trim_end_matches('/')
-                            .contains('/')
-                    })
-            }
-        })
-        .collect();
-    one_per_translation(picked, edition)
-}
-
-/// A listing that reaches more than one edition shows a translated piece once:
-/// the page in the listing page's own edition, else the default edition's, else
-/// the first picked. Pages of one edition never displace each other, so a
-/// listing within an edition is returned as it came.
-fn one_per_translation<'a>(picked: Vec<&'a ParsedDocument>, edition: &str) -> Vec<&'a ParsedDocument> {
-    if picked.iter().all(|d| d.edition == picked[0].edition) {
-        return picked;
-    }
-    let rank = |d: &ParsedDocument| {
-        if d.edition.eq_ignore_ascii_case(edition) { 0 } else if d.edition.is_empty() { 1 } else { 2 }
-    };
-    let at: std::collections::HashMap<&str, usize> =
-        picked.iter().enumerate().map(|(i, d)| (d.url_path.as_str(), i)).collect();
-    let better_twin = |i: usize, d: &ParsedDocument| {
-        d.translations.iter().filter_map(|t| at.get(t.url_path.as_str())).any(|&j| {
-            let twin = picked[j];
-            twin.edition != d.edition && (rank(twin), j) < (rank(d), i)
-        })
-    };
-    let dropped: Vec<bool> = picked.iter().enumerate().map(|(i, d)| better_twin(i, d)).collect();
-    picked.into_iter().zip(dropped).filter(|(_, gone)| !gone).map(|(d, _)| d).collect()
-}
-
-/// What a home page lists when its frontmatter says nothing: shared by the
-/// renderer and the incremental group keys.
-pub(crate) struct HomeDefaults<'a> {
-    /// The folder it lists: `""` for the root home, `de` for `de/index.html`.
-    pub tree: &'a str,
-    /// Depth defaults to "all" rather than "direct".
-    pub depth_all: bool,
-    /// Pages of other editions and top-level nav pages are left out.
-    pub scoped: bool,
-}
-
-/// The root home lists its whole tree. An edition's own `<lang>/index.md`
-/// does the same for its tree, unless it sets `children_source` or
-/// `children_depth` itself: either one is the author choosing a listing, and
-/// `children_depth: direct` is the way back to the narrow edition listing.
-pub(crate) fn home_defaults(doc: &ParsedDocument) -> HomeDefaults<'_> {
-    let tree = moss_core::home::lang_tree_prefix(&doc.url_path).unwrap_or("");
-    let is_root = doc.url_path == "index.html";
-    let is_edition_home =
-        !is_root && !doc.edition.is_empty() && crate::build::render::lang_roots::is_language_root(&doc.url_path);
-    let edition_defaults = is_edition_home && doc.children_source.is_none() && doc.children_depth.is_none();
-    HomeDefaults {
-        tree,
-        depth_all: is_root || edition_defaults,
-        scoped: doc.children_source.is_none() && (is_root || edition_defaults),
-    }
+    moss_core::page::listing::select(&scope, all_docs, site)
 }
 
 enum Listed<'a> {
@@ -1533,7 +1330,9 @@ fn order_listed<'a>(
 ) -> members::Ordered<'a> {
     let style = parsed.style.as_ref().filter(|style| style.as_str() != "map").map(|s| moss_core::Resolved::frontmatter(s.clone()));
     let group = parsed.group.as_ref().map(|g| moss_core::Resolved::frontmatter(g.clone()));
-    members::order(pages, target_doc, is_flatten, parsed.sort, style.as_ref(), group.as_ref(), parsed.limit, parsed.when, math, now)
+    let now = upcoming::minute(now);
+    let ask = moss_core::page::listing::OrderAsk { flatten: is_flatten, sort: parsed.sort, style: style.as_ref(), group: group.as_ref(), limit: parsed.limit, when: parsed.when, now: &now };
+    members::order(pages, target_doc, &ask, math)
 }
 
 /// Render a single resolved marker. `Err` carries the plain-text problem when
@@ -1857,7 +1656,7 @@ fn resolve_more_link_target<'a>(
 ///
 /// A home lists its whole edition (depth "all"), dropping other editions'
 /// pages and top-level nav pages (the nav bar already shows those), unless
-/// `children_source` names another folder on purpose; see [`home_defaults`].
+/// `children_source` names another folder on purpose; see [`moss_core::page::listing::home_defaults`].
 /// `names_scoped_home` is set when `children_source` names an edition home whose
 /// own listing is scoped: the listing then takes that home's filters too.
 /// Any other host lists its own `folder_path` at depth "direct", unfiltered.
@@ -1879,7 +1678,7 @@ pub(crate) fn synthesize_children_marker_for(
 ) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
-    let home = home_defaults(doc);
+    let home = moss_core::page::listing::home_defaults(doc);
     let scoped = home.scoped || names_scoped_home;
     let depth = doc.children_depth.clone().or_else(|| home.depth_all.then(|| "all".to_string()));
     let params = FolderEmbedParams {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `page::listing::select` picks the pages a folder listing shows, generic over `SitePage`, so the build and a host's preview select the same pages; `own_listing` gives the listing a page ends in (its folder, depth and edition scoping), with `own_listing_target`, `named_edition_home`, `home_defaults` and `is_listing_nav_item` beside it. `page::listing::keep`, `order` and `host_listing` apply a listing's `covers`, `when`, sort, limit, style and group, and `event::EventSpan` says when an event ends. `SitePage` gains `also_in`, `translation_urls`, `children_source`, `children_depth`, `children_listed`, `term_listing`, `children_style`, `children_group`, `children_covers`, `children_when`, `children_limit`, `event_span`, `awaits_event_date` and `is_pageless_entry`, and `PageFacts` carries them (**BREAKING** for an implementor: thirteen required methods; `is_pageless_entry` has a default); `site_pages` fills them, cascading `children_depth`, `children_style` and `children_group` and reading `sidebar:` as the build does.
+- `frontmatter_typed::project_typed` sets `children_source` from a `children: "[[Folder]]"` value, which the lenient `children` field alone cannot carry.
 - `heading::folder_title` and `heading::folder_heading` draw a folder home's `<h1 class="moss-folder-title">`: none when the body's own `# Heading` or an opening hero's heading stands in, hidden behind a hero, and hidden on a site or edition home whose header names the site. `SitePages::folder_heading` gives it for a page of the site, so a host's preview of a folder home carries the title the build draws.
 - `FolderEmbedParams::skip_repeats`, from the embed option `repeat:none` (written `repeat=none` in the listing marker): the listing leaves out the pages a listing earlier on the same page already shows, before `limit` counts. Any other `repeat:` value is reported with the unknown keys.
 - `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING:** `PageKind::is_listable_at_depth_all` and `PageKind::is_listable_at_depth_direct` are gone. `page::listing::select` was their one caller: a flattened listing leaves out folder homes, and a direct one keeps every kind.
 - **BREAKING:** `page::site_sources::resolve_site_default_lang` is gone; read `.code` off `resolve_site_lang`, which also says whether the language was declared.
 
 ## [0.29.0] - 2026-11-20

@@ -1333,7 +1333,7 @@ pub fn generate_blocking_content_for_build(
             }
         }
         #[cfg(test)]
-        crate::build::site_pages_tests::record(root, &documents);
+        crate::build::site_pages_tests::record(root, &documents, &term_index, project_structure);
 
         // Inline `:::subscribe` forms get their page's language scope, judged
         // the same way the footer form's is, now that every page has parsed,
@@ -2232,7 +2232,7 @@ pub fn generate_blocking_content_for_build(
             // already a URL-space (slugified) key, and the synthetic index
             // always lists direct children with neither homepage filter.
             // An edition's generated home lists like an authored one.
-            let home = crate::build::folder_embed::home_defaults(&documents[entry.document_index]);
+            let home = moss_core::page::listing::home_defaults(&documents[entry.document_index]);
             let folder_docs: Vec<&ParsedDocument> =
                 crate::build::folder_embed::select_children_by_slug(
                     folder,

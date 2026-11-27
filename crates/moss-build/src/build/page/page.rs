@@ -106,7 +106,7 @@ pub fn generate_year_grouped_article_list(
             // date `Unknown`.
             if doc.kind != PageKind::Article { return false; }
             // Filter out nav items (they appear in navigation, not article list)
-            if crate::build::components::nav::is_listing_nav_item(doc, project.has_content_folders) {
+            if moss_core::page::listing::is_listing_nav_item(*doc, project.has_content_folders) {
                 return false;
             }
             true

@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 
 use crate::frontmatter_typed::{BreadcrumbSetting, FrontMatter, SeriesField};
+use crate::event::EventSpan;
 use crate::i18n::Language;
+use crate::resolved::Resolved;
 use crate::sort::{ResolvedSort, SortField, SortableDoc, SortableLabel};
 
 /// The site's not-found page, served at `/404/`.
@@ -52,6 +54,35 @@ pub trait SitePage: SortableDoc + SortableLabel {
     fn translates_home(&self) -> bool;
     /// The `[build].passthrough` folder holding this page.
     fn passthrough_root(&self) -> Option<&str>;
+    /// The folders the page's `also_in:` lists it in too.
+    fn also_in(&self) -> &[String];
+    /// The addresses of the page's translations.
+    fn translation_urls(&self) -> impl Iterator<Item = &str>;
+    fn children_source(&self) -> Option<&str>;
+    fn children_depth(&self) -> Option<&str>;
+    /// `children_listed:`; `here` keeps the folder's pages out of a
+    /// flattened listing above it.
+    fn children_listed(&self) -> Option<&str>;
+    /// The term whose members this page lists, when it claims one.
+    fn term_listing(&self) -> Option<&str>;
+    /// The page's own listing settings, cascaded from its folders.
+    fn children_style(&self) -> Option<&Resolved<String>>;
+    fn children_group(&self) -> Option<&Resolved<String>>;
+    fn children_covers(&self) -> Option<&str>;
+    fn children_when(&self) -> Option<&str>;
+    fn children_limit(&self) -> Option<u32>;
+    /// The event's times when the page is an event.
+    fn event_span(&self) -> Option<EventSpan>;
+    /// A `start:` with no usable value: an event still waiting for its date.
+    fn awaits_event_date(&self) -> bool;
+
+    /// A partial that says `listed: true`: a row in its own folder's listings
+    /// with no page behind it. Only folder listings take it; every surface
+    /// that needs an address (feeds, sitemap, search, prev/next, the "N pages"
+    /// count) keeps to [`Self::is_listable_in`].
+    fn is_pageless_entry(&self) -> bool {
+        self.partial() && self.listed() == Some(true)
+    }
 
     /// The text the site's own navigation shows for the page.
     fn nav_text(&self) -> &str {
@@ -132,6 +163,19 @@ pub struct PageFacts {
     pub breadcrumb: Option<BreadcrumbSetting>,
     pub translates_home: bool,
     pub passthrough_root: Option<String>,
+    pub also_in: Vec<String>,
+    pub translations: Vec<String>,
+    pub children_source: Option<String>,
+    pub children_depth: Option<String>,
+    pub children_listed: Option<String>,
+    pub term_listing: Option<String>,
+    pub children_style: Option<Resolved<String>>,
+    pub children_group: Option<Resolved<String>>,
+    pub children_covers: Option<String>,
+    pub children_when: Option<String>,
+    pub children_limit: Option<u32>,
+    pub event: Option<EventSpan>,
+    pub awaits_event_date: bool,
 }
 
 impl PageFacts {
@@ -164,6 +208,19 @@ impl PageFacts {
             breadcrumb: page.breadcrumb(),
             translates_home: page.translates_home(),
             passthrough_root: page.passthrough_root().map(str::to_string),
+            also_in: page.also_in().to_vec(),
+            translations: page.translation_urls().map(str::to_string).collect(),
+            children_source: page.children_source().map(str::to_string),
+            children_depth: page.children_depth().map(str::to_string),
+            children_listed: page.children_listed().map(str::to_string),
+            term_listing: page.term_listing().map(str::to_string),
+            children_style: page.children_style().cloned(),
+            children_group: page.children_group().cloned(),
+            children_covers: page.children_covers().map(str::to_string),
+            children_when: page.children_when().map(str::to_string),
+            children_limit: page.children_limit(),
+            event: page.event_span(),
+            awaits_event_date: page.awaits_event_date(),
         }
     }
 }
@@ -202,6 +259,19 @@ impl SitePage for PageFacts {
     fn breadcrumb(&self) -> Option<BreadcrumbSetting> { self.breadcrumb }
     fn translates_home(&self) -> bool { self.translates_home }
     fn passthrough_root(&self) -> Option<&str> { self.passthrough_root.as_deref() }
+    fn also_in(&self) -> &[String] { &self.also_in }
+    fn translation_urls(&self) -> impl Iterator<Item = &str> { self.translations.iter().map(String::as_str) }
+    fn children_source(&self) -> Option<&str> { self.children_source.as_deref() }
+    fn children_depth(&self) -> Option<&str> { self.children_depth.as_deref() }
+    fn children_listed(&self) -> Option<&str> { self.children_listed.as_deref() }
+    fn term_listing(&self) -> Option<&str> { self.term_listing.as_deref() }
+    fn children_style(&self) -> Option<&Resolved<String>> { self.children_style.as_ref() }
+    fn children_group(&self) -> Option<&Resolved<String>> { self.children_group.as_ref() }
+    fn children_covers(&self) -> Option<&str> { self.children_covers.as_deref() }
+    fn children_when(&self) -> Option<&str> { self.children_when.as_deref() }
+    fn children_limit(&self) -> Option<u32> { self.children_limit }
+    fn event_span(&self) -> Option<EventSpan> { self.event }
+    fn awaits_event_date(&self) -> bool { self.awaits_event_date }
 }
 
 /// Every page of the site as the build sees it once all pages are read: its
@@ -251,7 +321,10 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
         cascades.push(fm.cascade.take());
         translation_keys.push(fm.translation_key.clone());
         fill_inferred(&mut fm, &path, texts, &graph, bundle);
-        let (page, lang_tag) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
+        let (mut page, lang_tag) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
+        // An empty `start:` parses to nothing, yet it still marks an event waiting for its date.
+        let text = &texts[path.as_str()];
+        page.awaits_event_date = page.event.is_none() && text.contains("start") && crate::frontmatter::key_spans(text).iter().any(|(key, _)| key == "start");
         pages.push(page);
         lang_tags.push(lang_tag);
     }
@@ -280,12 +353,14 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     for (i, sort) in sorts {
         pages[i].direct_children_sort = Some(sort);
     }
-    let has_content_folders = super::nav::has_content_folders(bundle.files.iter().map(String::as_str).filter(|f| {
+    let content_files = || bundle.files.iter().map(String::as_str).filter(|f| {
         std::path::Path::new(f).extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "md" | "html" | "htm"))
-    }));
+    });
+    let has_content_folders = super::nav::has_content_folders(content_files());
+    let has_language_trees = content_files().any(|f| crate::home::lang_tree_prefix(f).is_some());
     let home = pages.iter().find(|p| p.url_path == "index.html");
     let site_name = crate::home::site_name(home.and_then(|p| p.source_path.as_deref()), home.map(|p| p.label.as_str()), root_name);
-    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, site_lang, has_content_folders, site_name }
+    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, site_lang, has_content_folders, has_language_trees, site_name }
 }
 
 /// Each page's language edition, and the passthrough folder it sits in,
@@ -316,11 +391,12 @@ fn mark_home_translations(pages: &mut [PageFacts], paths: &[&str], lang_tags: Ve
         .collect::<Vec<_>>());
     for (page, links) in pages.iter_mut().zip(translations) {
         page.translates_home = links.iter().any(|l| l.url_path == "index.html");
+        page.translations = links.into_iter().map(|l| l.url_path).collect();
     }
 }
 
-/// Of the keys a folder cascades, the facts a pass reads: `sort`, `nav` and
-/// `breadcrumb`. A page's own value wins. The build parses them in its own
+/// Of the keys a folder cascades, the facts a pass reads: `sort`, `nav`,
+/// `breadcrumb`, `children_depth`, `children_style` and `children_group`. A page's own value wins. The build parses them in its own
 /// cascade pass; `core_site_pages_match_the_builds_pages_on_every_fixture` holds the two equal.
 fn apply_folder_cascades(pages: &mut [PageFacts], cascades: &[Option<HashMap<String, serde_yaml::Value>>]) {
     let plan = super::inherit::cascade_plan(pages.iter().zip(cascades).map(|(p, c)| (p.url_path.as_str(), c.is_some())));
@@ -330,11 +406,17 @@ fn apply_folder_cascades(pages: &mut [PageFacts], cascades: &[Option<HashMap<Str
         let sort = value("sort").and_then(|v| serde_yaml::from_value::<SortField>(v).ok());
         let nav = value("nav").and_then(|v| serde_yaml::from_value::<bool>(v).ok());
         let breadcrumb = value("breadcrumb").and_then(|v| serde_yaml::from_value::<BreadcrumbSetting>(v).ok());
+        let children_depth = value("children_depth").and_then(|v| serde_yaml::from_value::<String>(v).ok());
+        let style = value("children_style").and_then(|v| serde_yaml::from_value::<String>(v).ok()).map(Resolved::cascade);
+        let group = value("children_group").and_then(|v| serde_yaml::from_value::<String>(v).ok()).map(Resolved::cascade);
         for i in step.targets {
             let page = &mut pages[i];
             if page.declared_sort.is_none() { page.declared_sort = sort.clone(); }
             if page.nav.is_none() { page.nav = nav; }
             if page.breadcrumb.is_none() { page.breadcrumb = breadcrumb; }
+            if page.children_depth.is_none() { page.children_depth = children_depth.clone(); }
+            if page.children_style.is_none() { page.children_style = style.clone(); }
+            if page.children_group.is_none() { page.children_group = group.clone(); }
         }
     }
 }
@@ -347,11 +429,17 @@ pub struct SitePages {
     pub pages: Vec<PageFacts>,
     pub site_lang: Language,
     pub has_content_folders: bool,
+    pub has_language_trees: bool,
     /// The home page's title, else the folder's name.
     pub site_name: String,
 }
 
 impl SitePages {
+    /// What a listing reads about the site as a whole.
+    pub fn listing_site(&self) -> super::listing::ListingSite {
+        super::listing::ListingSite { has_language_trees: self.has_language_trees, has_content_folders: self.has_content_folders }
+    }
+
     /// The series navigation drawn on the page at `path`, as the build draws it.
     /// `url` turns a url path into a link.
     pub fn series_nav(&self, path: &str, url: &dyn Fn(&str) -> String, typesetting: Option<&str>) -> Option<String> {
@@ -492,7 +580,10 @@ fn one_page(
 ) -> (PageFacts, String) {
     use crate::heading;
     fm.normalize();
-    let event_when = fm.start.as_deref().and_then(|s| crate::event::EventTime::parse(s).ok()).map(|t| t.sort_key());
+    // `sidebar:` lists a folder in the rail, read as `children_source`.
+    let _ = crate::frontmatter_typed::apply_sidebar_alias(&mut fm);
+    let event = EventSpan::from_fields(fm.start.as_deref(), fm.end.as_deref());
+    let event_when = event.map(|e| e.start.sort_key());
     let dated = fm.date.is_some() || fm.start.is_some();
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
     if !dated {
@@ -558,6 +649,19 @@ fn one_page(
         breadcrumb: fm.breadcrumb,
         translates_home: false,
         passthrough_root: None,
+        also_in: fm.also_in.unwrap_or_default(),
+        translations: Vec::new(),
+        children_source: fm.children_source,
+        children_depth: fm.children_depth,
+        children_listed: fm.children_listed,
+        term_listing: None,
+        children_style: fm.children_style.map(Resolved::frontmatter),
+        children_group: fm.children_group.map(Resolved::frontmatter),
+        children_covers: fm.children_covers,
+        children_when: fm.children_when,
+        children_limit: fm.children_limit,
+        awaits_event_date: false,
+        event,
         url_path,
     };
     (page, lang_tag)

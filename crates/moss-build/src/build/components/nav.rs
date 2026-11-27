@@ -381,28 +381,6 @@ impl<'a> NavigationBuilder<'a> {
 
 }
 
-/// Whether a document should be excluded from article listings because
-/// it's a navigation item (appears in the nav bar instead).
-///
-/// In organized mode, all top-level non-index files (of any edition) are nav items.
-/// In flat mode, no files are auto-excluded from listings — even keyword
-/// nav files like "about" appear in both the nav bar AND the article list.
-/// (The nav bar uses `is_nav_keyword` to decide what to show; this function
-/// decides what to *exclude from listings*.)
-pub fn is_listing_nav_item(doc: &crate::build::types::ParsedDocument, has_content_folders: bool) -> bool {
-    match doc.nav {
-        Some(true) => true,
-        Some(false) => false,
-        None => {
-            if has_content_folders {
-                doc.is_root_level && !crate::build::render::lang_roots::is_language_root(&doc.url_path)
-            } else {
-                false // Flat mode: all root files are articles in listings
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "nav_tests.rs"]
 mod tests;

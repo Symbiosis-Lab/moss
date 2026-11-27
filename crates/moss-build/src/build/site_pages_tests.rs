@@ -11,6 +11,29 @@ use moss_core::page::site_page::PageFacts;
 pub(crate) struct Captured {
     pub root_name: String,
     pub pages: BTreeMap<String, PageFacts>,
+    /// Each listing host's own listing, by source path: what it asks the
+    /// selector, and the addresses the build's selection gave.
+    pub listings: BTreeMap<String, (Listing, Vec<String>)>,
+    /// Each page's richness and listing cover by address, which core reads
+    /// from the cards it draws rather than from its facts.
+    pub cards: HashMap<String, (bool, bool)>,
+    pub has_language_trees: bool,
+}
+
+pub(crate) struct Listing {
+    pub folder: String,
+    pub flatten: bool,
+    pub scoped: bool,
+    pub edition: String,
+    /// The build's own listing as shown: its addresses, style and group.
+    pub shown: Option<(Vec<String>, moss_core::Resolved<String>, String)>,
+}
+
+/// The minute both sides order upcoming events against.
+const NOW: &str = "2026-06-15T12:00";
+
+fn now() -> chrono::NaiveDateTime {
+    chrono::NaiveDateTime::parse_from_str(NOW, "%Y-%m-%dT%H:%M").unwrap()
 }
 
 static CAPTURED: Mutex<Vec<(PathBuf, Captured)>> = Mutex::new(Vec::new());
@@ -18,9 +41,36 @@ static CAPTURED: Mutex<Vec<(PathBuf, Captured)>> = Mutex::new(Vec::new());
 pub(crate) fn record(
     root: &crate::vault::paths::VaultRoot,
     docs: &[crate::build::types::ParsedDocument],
+    terms: &crate::build::terms::TermIndex,
+    project: &crate::types::content::ProjectStructure,
 ) {
-    let pages = docs.iter().filter_map(|d| Some((d.source_path.clone()?, PageFacts::from_page(d)))).collect();
-    let captured = Captured { root_name: root.name().to_string(), pages };
+    // Core derives no term pages yet, so a page's term memberships are the build's alone.
+    let term_folders: std::collections::HashSet<&str> = terms.term_keys().chain(terms.roots_in_use()).collect();
+    let facts = |d| {
+        let mut facts = PageFacts::from_page(d);
+        facts.also_in.retain(|f| !term_folders.contains(f.as_str()));
+        facts.term_listing = None;
+        facts
+    };
+    let pages = docs.iter().filter_map(|d| Some((d.source_path.clone()?, facts(d)))).collect();
+    use crate::build::render::incremental::listing::{own_listing_key, Depth};
+    let listings = docs.iter()
+        .filter_map(|d| Some((d.source_path.clone()?, own_listing_key(d, docs)?)))
+        .filter(|(_, key)| !term_folders.contains(key.folder_slug.as_str()))
+        .map(|(path, key)| {
+            let flatten = key.depth == Depth::All;
+            let picked = crate::build::folder_embed::select_children_by_slug(&key.folder_slug, flatten, key.scope_default_tree, key.exclude_nav, &key.edition, docs, project);
+            let shown = docs.iter().find(|d| d.source_path.as_deref() == Some(path.as_str()))
+                .and_then(|host| crate::build::folder_embed::members::host_listing(host, docs, project, now()))
+                .map(|o| (o.limited.iter().map(|d| d.url_path.clone()).collect(), o.style, o.group));
+            let listing = Listing { folder: key.folder_slug, flatten, scoped: key.scope_default_tree, edition: key.edition, shown };
+            (path, (listing, picked.iter().map(|d| d.url_path.clone()).collect()))
+        })
+        .collect();
+    let cards = docs.iter()
+        .map(|d| (d.url_path.clone(), (crate::build::folder_embed::is_rich_child(d, true), d.listing_cover().is_some())))
+        .collect();
+    let captured = Captured { root_name: root.name().to_string(), pages, listings, cards, has_language_trees: project.has_language_trees };
     if let Ok(mut all) = CAPTURED.lock() {
         all.push((root.path().to_path_buf(), captured));
     }
@@ -117,6 +167,8 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     let (mut no_expected_file, mut forced_trails, mut one_sided) = (0, 0, 0);
     let mut masthead_report = String::new();
     let (mut headings, mut explorer_roots, mut heading_report) = (0, 0, String::new());
+    let (mut listings, mut listing_report) = (0, String::new());
+    let (mut shown_rows, mut styles) = (0, std::collections::BTreeSet::new());
     for name in &names {
         let folder = scratch.join(name).join("site");
         copy_dir(&fixtures.join(name).join("input"), &folder);
@@ -181,6 +233,32 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
                 masthead_report.push_str(&format!("{name} {path}\n  build {built}\n  core  {core}\n"));
             }
         }
+        assert_eq!(site.has_language_trees, captured.has_language_trees, "{name}: has_language_trees");
+        for (path, (listing, built)) in &captured.listings {
+            let Some(page) = site.paths.iter().position(|p| p == path).map(|i| &site.pages[i]) else { continue };
+            let own = moss_core::page::listing::own_listing(page, &site.pages);
+            let expected = moss_core::page::listing::OwnListing { folder: listing.folder.clone(), flatten: listing.flatten, scoped: listing.scoped };
+            if own.as_ref() != Some(&expected) {
+                listing_report.push_str(&format!("{name} {path}\n  build {expected:?}\n  core  {own:?}\n"));
+                continue;
+            }
+            let core: Vec<String> = moss_core::page::listing::select(&expected.scope(&listing.edition), &site.pages, site.listing_site()).iter().map(|p| p.url_path.clone()).collect();
+            listings += 1;
+            if &core != built {
+                listing_report.push_str(&format!("{name} {path}\n  build {built:?}\n  core  {core:?}\n"));
+                continue;
+            }
+            let card = |p: &PageFacts| captured.cards.get(&p.url_path).copied().unwrap_or_default();
+            let shown = moss_core::page::listing::host_listing(page, &site.pages, site.listing_site(), NOW, |p| card(p).0, |p| card(p).1)
+                .map(|o| (o.limited.iter().map(|p| p.url_path.clone()).collect::<Vec<_>>(), o.style, o.group));
+            if let Some((rows, style, group)) = &shown {
+                shown_rows += rows.len();
+                styles.insert(format!("{}/{group}", style.value));
+            }
+            if shown != listing.shown {
+                listing_report.push_str(&format!("{name} {path} shown\n  build {:?}\n  core  {shown:?}\n", listing.shown));
+            }
+        }
         let core: BTreeMap<String, PageFacts> = site.paths.into_iter().zip(site.pages).collect();
         assert!(!captured.pages.is_empty() || texts.is_empty(), "{name}: the build captured no pages");
         compared += captured.pages.len();
@@ -226,6 +304,9 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
     assert!(compared > 0, "no page was compared");
     assert!(mastheads > 0, "no masthead was compared");
     assert!(headings > 0, "no folder heading was compared");
+    eprintln!("listings compared {listings}, {shown_rows} rows shown, styles/groups {styles:?}");
+    assert!(listings > 0, "no listing was compared");
+    assert!(listing_report.is_empty(), "core's listing selection differs from the build's:\n{listing_report}");
     assert!(heading_report.is_empty(), "the preview's folder heading differs from the build's:\n{heading_report}");
     assert!(masthead_report.is_empty(), "the preview's masthead differs from the build's:\n{masthead_report}");
     assert_eq!(failures, 0, "core's pages differ from the build's in {failures} of {} fixtures:\n{report}", names.len());

@@ -389,10 +389,8 @@ pub struct FrontMatter {
     /// Whether to render child pages below content.
     /// Accepts bool (true/false) or a wikilink/path string like "[[News]]".
     /// The lenient deserializer resolves ANY non-bool string to `Some(true)`
-    /// (= render children on); the folder reference itself is extracted into
-    /// `children_source` by `crate::frontmatter_union::normalize_children`
-    /// in the pipeline. This `Option<bool>` is the RESOLVED form the render
-    /// layer consumes — its type is unchanged so no render-layer ripple.
+    /// (= render children on); [`project_typed`] puts the folder reference
+    /// itself in `children_source`.
     #[serde(default, deserialize_with = "deserialize_children_lenient")]
     pub children: Option<bool>,
     /// Wikilink reference for targeted children rendering (e.g. "[[News]]").
@@ -554,6 +552,16 @@ pub struct FieldWarning {
 /// custom-deserializer fields the validation engine can't see (the gap that an
 /// earlier schema-driven attempt missed). Pure; no I/O.
 pub fn project_typed(values: &serde_yaml::Mapping) -> (FrontMatter, Vec<FieldWarning>) {
+    let (mut fm, warnings) = project_fields(values);
+    if let Some(children) = values.get("children") {
+        let norm = crate::frontmatter_union::normalize_children(children);
+        fm.children = Some(norm.children);
+        fm.children_source = norm.source;
+    }
+    (fm, warnings)
+}
+
+fn project_fields(values: &serde_yaml::Mapping) -> (FrontMatter, Vec<FieldWarning>) {
     // Happy path: serde_yaml coerces scalars (numeric uid/title → string) and
     // ignores unknown fields, so all coercible inputs succeed with no warnings.
     if let Ok(fm) = serde_yaml::from_value::<FrontMatter>(serde_yaml::Value::Mapping(values.clone())) {
@@ -780,11 +788,9 @@ where
 ///
 /// Accepts `bool` OR a string. A bool passes through; a string is resolved via
 /// the SHARED `crate::frontmatter_union::normalize_children` so the build
-/// pipeline and the editor agree byte-for-byte on what a value means. The folder
-/// reference carried by a string is recovered separately by calling
-/// `normalize_children` on the raw value in the pipeline (this deserializer only
-/// produces the resolved `Option<bool>`; it cannot write the sibling
-/// `children_source`).
+/// pipeline and the editor agree byte-for-byte on what a value means. A field
+/// deserializer cannot write the sibling `children_source`, so
+/// [`project_typed`] does.
 pub fn deserialize_children_lenient<'de, D>(
     deserializer: D,
 ) -> Result<Option<bool>, D::Error>

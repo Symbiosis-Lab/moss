@@ -32,12 +32,7 @@ pub struct EventFields {
 
 impl EventFields {
     pub fn from_frontmatter(fm: &moss_core::frontmatter_typed::FrontMatter) -> Option<Self> {
-        use moss_core::event::{check_end_after_start, EventTime};
-        let start_raw = fm.start.as_deref()?;
-        let start = EventTime::parse(start_raw).ok()?;
-        let end = fm.end.as_deref()
-            .filter(|end| check_end_after_start(start_raw, end).is_ok())
-            .and_then(|end| EventTime::parse(end).ok());
+        let moss_core::event::EventSpan { start, end } = moss_core::event::EventSpan::from_fields(fm.start.as_deref(), fm.end.as_deref())?;
         Some(Self {
             when: start.sort_key(),
             start,
@@ -755,9 +750,9 @@ pub struct ParsedDocument {
     /// Scan-time axis inference over the folder's DIRECT children only
     /// (not flattened descendants). Renderers must NOT read this field
     /// directly — use [`ParsedDocument::resolve_for_direct_children`]
-    /// (cache hit) or [`ParsedDocument::resolve_for_flatten`]
-    /// (re-computes on the flattened scope) to get the right value for
-    /// what's about to be iterated.
+    /// (cache hit) or `moss_core::sort::resolve_folder_sort` (re-computes on
+    /// the flattened scope) to get the right value for what's about to be
+    /// iterated.
     ///
     /// Populated by `build::scan::sort_inference::populate_direct_children_sorts`.
     pub(crate) direct_children_sort: Option<moss_core::sort::ResolvedSort>,
@@ -902,14 +897,6 @@ impl ParsedDocument {
         }
     }
 
-    /// Re-compute axis on a flattened render scope. Use this when the
-    /// renderer flattens descendants (`children_depth: all`): the scan
-    /// cache only reflects direct-children inference and misrepresents
-    /// the corpus the reader sees.
-    pub fn resolve_for_flatten(&self, scope: &[&ParsedDocument]) -> moss_core::sort::ResolvedSort {
-        moss_core::sort::resolve_folder_sort(self, scope)
-    }
-
     /// The picture listings show for this page: its `cover:`, or else its own
     /// first picture. The page body and the folder cover row read `cover`
     /// itself, so an inferred picture is never drawn twice on its own page.
@@ -955,21 +942,6 @@ impl ParsedDocument {
         self.slot_only
             && self.draft != Some(true)
             && self.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
-    }
-
-    /// A partial that says `listed: true`: a row in its own folder's listings
-    /// with no page behind it. Only folder listings take it; every surface
-    /// that needs an address (feeds, sitemap, search, prev/next, the "N pages"
-    /// count) keeps to [`Self::is_listable`].
-    pub fn is_pageless_entry(&self) -> bool {
-        self.is_partial() && self.listed == Some(true)
-    }
-
-    /// The page names a `start` that moss could not read as a date, an empty
-    /// one included: an event still waiting for its date. It is in no
-    /// calendar file and in neither the past nor the upcoming listing.
-    pub fn awaits_event_date(&self) -> bool {
-        self.event.is_none() && self.raw_frontmatter.contains_key("start")
     }
 
     /// Whether this is a real reader-facing page, eligible for an og/twitter
@@ -1327,6 +1299,19 @@ impl moss_core::page::site_page::SitePage for ParsedDocument {
     fn breadcrumb(&self) -> Option<moss_core::frontmatter_typed::BreadcrumbSetting> { self.breadcrumb }
     fn translates_home(&self) -> bool { self.translations.iter().any(|t| t.url_path == "index.html") }
     fn passthrough_root(&self) -> Option<&str> { self.passthrough_root.as_deref() }
+    fn also_in(&self) -> &[String] { self.also_in.as_deref().unwrap_or_default() }
+    fn translation_urls(&self) -> impl Iterator<Item = &str> { self.translations.iter().map(|t| t.url_path.as_str()) }
+    fn children_source(&self) -> Option<&str> { self.children_source.as_deref() }
+    fn children_depth(&self) -> Option<&str> { self.children_depth.as_deref() }
+    fn children_listed(&self) -> Option<&str> { self.children_listed.as_deref() }
+    fn term_listing(&self) -> Option<&str> { self.term_listing.as_deref() }
+    fn children_style(&self) -> Option<&moss_core::Resolved<String>> { self.children_style.as_ref() }
+    fn children_group(&self) -> Option<&moss_core::Resolved<String>> { self.children_group.as_ref() }
+    fn children_covers(&self) -> Option<&str> { self.children_covers.as_deref() }
+    fn children_when(&self) -> Option<&str> { self.children_when.as_deref() }
+    fn children_limit(&self) -> Option<u32> { self.children_limit }
+    fn event_span(&self) -> Option<moss_core::event::EventSpan> { self.event.as_ref().map(|e| moss_core::event::EventSpan { start: e.start, end: e.end }) }
+    fn awaits_event_date(&self) -> bool { self.event.is_none() && self.raw_frontmatter.contains_key("start") }
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

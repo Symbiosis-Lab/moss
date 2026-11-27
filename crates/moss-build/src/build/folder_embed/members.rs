@@ -3,11 +3,11 @@
 //! The renderer, the folder calendar and a plugin-drawn listing all ask this
 //! one module, so they cannot disagree about a listing's pages.
 
-use moss_core::sort::{ResolvedSort, SortAxis};
-use moss_core::page::site_page::SitePage;
+use moss_core::page::listing;
+use moss_core::sort::SortAxis;
 use moss_core::PageKind;
 
-use super::{effective_group, resolve_children_config, select_children_by_slug, upcoming};
+use super::{is_rich_child, select_children_by_slug, upcoming};
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
 
@@ -44,81 +44,22 @@ pub(super) fn select<'a>(
 ) -> Vec<&'a ParsedDocument> {
     let edition = host.map_or("", |h| h.edition.as_str());
     let picked = select_children_by_slug(folder_slug, is_flatten, scope_default_tree, exclude_nav, edition, all_docs, project);
-    // A page that hosts a listing of a folder it also sits inside (a
-    // `children:`/`children_more` whole-site listing at the root, where every
-    // page's prefix is "") must not list itself. The folder's own index
-    // already excludes itself because its url IS the selector's target; a page
-    // that merely POINTS at a folder has no such coincidence.
-    let picked = picked.into_iter().filter(|d| host.is_none_or(|h| d.url_path != h.url_path));
     // `covers:only` is applied before sort and limit, so `limit` counts off
     // the covered set. A folder entry is covered when its own index page has a cover.
-    picked
-        .filter(|d| !covers_only || d.listing_cover().is_some())
-        .filter(|d| upcoming::keeps(when, d, now))
-        .collect()
+    listing::keep(picked, host, covers_only, when, &upcoming::minute(now), |d| d.listing_cover().is_some())
 }
 
 /// A listing's pages in listing order, cut at the limit.
-pub(super) struct Ordered<'a> {
-    pub resolved: ResolvedSort,
-    pub style: moss_core::Resolved<String>,
-    /// The group the listing draws, after the sort axis has had its say.
-    pub group: String,
-    /// Upcoming events placed soonest first, which the renderer must not
-    /// date-sort back to newest first.
-    pub pre_ordered: bool,
-    pub limited: Vec<&'a ParsedDocument>,
-    pub truncated: bool,
-}
+pub(super) type Ordered<'a> = listing::Ordered<'a, ParsedDocument>;
 
-#[allow(clippy::too_many_arguments)]
+/// `math` only decides whether a page's excerpt makes it "rich".
 pub(super) fn order<'a>(
     folder_docs: &[&'a ParsedDocument],
     target_doc: Option<&ParsedDocument>,
-    is_flatten: bool,
-    sort_override: Option<SortAxis>,
-    style_override: Option<&moss_core::Resolved<String>>,
-    group_override: Option<&moss_core::Resolved<String>>,
-    limit: Option<usize>,
-    when: Option<&str>,
+    ask: &listing::OrderAsk<'_>,
     math: bool,
-    now: chrono::NaiveDateTime,
 ) -> Ordered<'a> {
-    // Flatten uses resolve_for_flatten; direct uses resolve_for_direct_children.
-    // A per-listing sort override wins over both. A pseudo-folder has no target
-    // doc to carry sort intent, so it gets the default a folder with no sort
-    // cache gets (date-descending).
-    let mut resolved = match target_doc {
-        Some(t) if is_flatten => t.resolve_for_flatten(folder_docs),
-        Some(t) => t.resolve_for_direct_children(),
-        None => ResolvedSort { axis: SortAxis::Date, explicit_order: None },
-    };
-    if let Some(axis) = sort_override {
-        // Drop explicit_order (sort:axis is a user-typed scalar, not a list).
-        resolved = ResolvedSort { axis, explicit_order: None };
-    }
-    let (style, group) = resolve_children_config(folder_docs, style_override, group_override, math);
-    // A typed order is a sequence, not a chronology: year sections found by
-    // default would regroup it, so only ones the author asked for remain.
-    let group = effective_group(&group, &resolved);
-    let sorted = moss_core::sort::sort_by_resolved(folder_docs, &resolved);
-    // Upcoming events lead whatever the folder's sort is, so `limit` cuts
-    // from that order (the same grouping `generate_children` applies later).
-    let soonest_first = group != "upcoming"
-        && when == Some("upcoming")
-        && sort_override.is_none()
-        && target_doc.is_none_or(|t| moss_core::sort::SortableDoc::declared_sort(t).is_none());
-    let sorted = if group == "upcoming" || soonest_first {
-        let upcoming_urls = upcoming::urls("upcoming", folder_docs, now);
-        upcoming::order_docs(sorted, &upcoming_urls, !resolved.is_date_order() && !soonest_first)
-    } else {
-        sorted
-    };
-    let (limited, truncated) = match limit {
-        Some(n) if n > 0 && n < sorted.len() => (sorted.iter().take(n).copied().collect(), true),
-        _ => (sorted, false),
-    };
-    Ordered { resolved, style, group, pre_ordered: soonest_first, limited, truncated }
+    listing::order(folder_docs, target_doc, ask, |d| is_rich_child(d, math))
 }
 
 /// Every page the host's listing could reach: the selector's pick for each
@@ -161,8 +102,19 @@ pub(crate) fn listing_members<'a>(
     project: &ProjectStructure,
     now: chrono::NaiveDateTime,
 ) -> Vec<&'a ParsedDocument> {
+    host_listing(host, documents, project, now).map_or_else(Vec::new, |o| o.limited)
+}
+
+/// The host's own listing, ordered and cut, with the style and group it draws;
+/// `None` when the host ends in no listing.
+pub(crate) fn host_listing<'a>(
+    host: &ParsedDocument,
+    documents: &'a [ParsedDocument],
+    project: &ProjectStructure,
+    now: chrono::NaiveDateTime,
+) -> Option<Ordered<'a>> {
     use crate::build::render::incremental::listing::Depth;
-    let Some(key) = host_key(host, documents) else { return Vec::new() };
+    let key = host_key(host, documents)?;
     let picked = select(
         &key.folder_slug,
         key.depth == Depth::All,
@@ -186,7 +138,7 @@ pub(crate) fn in_listing_order<'a>(
     pages: &[&'a ParsedDocument],
     now: chrono::NaiveDateTime,
 ) -> Vec<&'a ParsedDocument> {
-    ordered_like_listing(host, documents, pages, None, now)
+    ordered_like_listing(host, documents, pages, None, now).map_or_else(|| pages.to_vec(), |o| o.limited)
 }
 
 fn host_key(host: &ParsedDocument, documents: &[ParsedDocument]) -> Option<crate::build::render::incremental::listing::GroupKey> {
@@ -199,9 +151,9 @@ fn ordered_like_listing<'a>(
     pages: &[&'a ParsedDocument],
     limit: Option<usize>,
     now: chrono::NaiveDateTime,
-) -> Vec<&'a ParsedDocument> {
+) -> Option<Ordered<'a>> {
     use crate::build::render::incremental::listing::Depth;
-    let Some(key) = host_key(host, documents) else { return pages.to_vec() };
+    let key = host_key(host, documents)?;
     let target_url = format!("{}/index.html", key.folder_slug);
     let target_doc = documents.iter().find(|d| {
         if key.folder_slug.is_empty() {
@@ -210,9 +162,10 @@ fn ordered_like_listing<'a>(
             d.url_path == target_url
         }
     });
-    let style = host.children_style.as_ref().map(|r| moss_core::Resolved::frontmatter(r.value.clone()));
-    let group = host.children_group.as_ref().map(|r| moss_core::Resolved::frontmatter(r.value.clone()));
     // `math` only reads a page's excerpt to decide whether it is "rich", which
     // moves the auto style and never the order or the cut.
-    order(pages, target_doc, key.depth == Depth::All, None, style.as_ref(), group.as_ref(), limit, host.children_when.as_deref(), true, now).limited
+    let (style, group) = (host.children_style.as_ref(), host.children_group.as_ref());
+    let now = upcoming::minute(now);
+    let ask = listing::OrderAsk { flatten: key.depth == Depth::All, sort: None, style, group, limit, when: host.children_when.as_deref(), now: &now };
+    Some(order(pages, target_doc, &ask, true))
 }

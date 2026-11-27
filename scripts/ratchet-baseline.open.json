@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/cache.rs": 1000,
-        "crates/moss-build/src/build/folder_embed.rs": 1300,
+        "crates/moss-build/src/build/folder_embed.rs": 1200,
         "crates/moss-build/src/build/markdown/pipeline.rs": 1400,
         "crates/moss-build/src/build/media/ffmpeg.rs": 900,
         "crates/moss-build/src/build/media/image.rs": 1700,

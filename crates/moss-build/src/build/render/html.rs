@@ -177,48 +177,6 @@ fn annotate_children_listing(listing: String, emit_source_lines: bool) -> String
     )
 }
 
-/// The folder a page's own listing shows and whether it names an edition home
-/// (the listing then takes that home's filters), or `None` when the page ends
-/// in no listing. A home (the root's or a language's) lists its tree; any
-/// other page a claimed term, else its own folder when it is a folder index,
-/// else the folder its `children_source` names. `children_source` redirects a
-/// home too. The renderer and whatever must agree with it ask here.
-pub(crate) fn own_listing_target(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> Option<(String, bool)> {
-    let source = doc.children_source.as_deref().map(|r| resolve_children_source_folder_path(r, all_docs));
-    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        return Some(source.unwrap_or_else(|| (crate::build::folder_embed::home_defaults(doc).tree.to_string(), false)));
-    }
-    let names_scoped_home = source.as_ref().is_some_and(|t| t.1);
-    let folder = match doc.term_listing.as_deref() {
-        Some(term) => term.to_string(),
-        None if doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") => doc.url_path.trim_end_matches("/index.html").to_string(),
-        None => source?.0,
-    };
-    Some((folder, names_scoped_home))
-}
-
-/// Resolves `children_source:`'s wikilink target to a folder's site path (no
-/// leading/trailing slash; `""` for the root) — the NAMED folder, never the
-/// hosting page's own `url_path`. Shared by both `children:` branches below.
-/// The flag is true when the target is an edition home listing its own edition
-/// only; the listing then carries the same filters as that home's.
-fn resolve_children_source_folder_path(children_source: &str, all_docs: &[ParsedDocument]) -> (String, bool) {
-    if let Some(home) = crate::build::render::lang_roots::named_edition_home(children_source, all_docs) {
-        let defaults = crate::build::folder_embed::home_defaults(home);
-        return (defaults.tree.to_string(), defaults.scoped);
-    }
-    let stem = crate::build::markdown::frontmatter_ref_to_stem(children_source);
-    let path = all_docs
-        .iter()
-        .find(|d| {
-            let d_stem = d.url_path.trim_end_matches("/index.html").trim_end_matches('/');
-            d_stem.eq_ignore_ascii_case(&stem) && d.kind == PageKind::Folder
-        })
-        .map(|d| d.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string())
-        .unwrap_or_else(|| stem.to_lowercase());
-    (path, false)
-}
-
 /// Insert the place-map locator into `body` at `placement` (a no-op for
 /// [`LocatorPlacement::Masthead`], which the masthead functions draw instead).
 /// Shared by the homepage branch and the ordinary non-homepage branch below.
@@ -565,7 +523,7 @@ impl<'a> PageFacts<'a> {
     /// `children_source` ends in that listing; a term page and a place
     /// namespace root also get their map.
     fn host_listing(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, content: String, is_folder_index: bool) -> String {
-        let Some((folder_path, names_scoped_home)) = own_listing_target(doc, context.chrome.documents) else {
+        let Some((folder_path, names_scoped_home)) = moss_core::page::listing::own_listing_target(doc, context.chrome.documents) else {
             return content;
         };
         let term_listing = doc.term_listing.as_deref();
@@ -713,8 +671,8 @@ pub(super) fn render_page<'d>(
                 if h1.is_empty() { content } else { format!("{h1}\n{content}") }
             };
 
-            let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
-            let (target_folder_path, names_scoped_home) = own_listing_target(doc, all_docs).unwrap_or_default();
+            let own_tree = moss_core::page::listing::home_defaults(doc).tree;
+            let (target_folder_path, names_scoped_home) = moss_core::page::listing::own_listing_target(doc, all_docs).unwrap_or_default();
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
             let mut content = content;

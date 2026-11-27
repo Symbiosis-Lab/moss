@@ -8,6 +8,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
 
+use moss_core::page::site_page::SitePage;
+
 use regex::{Captures, Regex};
 
 use super::inline_body::{dir_segments, listed_body, IdScopes};

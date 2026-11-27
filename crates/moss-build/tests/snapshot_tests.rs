@@ -1138,7 +1138,7 @@ fn snapshot_folder_passthrough_iframe() {
 /// children but dated grandchildren. Pre-fix, axis was inferred from
 /// direct children only (Title — no dates), the date resort was skipped,
 /// year grouping was suppressed even though the flattened corpus has
-/// dated essays. Post-fix, `resolve_for_flatten` recomputes the axis
+/// dated essays. Post-fix, the listing recomputes the axis
 /// on the scope the reader actually sees (Date), and year-grouped
 /// output appears.
 #[test]

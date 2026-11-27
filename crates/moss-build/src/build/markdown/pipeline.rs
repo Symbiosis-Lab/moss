@@ -550,20 +550,7 @@ pub fn process_markdown_file(
             // newlines intact). Reproduce gray_matter's exact transform so the body
             // text is byte-identical and snapshots don't churn.
             let body = moss_core::frontmatter::normalize_body(render_body);
-            // Plugin fields (e.g. `syndicated`) + children normalization come from
-            // the raw serde_yaml map exactly as before.
             let raw_fm = crate::build::scan::article_map::parse_frontmatter(content);
-            // Extract children_source from the authored value via the shared
-            // normalizer (handles wikilink "[[News]]" AND resolved path forms).
-            // raw_fm holds serde_json::Value; the normalizer takes serde_yaml::Value
-            // — re-express through serde_yaml::to_value (cheap in-memory hop).
-            if let Some(children_val) = raw_fm.get("children") {
-                if let Ok(yaml_val) = serde_yaml::to_value(children_val) {
-                    let norm = moss_core::frontmatter_union::normalize_children(&yaml_val);
-                    fm.children = Some(norm.children);
-                    fm.children_source = norm.source;
-                }
-            }
             (fm, body, raw_fm, fm_lines)
         };
     // The frontmatter the declared fields are read from, as authored, in either

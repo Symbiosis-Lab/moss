@@ -4,14 +4,13 @@
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::types::ParsedDocument;
-use moss_core::event::EventTime;
+use moss_core::event::{EventSpan, EventTime};
 use std::collections::HashSet;
 
-/// True for an event that has not ended at `now`: see [`ends_at`]. Ordinary
+/// True for an event that has not ended at `now`: see [`EventSpan::ends_at`]. Ordinary
 /// articles are never upcoming, whatever their `date`.
 pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
-    let Some(ev) = &doc.event else { return false };
-    span_is_upcoming(ev.start, ev.end, now)
+    moss_core::page::listing::is_upcoming(doc, &minute(now))
 }
 
 /// The test behind [`is_upcoming`], for callers that hold an event's times
@@ -20,31 +19,20 @@ pub(crate) fn span_is_upcoming(start: EventTime, end: Option<EventTime>, now: ch
     ends_if_upcoming(start, end, now).is_some()
 }
 
-/// [`ends_at`] while the event has not ended at `now`, else `None`.
+/// [`EventSpan::ends_at`] while the event has not ended at `now`, else `None`.
 pub(crate) fn ends_if_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> Option<String> {
-    let ends = ends_at(start, end);
-    (now.format("%Y-%m-%dT%H:%M").to_string() < ends).then_some(ends)
+    EventSpan { start, end }.ends_if_upcoming(&minute(now))
 }
 
-/// When an event is over, as wall-clock `YYYY-MM-DDTHH:MM`: an all-day event
-/// at the start of the day after its last day, a timed one at its `end` (else
-/// its `start`). The one definition of "ended": the event is over from this
-/// minute on, and `event-ends.ts` compares the same way.
-pub(crate) fn ends_at(start: EventTime, end: Option<EventTime>) -> String {
-    let last = end.unwrap_or(start);
-    if !last.is_all_day() {
-        return last.sort_key();
-    }
-    let (y, m, d) = last.ymd();
-    chrono::NaiveDate::from_ymd_opt(i32::from(y), u32::from(m), u32::from(d))
-        .and_then(|day| day.succ_opt())
-        .map_or_else(|| last.day_key() + "T23:59", |next| format!("{}T00:00", next.format("%Y-%m-%d")))
+/// `now` as the minute an event's end is compared with.
+pub(crate) fn minute(now: chrono::NaiveDateTime) -> String {
+    now.format("%Y-%m-%dT%H:%M").to_string()
 }
 
 /// Where an event stands at `now`, as its page meta, card and row publish it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum EventWhen {
-    /// Not ended; `ends` is [`ends_at`], read by `event-ends.js` to turn the
+    /// Not ended; `ends` is [`EventSpan::ends_at`], read by `event-ends.js` to turn the
     /// element past in the browser at that minute.
     Upcoming { ends: String },
     Past,
@@ -71,18 +59,6 @@ pub(crate) fn open_tickets(ev: &crate::build::types::EventFields, now: chrono::N
     ev.tickets.as_deref().filter(|_| span_is_upcoming(ev.start, ev.end, now))
 }
 
-/// Whether `doc` passes a `when:` filter: `past` keeps whatever is not
-/// upcoming (articles included), `upcoming` keeps only events that have not
-/// ended. An event still waiting for its date (a `start` with no usable
-/// value) is in neither. No filter, or an unknown one, keeps everything.
-pub(super) fn keeps(when: Option<&str>, doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
-    match when {
-        Some("upcoming") => is_upcoming(doc, now),
-        Some("past") => !is_upcoming(doc, now) && !doc.awaits_event_date(),
-        _ => true,
-    }
-}
-
 /// The `url_path`s of the upcoming events among `docs`; empty unless `group`
 /// is `upcoming`.
 pub(super) fn urls<'a>(group: &str, docs: &[&'a ParsedDocument], now: chrono::NaiveDateTime) -> HashSet<&'a str> {
@@ -107,26 +83,6 @@ pub(super) fn order<'a>(
         rest.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), false));
     }
     soon.into_iter().chain(rest).collect()
-}
-
-/// `order` for whole documents, run before `limit` cuts the list, so the
-/// limit counts from the upcoming run rather than from the folder's sort.
-pub(super) fn order_docs<'a>(
-    docs: Vec<&'a ParsedDocument>,
-    upcoming: &HashSet<&str>,
-    keep_order: bool,
-) -> Vec<&'a ParsedDocument> {
-    use moss_core::sort::{sort_by_resolved, ResolvedSort, SortAxis};
-    let (soon, rest): (Vec<_>, Vec<_>) =
-        docs.into_iter().partition(|d| upcoming.contains(d.url_path.as_str()));
-    if keep_order {
-        return soon.into_iter().chain(rest).collect();
-    }
-    let by = |axis| ResolvedSort { axis, explicit_order: None };
-    sort_by_resolved(&soon, &by(SortAxis::DateAsc))
-        .into_iter()
-        .chain(sort_by_resolved(&rest, &by(SortAxis::Date)))
-        .collect()
 }
 
 /// The two runs as `<section class="moss-cards-group" data-group="…">`; an
@@ -203,13 +159,13 @@ mod tests {
         let at = |h, m| chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap().and_hms_opt(h, m, 0).unwrap();
         assert!(span_is_upcoming(start, end, at(21, 29)));
         assert!(!span_is_upcoming(start, end, at(21, 30)));
-        assert_eq!(ends_at(start, end), "2026-10-08T21:30");
+        assert_eq!(EventSpan { start, end }.ends_at(), "2026-10-08T21:30");
     }
 
     #[test]
     fn an_all_day_event_is_over_at_midnight_after_its_last_day() {
         let day = EventTime::Date(2026, 12, 31);
-        assert_eq!(ends_at(day, None), "2027-01-01T00:00");
+        assert_eq!(EventSpan { start: day, end: None }.ends_at(), "2027-01-01T00:00");
         let at = |y, m, d, h, min| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, min, 0).unwrap();
         assert!(span_is_upcoming(day, None, at(2026, 12, 31, 23, 59)));
         assert!(!span_is_upcoming(day, None, at(2027, 1, 1, 0, 0)));

@@ -206,7 +206,7 @@ fn hidden_reasons(
         reasons.push("hidden-folder".to_string());
     }
     if !doc.slot_only
-        && crate::build::components::nav::is_listing_nav_item(doc, has_content_folders)
+        && moss_core::page::listing::is_listing_nav_item(doc, has_content_folders)
     {
         // The one hiding mechanism with no frontmatter behind it: in a site
         // that has content folders, every root-level non-index file is a nav

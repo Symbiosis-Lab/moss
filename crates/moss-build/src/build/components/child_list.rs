@@ -12,6 +12,7 @@
 
 
 use super::date as date_formatters;
+use moss_core::page::site_page::SitePage;
 use crate::build::assets::paths::PathResolver;
 use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
 use crate::build::types::ParsedDocument;

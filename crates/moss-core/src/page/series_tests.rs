@@ -250,6 +250,19 @@ impl SitePage for Page {
     fn breadcrumb(&self) -> Option<crate::frontmatter_typed::BreadcrumbSetting> { None }
     fn translates_home(&self) -> bool { false }
     fn passthrough_root(&self) -> Option<&str> { None }
+    fn also_in(&self) -> &[String] { &[] }
+    fn translation_urls(&self) -> impl Iterator<Item = &str> { std::iter::empty() }
+    fn children_source(&self) -> Option<&str> { None }
+    fn children_depth(&self) -> Option<&str> { None }
+    fn children_listed(&self) -> Option<&str> { None }
+    fn term_listing(&self) -> Option<&str> { None }
+    fn children_style(&self) -> Option<&crate::resolved::Resolved<String>> { None }
+    fn children_group(&self) -> Option<&crate::resolved::Resolved<String>> { None }
+    fn children_covers(&self) -> Option<&str> { None }
+    fn children_when(&self) -> Option<&str> { None }
+    fn children_limit(&self) -> Option<u32> { None }
+    fn event_span(&self) -> Option<crate::event::EventSpan> { None }
+    fn awaits_event_date(&self) -> bool { false }
 }
 
 fn by_weight() -> Option<ResolvedSort> {
