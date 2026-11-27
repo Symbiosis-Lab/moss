@@ -63,8 +63,8 @@ impl Trust {
 
     /// The recorded answer; for a folder never asked, trusted when the
     /// earlier approvals covered every plugin in it at its current code.
-    fn answer(&self, folder: &Path) -> Option<bool> {
-        self.record.answer(folder).or_else(|| self.settled_by_legacy(folder).then_some(true))
+    fn answer(&self, folder: &Path, id: Option<&str>) -> Option<bool> {
+        self.record.answer(folder, id).or_else(|| self.settled_by_legacy(folder).then_some(true))
     }
 
     fn settled_by_legacy(&self, folder: &Path) -> bool {
@@ -499,13 +499,40 @@ pub fn folder_of(plugin_dir: &Path) -> Option<PathBuf> {
 
 /// Whether the user trusts `folder`, or nothing enforces trust.
 ///
-/// Keyed by the canonical folder, so a folder reached through two paths is
-/// one folder; falls back to the path as given when it cannot be
-/// canonicalized, which is also what [`set_folder_trust`] does, so the two
-/// agree.
+/// Keyed by the folder's id on this computer, so a renamed folder keeps its
+/// answer and a copy is asked again, and by the canonical folder where it has
+/// no id; falls back to the path as given when it cannot be canonicalized,
+/// which is also what [`set_folder_trust`] does, so the two agree.
 pub fn is_trusted(folder: &Path) -> bool {
+    if TRUST.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+        return true;
+    }
+    let folder = canonical(folder);
+    let id = id_of(&folder);
     let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().is_none_or(|trust| trust.answer(&canonical(folder)) == Some(true))
+    guard.as_ref().is_none_or(|trust| trust.answer(&folder, id.as_deref()) == Some(true))
+}
+
+/// Each folder's id as the app last asked about it. The process-wide store
+/// memo would keep an id for a path after its folder moved away and a copy
+/// took its place, so the copy would inherit the answer. Asking about a folder
+/// resolves it again; [`is_trusted`] only reads.
+static IDS: RwLock<Option<HashMap<PathBuf, Option<String>>>> = RwLock::new(None);
+
+/// The id this computer's store for `folder` carries; `None` for a folder
+/// that is gone or has no store, which is then known by its place.
+fn id_of(folder: &Path) -> Option<String> {
+    let asked = IDS.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|ids| ids.get(folder).cloned());
+    asked.unwrap_or_else(|| crate::infra::folder_store::try_for_folder(folder).ok().map(|store| store.id))
+}
+
+/// [`id_of`], resolved now, and kept for the hot path.
+fn id_now(folder: &Path) -> Option<String> {
+    let id = crate::infra::folder_store::FolderStores::running_for(folder)
+        .and_then(|stores| stores.resolve(folder).ok())
+        .map(|store| store.id);
+    IDS.write().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(folder.to_path_buf(), id.clone());
+    id
 }
 
 /// Which of a folder's plugins may run, in one word: everything this command
@@ -522,18 +549,25 @@ pub fn folder_admission(folder: &Path) -> &'static str {
 /// The user's answer for `folder`, for the app to decide whether to ask:
 /// `None` when it was never asked. A folder the earlier per-plugin approvals
 /// settle is recorded as trusted here, the first time the app asks about it,
-/// so it keeps its answer once that file is gone. `Some(true)` when nothing
-/// enforces trust.
+/// so it keeps its answer once that file is gone, and a recorded answer is
+/// written again under the folder's id and where it is now. `Some(true)` when
+/// nothing enforces trust.
 pub fn folder_answer(folder: &Path) -> Option<bool> {
+    if TRUST.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+        return Some(true);
+    }
     let folder = canonical(folder);
-    let (recorded, answer) = {
+    let id = id_now(&folder);
+    let (stale, answer) = {
         let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
         let Some(trust) = guard.as_ref() else { return Some(true) };
-        (trust.record.answer(&folder), trust.answer(&folder))
+        let stale = trust.writes_to.is_some()
+            && trust.record.row(&folder, id.as_deref()).is_none_or(|row| row.dir != folder || (id.is_some() && row.id != id));
+        (stale, trust.answer(&folder, id.as_deref()))
     };
-    if recorded.is_none() && answer == Some(true) {
-        if let Err(error) = set_folder_trust(&folder, true) {
-            log::warn!(target: "registry", "could not record {} as trusted: {error}", folder.display());
+    if let Some(answer) = answer.filter(|_| stale) {
+        if let Err(error) = set_folder_trust(&folder, answer) {
+            log::warn!(target: "registry", "could not record the answer for {}: {error}", folder.display());
         }
     }
     answer
@@ -543,15 +577,35 @@ pub fn folder_answer(folder: &Path) -> Option<bool> {
 /// the app records answers: a headless build holds a record it reads and
 /// never writes.
 pub fn set_folder_trust(folder: &Path, trusted: bool) -> Result<(), String> {
+    let folder = canonical(folder);
+    let id = id_now(&folder);
+    change_record(|record| record.set(folder, id, trusted))
+}
+
+/// Drop the answer for `folder`, so its next open asks again, and return it:
+/// for the app when the person removes the folder from its recent folders,
+/// the one thing that ends an answer, and whose Undo puts it back. A folder
+/// that is gone is found by where it was last asked about.
+pub fn forget_folder(folder: &Path) -> Result<Option<bool>, String> {
+    let folder = canonical(folder);
+    let id = id_now(&folder);
+    change_record(|record| {
+        let answer = record.answer(&folder, id.as_deref());
+        record.forget(&folder, id.as_deref());
+        answer
+    })
+}
+
+fn change_record<T: Default>(change: impl FnOnce(&mut TrustRecord) -> T) -> Result<T, String> {
     let mut guard = TRUST.write().unwrap_or_else(|e| e.into_inner());
     // Nothing enforces trust without a record, so there is nothing to keep.
-    let Some(trust) = guard.as_mut() else { return Ok(()) };
+    let Some(trust) = guard.as_mut() else { return Ok(T::default()) };
     let root = trust.writes_to.clone().ok_or("this moss reads folder answers and does not record them")?;
     let mut record = trust.record.clone();
-    record.set(canonical(folder), trusted);
+    let out = change(&mut record);
     trust::save(&root, &record)?;
     trust.record = record;
-    Ok(())
+    Ok(out)
 }
 
 /// Each plugin directory in `folder` that moss did not ship and that waits on

@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use moss_build::plugins::bundled::{code_hash, read_installed_manifest};
 use moss_build::plugins::install::registry_client::cache::{Anchor, CachedRegistry};
 use moss_build::plugins::install::registry_client::enforce::{
-    carried, folder_answer, install, install_headless, is_trusted, publish, set_folder_trust,
-    verdict, Refusal,
+    carried, folder_answer, forget_folder, install, install_headless, is_trusted, publish,
+    set_folder_trust, verdict, Refusal,
 };
+use moss_build::identity::keypair::Identity;
 use moss_build::plugins::install::registry_client::index::{accept_index, accept_revoked};
 use moss_build::plugins::install::registry_client::trust;
 
@@ -28,6 +29,18 @@ fn plugin(site: &Path, id: &str, entry: &str) -> PathBuf {
     std::fs::write(dir.join("manifest.json"), format!(r#"{{"name":"{id}","version":"1.0.0","entry":"index.js"}}"#)).unwrap();
     std::fs::write(dir.join("index.js"), entry).unwrap();
     dir
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn refusal(dir: &Path) -> Option<Refusal> {
@@ -54,7 +67,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     let later = plugin(&a, "later", "var L = 1;");
     std::fs::write(demo.join("index.js"), "var A = 2;").unwrap();
     assert_eq!((refusal(&later), refusal(&demo)), (None, None), "new and changed code in a trusted folder runs");
-    assert_eq!(trust::load(&app_data).answer(&a), Some(true), "recorded in app data");
+    assert_eq!(trust::load(&app_data).answer(&a, None), Some(true), "recorded in app data");
     assert!(!a.join(".moss").read_dir().unwrap().any(|e| e.unwrap().file_name() != "plugins"), "and nothing in the folder");
 
     // A plugin that brings no code, listed by the registry at these exact
@@ -128,6 +141,24 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     set_folder_trust(&a, false).unwrap();
     assert_eq!((refusal(&demo), folder_answer(&a)), (Some(Refusal::Untrusted), Some(false)));
 
+    // The answer is the folder's: a rename keeps it, a copy is asked again,
+    // and removing the folder from the app's recent folders ends it.
+    let keyed = site("keyed");
+    Identity::generate().unwrap().save(&keyed).unwrap();
+    plugin(&keyed, "kept", "var K = 1;");
+    set_folder_trust(&keyed, true).unwrap();
+    let renamed = site("keyed-renamed");
+    std::fs::remove_dir_all(&renamed).unwrap();
+    std::fs::rename(&keyed, &renamed).unwrap();
+    assert!(is_trusted(&renamed), "renamed");
+    assert_eq!(folder_answer(&renamed), Some(true));
+    assert_eq!(trust::load(&app_data).folders.iter().filter(|row| row.dir == renamed).count(), 1, "the row moved with it");
+    copy_dir(&renamed, &keyed);
+    assert_eq!(folder_answer(&keyed), None, "a copy put where its original was");
+    assert!(!is_trusted(&keyed));
+    assert_eq!(forget_folder(&renamed).unwrap(), Some(true));
+    assert_eq!(folder_answer(&renamed), None, "removed from the recent folders");
+
     // Migration: a folder whose every plugin was approved at its current code
     // is trusted, and the app records it; one with a plugin never approved,
     // or approved at other code, is asked.
@@ -153,7 +184,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     install(None, Some(&legacy_root));
     assert_eq!(refusal(&x), None, "settled before the app asks");
     assert_eq!(folder_answer(&covered), Some(true));
-    assert_eq!(trust::load(&legacy_root).answer(&covered), Some(true), "and recorded at the app's first ask");
+    assert_eq!(trust::load(&legacy_root).answer(&covered, None), Some(true), "and recorded at the app's first ask");
     assert_eq!((folder_answer(&partly), folder_answer(&moved)), (None, None));
     assert_eq!(refusal(&y), Some(Refusal::Untrusted));
 
@@ -161,7 +192,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     install_headless(None, Some(&legacy_root), false);
     assert!(is_trusted(&covered) && !is_trusted(&partly));
     assert!(set_folder_trust(&partly, true).is_err());
-    assert_eq!(trust::load(&legacy_root).answer(&partly), None);
+    assert_eq!(trust::load(&legacy_root).answer(&partly, None), None);
 
     // A record that cannot be saved trusts nothing, in this process too.
     let blocked = scratch.path().join("blocked");
