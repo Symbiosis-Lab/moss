@@ -74,7 +74,7 @@
         "crates/moss-build/src/vault/import/scrape": 17,
         "crates/moss-build/src/cli": 26,
         "crates/moss-build/src/build/components": 14,
-        "crates/moss-build/src/build/emit": 20,
+        "crates/moss-build/src/build/emit": 22,
         "crates/moss-build/src/assets/js": 19,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 19,
@@ -105,7 +105,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 95,
+        "crates/moss-build/Cargo.toml": 99,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 9,
         "crates/moss-bindings/Cargo.toml": 5

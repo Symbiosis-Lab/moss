@@ -24,6 +24,7 @@ All notable changes to moss will be documented here.
 - A theme can sign the link-preview card moss draws with its logo instead of the site name: `--moss-share-card-logo: url("logo.svg")` in `:root`, a file in `.moss/theme/`. A card on the theme's own `--moss-share-card-bg` no longer carries moss's taupe edge.
 - A plugin can mark a `string` setting `"at_sign_in": true`: moss's sign-in row asks for it before the plugin's `login` runs, writes the answer to the plugin's `config.toml`, and the settings page does not draw it again. `login` and `logout` receive the plugin's settings as `ctx.config`.
 - A folder embed takes `repeat:none` to leave out the pages a listing higher on the same page already shows, with `limit:` counted after, so a wall of past events under a "next event" lead no longer repeats the event the lead fell back to once nothing is upcoming.
+- A Han font a theme hosts whole (one `@font-face`, a `.ttf` or `.otf` file, no `unicode-range`) is published in about a hundred slices, each with its own `unicode-range`, cut by the site's language, so a page downloads only the slices its text uses. Slices are encoded after the pages are written and kept on the computer for every site that uses the same font.
 
 ### Changed
 

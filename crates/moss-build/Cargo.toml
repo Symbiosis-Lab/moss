@@ -177,9 +177,17 @@ tower-http = { version = "0.5", features = ["fs"] }
 http-body-util = "0.1"
 
 # The checked-in place-map pack is embedded brotli-compressed and
-# decompressed once at runtime (`place_map::embedded`); same version already
-# used by moss-build's own brotli-budget tests below.
-brotli = "8"
+# decompressed once at runtime (`place_map::embedded`). 9 because the WOFF2
+# encoder below needs it, so the binary links one Brotli.
+brotli = "9"
+
+# A Han webfont a theme hosts whole is published as slices (`emit::font_slices`):
+# a pure-Rust subsetter and WOFF2 encoder, so it also builds for iOS and wasm.
+skera = "0.10"
+read-fonts = "0.47"
+ttf2woff2 = { version = "0.14", default-features = false }
+# Its owned tables rewrite a variable slice as a static instance at one weight.
+write-fonts = { version = "0.56", default-features = false, features = ["read", "tables"] }
 
 # `exclude_from_cloud_sync` sets the File Provider ignore xattr — an Apple subsystem,
 # so the dep is target-gated and the function is a no-op elsewhere. Last on

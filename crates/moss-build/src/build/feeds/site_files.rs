@@ -53,6 +53,8 @@ pub(crate) struct SiteFiles {
     /// Variants this build will never make, each mapped to its original: a
     /// feed's `<img>` naming one names the original instead.
     never_made: HashMap<String, String>,
+    /// Slices of the theme's Han fonts, encoded here so the first paint never waits on them.
+    font_slices: Vec<crate::build::emit::font_slices::SliceJob>,
 }
 
 impl SiteFiles {
@@ -65,6 +67,7 @@ impl SiteFiles {
         Self {
             kinds: Vec::new(),
             copies: Vec::new(),
+            font_slices: Vec::new(),
             site_url: site_url.to_string(),
             site_lang,
             dir_overrides: dir_overrides.clone(),
@@ -109,7 +112,11 @@ impl SiteFiles {
     /// The addresses of the declared files, for the redirect table, which
     /// counts them as served before they are written.
     pub(crate) fn addresses(&self) -> impl Iterator<Item = String> + '_ {
-        self.kinds.iter().map(|k| k.path().as_str().to_string())
+        self.kinds.iter().map(|k| k.path().as_str().to_string()).chain(self.font_slices.iter().map(|s| s.path.as_str().to_string()))
+    }
+
+    pub(crate) fn theme_font_slices(&mut self, jobs: Vec<crate::build::emit::font_slices::SliceJob>) {
+        self.font_slices = jobs;
     }
 
     /// Keep `to`'s bytes at `from` too, when `to` is one of the declared files.
@@ -121,7 +128,8 @@ impl SiteFiles {
 
     /// Every file the worker writes, which the render promises to the manifest.
     pub(crate) fn promise(&self, pending: &mut PendingManifest) {
-        for path in self.kinds.iter().map(|k| k.path()).chain(self.copies.iter().map(|(from, _)| from.clone())) {
+        let slices = self.font_slices.iter().map(|s| s.path.clone());
+        for path in self.kinds.iter().map(|k| k.path()).chain(self.copies.iter().map(|(from, _)| from.clone())).chain(slices) {
             pending.promise(&path);
         }
     }
@@ -162,6 +170,15 @@ impl SiteFiles {
                 out.push((from.clone(), bytes));
             }
         }
+        use rayon::prelude::*;
+        let slices: Vec<_> = self.font_slices.par_iter().map(|job| (job.path.clone(), crate::build::emit::font_slices::encoded(job))).collect();
+        for (path, encoded) in slices {
+            // Written after paint, where a problem line is the only way to say so.
+            match encoded {
+                Ok(bytes) => out.push((path, bytes)),
+                Err(e) => crate::build::cli_output::log_warn_problem!("{}", e),
+            }
+        }
         out
     }
 
@@ -187,7 +204,7 @@ impl SiteFiles {
         output: &Path,
         session: Option<Arc<FolderSession>>,
     ) -> Option<AfterPaint> {
-        (!self.kinds.is_empty()).then(|| AfterPaint {
+        (!self.kinds.is_empty() || !self.font_slices.is_empty()).then(|| AfterPaint {
             files: self,
             documents: documents.clone(),
             output: output.to_path_buf(),

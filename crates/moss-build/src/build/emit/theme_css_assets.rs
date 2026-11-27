@@ -37,6 +37,11 @@ pub struct ThemeCss {
     pub files: Vec<(ServedPath, Vec<u8>)>,
     /// The stylesheets `css` imports from the theme folder, as written.
     pub imported: Vec<String>,
+    /// Slices of the Han fonts the sheet now loads in pieces, for the
+    /// after-paint worker to encode.
+    pub slices: Vec<super::font_slices::SliceJob>,
+    /// One line per face published whole that the author may not expect.
+    pub notes: Vec<String>,
 }
 
 impl ThemeCss {
@@ -62,10 +67,14 @@ impl ThemeCss {
 /// waits for it. The resolved path must equal the written one exactly, so on a
 /// filesystem that ignores case a reference spelled in a different case than
 /// the file (`Fonts/A.woff2` for `fonts/a.woff2`) also keeps its written address.
-pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_ledger::InputEvidence) -> ThemeCss {
+pub fn for_site(css: &str, source_root: &Path, site_lang: &str, evidence: &crate::build::cloud_ledger::InputEvidence) -> ThemeCss {
     let theme_dir = crate::moss_paths::MossPaths::new(source_root).theme_dir();
     let real_theme = theme_dir.canonicalize().ok();
-    let mut themed = rewrite(css, |rel| read_theme_file(&theme_dir, real_theme.as_deref(), rel, evidence));
+    let strategy = super::font_slices::strategy_for_language(site_lang);
+    let sliced = super::font_slices::slice_faces(css, strategy, |rel| read_theme_source(&theme_dir, real_theme.as_deref(), rel, evidence));
+    let mut themed = rewrite(&sliced.css, |rel| read_theme_file(&theme_dir, real_theme.as_deref(), rel, evidence));
+    themed.slices = sliced.jobs;
+    themed.notes = sliced.notes;
     let derived = super::theme_font_weights::rules(css, &themed.imported);
     themed.css.push_str(&derived);
     // The stylesheet's recorded source hash is the rewritten sheet's (see the
@@ -88,10 +97,32 @@ pub(crate) fn read_theme_file(
     rel: &str,
     evidence: &crate::build::cloud_ledger::InputEvidence,
 ) -> Option<Vec<u8>> {
+    read_within(theme_dir, real_theme, rel, evidence, MAX_HASHED_FILE_BYTES)
+}
+
+/// [`read_theme_file`] without the size cap, for a reader that publishes none
+/// of the bytes as they are (the font slicer, the link-preview card): a whole
+/// Han font is 8 to 17 MB.
+pub(crate) fn read_theme_source(
+    theme_dir: &Path,
+    real_theme: Option<&Path>,
+    rel: &str,
+    evidence: &crate::build::cloud_ledger::InputEvidence,
+) -> Option<Vec<u8>> {
+    read_within(theme_dir, real_theme, rel, evidence, u64::MAX)
+}
+
+fn read_within(
+    theme_dir: &Path,
+    real_theme: Option<&Path>,
+    rel: &str,
+    evidence: &crate::build::cloud_ledger::InputEvidence,
+    max_bytes: u64,
+) -> Option<Vec<u8>> {
     use crate::build::cloud_readiness::{probe_input, Found};
     let path = theme_dir.join(rel);
     let meta = std::fs::symlink_metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_HASHED_FILE_BYTES {
+    if !meta.is_file() || meta.len() > max_bytes {
         return None;
     }
     if path.canonicalize().ok()? != real_theme?.join(rel) {
@@ -115,7 +146,7 @@ pub(crate) fn read_theme_file(
 pub fn rewrite(css: &str, read: impl FnMut(&str) -> Option<Vec<u8>>) -> ThemeCss {
     let mut rewriter = Rewriter { read, by_rel: BTreeMap::new(), files: Vec::new(), open: Vec::new(), imported: Vec::new() };
     let css = rewriter.sheet(css, "");
-    ThemeCss { css, files: rewriter.files, imported: rewriter.imported }
+    ThemeCss { css, files: rewriter.files, imported: rewriter.imported, slices: Vec::new(), notes: Vec::new() }
 }
 
 struct Rewriter<R> {
@@ -258,6 +289,19 @@ impl<R: FnMut(&str) -> Option<Vec<u8>>> Rewriter<R> {
 fn split_ext(name: &str) -> Option<(&str, &str)> {
     let dot = name.rfind('.').filter(|&d| d > 0)?;
     Some(name.split_at(dot))
+}
+
+/// Every `url(...)` argument in `value`, unquoted.
+pub(crate) fn urls(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = value;
+    while let Some(at) = rest.to_ascii_lowercase().find("url(") {
+        let after = rest.get(at + 4..).unwrap_or_default();
+        let Some(end) = after.find(')') else { break };
+        out.push(crate::build::emit::theme_font_weights::unquoted(after.get(..end).unwrap_or_default()));
+        rest = after.get(end + 1..).unwrap_or_default();
+    }
+    out
 }
 
 /// `a/./b/../c` to `a/c`; `None` when it climbs out of the folder.

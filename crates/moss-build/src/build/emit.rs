@@ -16,6 +16,7 @@ pub(crate) mod hosted_png;
 pub mod diagram_png;
 pub mod archival;
 pub mod feature_styles;
+pub mod font_slices;
 pub mod place_map_assets;
 pub mod place_map_labels;
 pub mod place_map_layer_tiles;

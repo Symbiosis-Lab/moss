@@ -180,6 +180,7 @@ mod term_listing_placement_test;
 mod term_root_embed_test;
 mod terms_nav_test;
 mod theme_asset_hash_test;
+mod theme_font_slices_test;
 mod theme_modules_test;
 mod theme_token_override_test;
 mod token_declared_test;

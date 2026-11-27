@@ -1564,9 +1564,12 @@ pub fn generate_blocking_content_for_build(
     let has_user_css = user_css_content.is_some();
     // The stylesheet's references to theme files, pointed at their hashed
     // copies. Hashed after the rewrite so a changed font renames the sheet.
-    let theme_css = user_css_content.as_deref().map(|content| {
-        crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
+    let mut theme_css = user_css_content.as_deref().map(|content| {
+        crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &site_config.lang, &input_evidence)
     });
+    for note in theme_css.iter().flat_map(|themed| &themed.notes) {
+        log_warn_problem!("{}", note);
+    }
     // Read when the first page is rendered, so a build that carries every page reads no theme file.
     let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
     let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
@@ -2432,6 +2435,7 @@ pub fn generate_blocking_content_for_build(
 
     // The feeds, llms.txt and sitemap.xml are written after the preview paints.
     let mut site_files = crate::build::feeds::site_files::SiteFiles::new(Path::new(source_path), site_url.as_str(), site_lang, &dir_overrides);
+    site_files.theme_font_slices(theme_css.as_mut().map(|themed| std::mem::take(&mut themed.slices)).unwrap_or_default());
     // Only with a real https URL.
     if has_rss {
         let url = site_url.as_str();

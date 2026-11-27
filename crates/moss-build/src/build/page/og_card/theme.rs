@@ -7,7 +7,7 @@
 //! is optional; a theme that sets none of them gets the card moss always drew.
 
 use crate::build::cli_output::log_note;
-use crate::build::emit::theme_css_assets::{normalize, read_theme_file};
+use crate::build::emit::theme_css_assets::{normalize, read_theme_source, urls};
 use crate::build::emit::theme_font_weights::{hosted_faces, unquoted};
 use crate::build::theme_lint::{strip_comments, Layered};
 use sha2::{Digest, Sha256};
@@ -72,7 +72,7 @@ impl CardTheme {
     pub fn of_site(css: Option<&str>, source_root: &Path, evidence: &crate::build::cloud_ledger::InputEvidence) -> Arc<Self> {
         let theme_dir = crate::moss_paths::MossPaths::new(source_root).theme_dir();
         let real_theme = theme_dir.canonicalize().ok();
-        Arc::new(Self::of_theme(css, &mut |rel| read_theme_file(&theme_dir, real_theme.as_deref(), rel, evidence)))
+        Arc::new(Self::of_theme(css, &mut |rel| read_theme_source(&theme_dir, real_theme.as_deref(), rel, evidence)))
     }
 
     /// Reads the theme's card tokens from `css`, and the files they name
@@ -259,19 +259,6 @@ fn theme_rel(rel: &str) -> Option<String> {
     (!rel.contains(':') && !rel.starts_with('/')).then(|| normalize(rel)).flatten()
 }
 
-/// Every `url(...)` argument in `value`, unquoted.
-fn urls(value: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = value;
-    while let Some(at) = rest.to_ascii_lowercase().find("url(") {
-        let after = rest.get(at + 4..).unwrap_or_default();
-        let Some(end) = after.find(')') else { break };
-        out.push(unquoted(after.get(..end).unwrap_or_default()));
-        rest = after.get(end + 1..).unwrap_or_default();
-    }
-    out
-}
-
 fn first_url(value: &str) -> Option<String> {
     urls(value).into_iter().next()
 }
@@ -335,6 +322,19 @@ mod tests {
         }).is_some());
         let svg = svg_of(&inputs(theme));
         assert!(svg.contains(r#"font-family="Intro""#) && !svg.contains(r#"font-family="Inter""#), "{svg}");
+    }
+
+    #[test]
+    fn a_hosted_font_over_the_copy_cap_still_sets_the_heading() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fonts = dir.path().join(".moss/theme/fonts");
+        std::fs::create_dir_all(&fonts).unwrap();
+        let mut font = renamed_inter();
+        font.resize(6 * 1024 * 1024, 0);
+        std::fs::write(fonts.join("intro.ttf"), font).unwrap();
+        let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+        let theme = CardTheme::of_site(Some(FACE_CSS), dir.path(), &evidence);
+        assert_eq!(theme.heading.as_ref().map(|h| h.family.as_str()), Some("Intro"));
     }
 
     #[test]
