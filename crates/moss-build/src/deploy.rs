@@ -62,6 +62,7 @@ pub mod stack_activity;
 pub mod progress;
 pub mod route;
 pub mod upload;
+pub(crate) mod transfer;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;

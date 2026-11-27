@@ -342,6 +342,6 @@ pub async fn build_and_publish(
     publishable(folder)?;
     let _session = crate::system::folder_session::register_session(&folder_str);
     let sealed = crate::deploy::one_shot::build_for_publish(folder, host_ports(&folder_str), plugins, &overrides, sink).await?;
-    let allow = Allow { mass_removal: overrides.accept_removals, take_over };
+    let allow = Allow { mass_removal: crate::deploy::mass_remove::removal_accepted(overrides.accept_removals), take_over };
     publish_sealed(folder, sealed.as_ref(), keys, &crate::deploy::one_shot::HeadlessDeployPorts, sink, allow).await
 }

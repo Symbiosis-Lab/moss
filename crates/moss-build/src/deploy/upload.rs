@@ -1,34 +1,12 @@
-//! The one place a file gets turned into upload requests, and the window that
-//! decides how many may be in flight.
+//! What a deploy checks before it sends a file: that the bytes match the
+//! manifest entry, and when they do not, whether the file has settled into a
+//! version it may ship instead (a self-heal), within the deploy's cap.
 //!
-//! # Why this module exists
-//!
-//! moss has two upload loops — the interactive publish in `deploy.rs` and
-//! `moss deploy --prebuilt` in `deploy/prebuilt.rs`. A fix applied to one must
-//! apply to both, so the shared part lives here.
-//!
-//! They are not identical. What they genuinely share is *"given a file on disk, produce the right
-//! requests"* and *"admit work at a rate the uplink can sustain"*. That is what
-//! lives here. Progress reporting and symlink handling stay with their callers,
-//! because those really do differ.
-//!
-//! # What differs, and is therefore a parameter
-//!
-//! **Byte accounting.** The interactive path drives a 4 Hz byte-based progress
-//! ticker; the CLI path counts files. Hence the optional `on_bytes` callback.
-//!
-//! Manifest hashes are not a parameter: both paths carry xxh3_64 (16 hex
-//! chars), so a site that alternates between them re-uploads only what changed.
-//!
-//! # Sizing
-//!
-//! Every number is in `domain::seta::upload_policy`, with the measurement that
-//! justifies it.
+//! Every sizing number is in `seta::upload_policy`.
 
 use std::path::Path;
 
 use crate::seta::upload_policy;
-use crate::seta::client::MossSetaClient;
 
 /// Digest of an in-memory buffer — the manifest's xxh3_64, as lowercase hex.
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -38,10 +16,8 @@ fn hash_bytes(bytes: &[u8]) -> String {
 /// Digest of a file read incrementally — identical output to [`hash_bytes`]
 /// over the same content, without buffering it.
 ///
-/// Needed because lowering the chunking threshold to 4 MB would otherwise
-/// *widen* the band of files that go out unverified. Before, only files
-/// >20 MB skipped the integrity check; a naive threshold change would have
-/// made that >4 MB. Streaming keeps the guarantee at every size.
+/// Streaming keeps the integrity check at every file size, including files
+/// too large to buffer.
 ///
 /// It bumps the stall clock per buffer. This runs for every chunked
 /// file *before* its first request, so it credits no bytes and emits no
@@ -49,6 +25,12 @@ fn hash_bytes(bytes: &[u8]) -> String {
 /// iCloud file that is materialising) would be indistinguishable from a
 /// wedged publish and `activity::watchdog` would cancel it during work that
 /// is going perfectly well.
+/// [`hash_file`] on a blocking thread, so many files hash at once.
+async fn hash_file_blocking(path: &Path) -> Result<String, String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || hash_file(&path)).await.map_err(|e| format!("Failed to hash a file: {e}"))?
+}
+
 fn hash_file(path: &Path) -> Result<String, String> {
     crate::build::assets::paths::compute_binary_hash_file_with_heartbeat(path, &|| {
         crate::infra::liveness::bump()
@@ -81,7 +63,7 @@ fn compare(file_path: &str, expected: &str, actual: &str) -> Result<(), String> 
 
 /// Verify an in-memory body against its manifest hash.
 ///
-/// Kept as the buffered form for the single-PUT path, which already holds the
+/// Kept as the buffered form for a deploy send, which already holds the
 /// exact bytes it is about to send. That is a strictly stronger check than
 /// re-reading the path: it cannot be defeated by the file changing between the
 /// hash and the send.
@@ -153,7 +135,7 @@ async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
 /// self-healed content. Floor of 3 so a small publish isn't capped at zero; 5%
 /// beyond that so a large one's tolerance scales with it.
 ///
-/// `uploading` is how many files THIS deploy uploads (`diff.need.len()`, what
+/// `uploading` is how many files THIS deploy uploads (what
 /// the server asked for), not how many the site has: an incremental publish
 /// uploads a handful of files, so its cap is the floor of 3 however large the
 /// site is. That is deliberate — the cap is a share of what this deploy is
@@ -162,15 +144,9 @@ pub(crate) fn self_heal_cap(uploading: usize) -> usize {
     (uploading / 20).max(3)
 }
 
-/// Enforce [`self_heal_cap`] against one more self-heal. Bumps the shared
-/// counter and, once the cap is crossed, returns the loud failure this
-/// module falls back to instead of quietly healing every remaining file —
-/// `UploadWindow`'s existing first-error-aborts-everything policy takes it
-/// from there.
-///
-/// `pub(crate)` because `deploy::push`'s symlink check (not routed through
-/// [`upload_regular_file`]) needs the identical cap discipline and must not
-/// grow a second copy of it.
+/// Enforce [`self_heal_cap`] against one more self-heal, a file's or a
+/// link's. Bumps the shared counter and, once the cap is crossed, returns the
+/// failure that ends the publish instead of quietly healing every remaining file.
 pub(crate) fn charge_self_heal(
     throughput: &upload_policy::Throughput,
     cap: usize,
@@ -187,31 +163,35 @@ pub(crate) fn charge_self_heal(
     Ok(())
 }
 
-/// The tail shared by both branches of [`upload_regular_file`] once a drift
-/// has cleared the settle-and-corruption checks: charge it against the
-/// deploy's cap, then log it. Not shared with `deploy::push`'s symlink
-/// check, which has its own message shape — only the two branches here are
-/// byte-for-byte identical past this point.
-fn accept_self_heal(
-    throughput: &upload_policy::Throughput,
-    cap: usize,
+/// The hash `file_path`'s bytes at `canonical` have settled on, when they no
+/// longer match `expected`; `None` when they match. A file that differs is
+/// trusted only if it reads the same after [`DRIFT_SETTLE_DELAY`] and is not a
+/// zeroed stub, within the deploy's self-heal cap.
+pub(crate) async fn settled_hash(
     file_path: &str,
-    mismatch: &str,
-) -> Result<(), String> {
-    charge_self_heal(throughput, cap, file_path)?;
-    log::warn!(
-        "[deploy] {mismatch} — stable after a {:?} settle pause, uploading the bytes actually \
-         on disk instead",
-        DRIFT_SETTLE_DELAY
-    );
-    Ok(())
+    canonical: &Path,
+    expected: &str,
+    throughput: &upload_policy::Throughput,
+    self_heal_cap: usize,
+) -> Result<Option<String>, String> {
+    let first = hash_file_blocking(canonical).await?;
+    let Err(mismatch) = compare(file_path, expected, &first) else { return Ok(None) };
+    tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
+    if hash_file_blocking(canonical).await? != first {
+        return Err(format!("{mismatch} (still changing {DRIFT_SETTLE_DELAY:?} later — not self-healing a moving target)"));
+    }
+    if looks_like_zeroed_stub(&read_leading_bytes(canonical, ZEROED_STUB_SAMPLE_BYTES).await?) {
+        return Err(format!("{mismatch} (looks like a zeroed stub, not a rebuilt file — refusing to self-heal)"));
+    }
+    charge_self_heal(throughput, self_heal_cap, file_path)?;
+    log::warn!("[deploy] {mismatch} — stable after a {DRIFT_SETTLE_DELAY:?} settle pause, uploading the bytes actually on disk instead");
+    Ok(Some(first))
 }
 
 /// The byte length of every regular-file entry in `manifest`, read from `dir`.
 ///
-/// A sync sends this as `sizes`, so the server can refuse a publish over the
-/// site's storage cap before any upload; the upload window and the upload
-/// itself then use the same sizes. A symlink entry carries a target string,
+/// Open sends this as `sizes`, so the server can refuse a publish over the
+/// site's storage cap before any upload. A symlink entry carries a target string,
 /// not content, so it has none. A file is stat'd through any link on disk, as
 /// its upload reads it. An entry that cannot be stat'd is left out rather than
 /// reported as 0, and its upload fails with its own error. The stats run off
@@ -240,325 +220,6 @@ pub(crate) async fn regular_file_sizes(
     .map_err(|e| format!("Failed to read file sizes: {e}"))
 }
 
-/// The error an upload failure reports. A refusal the server words for the
-/// person (over the storage cap, superseded by a newer publish, moss too old) is shown as
-/// it is; any other failure names the file.
-fn upload_failure(file_path: &str, e: crate::seta::client::SetaError) -> String {
-    use crate::seta::client::SetaError;
-    match e {
-        SetaError::StorageCapExceeded { .. } | SetaError::DeploySuperseded { .. } | SetaError::UpdateRequired { .. } => e.to_string(),
-        e => format!("Failed to upload {}: {}", file_path, e),
-    }
-}
-
-/// Upload one regular file, choosing single-PUT or chunked by size.
-///
-/// This is the routing decision: one implementation, one place to pin with a
-/// test.
-///
-/// `size` is the length the caller read before the sync
-/// ([`regular_file_sizes`]). A file that has changed since and self-heals is
-/// measured again, because the chunk loop sends exactly `size` bytes.
-/// `throughput` is the deploy's shared link estimate. It decides the routing —
-/// "does this file fit in one request at the speed we are actually getting" —
-/// and every completed upload feeds it. Routing on a *fixed* size fails: a
-/// 3.9 MB file at 25 KB/s sits just under a 4 MiB threshold, so it would take
-/// the single-PUT path, which has no chunking, no escalation and no resume,
-/// and time out on every attempt.
-/// `self_heal_cap` is the deploy-wide budget from [`self_heal_cap`] (the
-/// function) — every caller computes it once from its own file count and
-/// passes the same value into every call this deploy makes.
-///
-/// Returns `Ok(Some(actual_hash))` when the file was shipped with a hash
-/// different from `expected_hash` (a self-heal). The server has no
-/// independent source of truth for these hashes — `commit_sync` sends
-/// whatever the client asserts — so a caller that gets `Some` back MUST
-/// correct its own manifest entry for `file_path` to
-/// `content::file_entry(&actual_hash)` before it commits, or the server's
-/// committed record for this generation is permanently wrong for a file that
-/// was, in fact, uploaded correctly.
-pub async fn upload_regular_file(
-    client: &MossSetaClient,
-    site_id: &str,
-    file_path: &str,
-    canonical: &Path,
-    mut size: u64,
-    generation_id: &str,
-    expected_hash: &str,
-    throughput: &upload_policy::Throughput,
-    self_heal_cap: usize,
-    on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-) -> Result<Option<String>, String> {
-    let mut healed_hash: Option<String> = None;
-    if throughput.needs_chunking(size) {
-        // Verify BEFORE uploading. The bytes are never buffered on this path,
-        // so the check has to stream the file — which also means it costs one
-        // local read of a file we are about to spend far longer sending.
-        let first_hash = hash_file(canonical)?;
-        if let Err(e) = compare(file_path, expected_hash, &first_hash) {
-            // On a live-edited, sync-backed vault (Google Drive) a
-            // raw/background asset can legitimately change on disk between
-            // the manifest being sealed and this upload running — a second
-            // build racing the first, not corruption. But a single fresh
-            // read cannot tell that apart from a torn read mid-write, which
-            // looks identical. Settle, then re-hash: only a file reporting
-            // the SAME hash on both reads has actually stopped changing.
-            tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
-            let second_hash = hash_file(canonical)?;
-            if second_hash != first_hash {
-                return Err(format!(
-                    "{e} (still changing {:?} later — not self-healing a moving target)",
-                    DRIFT_SETTLE_DELAY
-                ));
-            }
-            // Stable is necessary but not sufficient: a zeroed iCloud
-            // eviction stub is perfectly stable across two reads while still
-            // being corruption, not content.
-            let sample = read_leading_bytes(canonical, ZEROED_STUB_SAMPLE_BYTES).await?;
-            if looks_like_zeroed_stub(&sample) {
-                return Err(format!(
-                    "{e} (looks like a zeroed stub, not a rebuilt file — refusing to self-heal)"
-                ));
-            }
-            accept_self_heal(throughput, self_heal_cap, file_path, &e)?;
-            healed_hash = Some(second_hash);
-            // `size` was read before the sync; the chunk loop sends exactly
-            // that many bytes, so a file that changed since needs its own.
-            size = tokio::fs::metadata(canonical)
-                .await
-                .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
-                .len();
-        }
-        client
-            .upload_file_chunked(
-                site_id,
-                file_path,
-                canonical,
-                size,
-                generation_id,
-                throughput,
-                on_bytes,
-            )
-            .await
-            .map_err(|e| upload_failure(file_path, e))?;
-    } else {
-        // allow:raw_read built output being uploaded — dataless is absent
-        let mut body = tokio::fs::read(canonical)
-            .await
-            .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-        if let Err(e) = verify_bytes(file_path, &body, expected_hash) {
-            // Same self-heal discipline as the chunked branch: settle, then
-            // re-read from disk — `body` alone is only one sample and cannot
-            // tell a finished rebuild from a torn read mid-write.
-            tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
-            // Same `canonical` sealed-generation file as the first read above.
-            // This is the re-read looks_like_zeroed_stub below checks before
-            // trusting the drift as a real, finished rebuild.
-            // allow:raw_read built output — dataless is absent
-            let resettled = tokio::fs::read(canonical)
-                .await
-                .map_err(|e| format!("Failed to re-read {}: {}", file_path, e))?;
-            let first_hash = hash_bytes(&body);
-            let second_hash = hash_bytes(&resettled);
-            if second_hash != first_hash {
-                return Err(format!(
-                    "{e} (still changing {:?} later — not self-healing a moving target)",
-                    DRIFT_SETTLE_DELAY
-                ));
-            }
-            if looks_like_zeroed_stub(&resettled) {
-                return Err(format!(
-                    "{e} (looks like a zeroed stub, not a rebuilt file — refusing to self-heal)"
-                ));
-            }
-            accept_self_heal(throughput, self_heal_cap, file_path, &e)?;
-            body = resettled;
-            healed_hash = Some(second_hash);
-        }
-        // The bytes in hand, not the size read before the sync.
-        size = body.len() as u64;
-        throughput.note_single_put_file();
-        // Timed across `upload_file`'s whole retry loop rather than one attempt,
-        // because that is all this path can see. It biases the estimate
-        // *downward* after a failed attempt, which is the direction that helps:
-        // the next file is routed as if the link were as slow as this file
-        // actually experienced.
-        let started = std::time::Instant::now();
-        client
-            .upload_file(site_id, file_path, body, generation_id, Some(throughput))
-            .await
-            .map_err(|e| upload_failure(file_path, e))?;
-        throughput.observe(size, started.elapsed());
-        // The chunked branch reports per-chunk; this branch reports once.
-        if let Some(cb) = on_bytes {
-            cb(size);
-        }
-    }
-    Ok(healed_hash)
-}
-
-/// A sliding window of in-flight upload tasks, admitting by bytes and by count.
-///
-/// Replaces `for chunk in need.chunks(20)`, which was a hard **barrier**: every
-/// batch waited for its slowest member, so one file on a slow link stalled
-/// nineteen that were already done. A window reuses a slot the moment it frees.
-///
-/// It is also the memory bound. The old shape could hold 20 concurrent uploads
-/// of up to 20 MB each — 400 MB resident on a machine also running a webview
-/// and a build. Admission is capped at `upload_policy::BYTE_BUDGET`.
-///
-/// Failure policy is unchanged and deliberate: the first error aborts every
-/// in-flight task and fails the whole deploy. A partial upload is not a partial
-/// publish — the server's generation stays unpromoted, and since 2026-08-03 the
-/// staged files survive so the retry resumes rather than restarting.
-pub struct UploadWindow {
-    tasks: tokio::task::JoinSet<(u64, Result<(), String>)>,
-    in_flight_bytes: u64,
-    throughput: std::sync::Arc<upload_policy::Throughput>,
-    /// When the window opened, which is when the upload phase began — the
-    /// wall clock behind the summary line's achieved rate.
-    started: std::time::Instant,
-    finished: bool,
-    completed_files: std::sync::Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl UploadWindow {
-    pub fn new() -> Self {
-        Self {
-            tasks: tokio::task::JoinSet::new(),
-            in_flight_bytes: 0,
-            throughput: std::sync::Arc::new(upload_policy::Throughput::new()),
-            started: std::time::Instant::now(),
-            finished: false,
-            completed_files: Default::default(),
-        }
-    }
-
-
-    /// The link estimate every task admitted through this window shares.
-    ///
-    /// Owned here because a `UploadWindow` is created once per deploy, which is
-    /// exactly the scope a bandwidth estimate is meaningful over. Deliberately
-    /// **not** a global: one publish's link conditions have no business seeding
-    /// the next one's, and a global would make the unit tests order-dependent.
-    pub fn throughput(&self) -> std::sync::Arc<upload_policy::Throughput> {
-        std::sync::Arc::clone(&self.throughput)
-    }
-
-    /// What one file costs this window's byte budget.
-    ///
-    /// A chunked upload streams: it seeks and reads one planned request at a
-    /// time, so its resident cost is that request, not the file. Charging the
-    /// whole file made every asset over `BYTE_BUDGET` fail `admits` against any
-    /// other in-flight work and run alone through the `in_flight_count == 0`
-    /// escape hatch — three videos on a GFW-boundary link uploaded strictly
-    /// end-to-end and reached 71 KB/s aggregate where each alone had managed
-    /// 77-84, so the concurrency the window exists to provide was worth less
-    /// than nothing. It also starved the adaptive limit: with the window never
-    /// holding more than one request, the goodput probe had no improvement to
-    /// find and settled at 2.
-    pub fn admission_cost(&self, size: u64) -> u64 {
-        if self.throughput.needs_chunking(size) {
-            self.throughput.plan_request_size() as u64
-        } else {
-            size
-        }
-    }
-
-    /// Block until a task of `size` bytes may be admitted.
-    ///
-    /// Returns `Err` as soon as any already-spawned task has failed, with every
-    /// remaining task aborted.
-    pub async fn reserve(&mut self, size: u64) -> Result<(), String> {
-        while !upload_policy::admits(
-            self.tasks.len(),
-            self.in_flight_bytes,
-            size,
-            self.throughput.effective_limit(),
-        ) {
-            self.harvest_one().await?;
-        }
-        Ok(())
-    }
-
-    /// Admit a task. Call [`Self::reserve`] first.
-    pub fn spawn<F>(&mut self, size: u64, fut: F)
-    where
-        F: std::future::Future<Output = Result<(), String>> + Send + 'static,
-    {
-        self.in_flight_bytes += size;
-        // Mirror the task count into the shared Throughput: the tasks size
-        // their requests by how many share the link (upload_policy), and they
-        // cannot see this window.
-        self.throughput.enter_flight();
-        let completed = self.completed_files.clone();
-        self.tasks.spawn(async move {
-            let result = fut.await;
-            if result.is_ok() { completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
-            (size, result)
-        });
-    }
-
-    /// Wait for every remaining task, failing on the first error.
-    ///
-    /// On success this also emits the one-line upload roll-up — the
-    /// window spans exactly the upload phase, and logging here means neither
-    /// deploy loop can forget it.
-    pub async fn drain(&mut self) -> Result<(), String> {
-        while !self.tasks.is_empty() {
-            self.harvest_one().await?;
-        }
-        self.record_profile();
-        log::info!("{}", self.throughput.deploy_summary(self.started.elapsed()));
-        Ok(())
-    }
-
-    fn record_profile(&mut self) {
-        if self.finished { return; }
-        self.finished = true;
-        drop(crate::build::phase::PhaseTrace::since("upload", self.started));
-        super::profile::count("files_uploaded", self.completed_files.load(std::sync::atomic::Ordering::Relaxed));
-        for (name, value) in self.throughput.profile_counts(self.started.elapsed()) {
-            super::profile::count(name, value);
-        }
-    }
-
-    /// Await exactly one completion and release its bytes.
-    ///
-    /// On failure the window aborts everything still running: once the deploy
-    /// is going to fail, continuing to spend a slow user's uplink is pure cost.
-    async fn harvest_one(&mut self) -> Result<(), String> {
-        let Some(joined) = self.tasks.join_next().await else {
-            // Empty JoinSet — nothing to wait for. `admits` always returns true
-            // at count 0, so `reserve` cannot spin here.
-            return Ok(());
-        };
-        match joined {
-            Ok((size, result)) => {
-                self.in_flight_bytes = self.in_flight_bytes.saturating_sub(size);
-                self.throughput.exit_flight();
-                if let Err(e) = result {
-                    self.tasks.abort_all();
-                    self.in_flight_bytes = 0;
-                    return Err(e);
-                }
-                Ok(())
-            }
-            Err(join_err) => {
-                // A panicking task never returns its size, so the byte counter
-                // would leak. We are failing the deploy anyway; reset it.
-                self.tasks.abort_all();
-                self.in_flight_bytes = 0;
-                Err(format!("Upload task panicked: {}", join_err))
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "upload_tests.rs"]
 mod tests;
-
-impl Drop for UploadWindow {
-    fn drop(&mut self) { self.record_profile(); }
-}

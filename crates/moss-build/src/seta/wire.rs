@@ -93,6 +93,11 @@ pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> 
             message: text("error")?,
         }),
         (409, "deploy_superseded") => Some(SetaError::DeploySuperseded { message: text("error")? }),
+        (409, "mass_removal") => Some(SetaError::MassRemoval {
+            files: json.get("files")?.as_u64()? as usize,
+            live_files: json.get("live_files")?.as_u64()? as usize,
+            removed: json.get("removed")?.as_u64()? as usize,
+        }),
         (422, "gated_not_enforceable") => Some(SetaError::GatedNotEnforceable { message: text("error")? }),
         (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site: text("site")? }),
         (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site: text("site")? }),

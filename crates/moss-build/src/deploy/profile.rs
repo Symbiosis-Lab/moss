@@ -4,7 +4,7 @@
 //! mark them unavailable. Page counts reuse the seal's change set, with
 //! `pages_classified` distinguishing an unknown baseline from zero changes.
 //! `body_requests` and `retries` use the upload summary's accounting, excluding
-//! sync and commit requests. `requests`, `requests_failed`, `sent_kb`, `resent_kb`
+//! the open and commit requests. `requests`, `requests_failed`, `sent_kb`, `resent_kb`
 //! and `edge` come from the seta client's request tally and cover every request
 //! of the deploy. Unentered phases have zero milliseconds.
 
@@ -98,7 +98,7 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
         }))).await;
         let refusal = refusal.lock().unwrap_or_else(|e| e.into_inner()).take();
         let mut counts: BTreeMap<&str, usize> = ["manifest_files", "files_needed", "files_uploaded",
-            "bytes_uploaded", "body_requests", "retries", "chunked_files", "single_put_files",
+            "bytes_uploaded", "body_requests", "retries", "chunked_files",
             "final_concurrency", "achieved_bytes_per_s", "server_files_updated", "removed_files",
             "pages_added", "pages_edited", "pages_deleted", "pages_restyled", "pages_classified",
             "manifest_kb"]
@@ -140,6 +140,7 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
         SetaError::SiteLimitReached { .. } => refusal("site_limit"),
         SetaError::StorageCapExceeded { .. } => refusal("size_limit"),
         SetaError::DeploySuperseded { .. } => refusal("conflict"),
+        SetaError::MassRemoval { .. } => refusal("mass_removal"),
         SetaError::Api { status: 401 | 403, .. } | SetaError::NotSignedIn { .. } => refusal("access"),
         SetaError::Api { status: 409, .. } => refusal("conflict"),
         SetaError::Api { status: 413, .. } => refusal("size_limit"),
@@ -158,24 +159,33 @@ pub(crate) fn profiled_refusal(error: crate::seta::client::SetaError) -> Publish
     }
 }
 
-pub(crate) async fn sync(
-    call: impl Future<Output = Result<crate::seta::sites::SyncManifestResponse, crate::seta::client::SetaError>>,
-) -> Result<crate::seta::sites::SyncManifestResponse, PublishError> {
+pub(crate) async fn open(
+    call: impl Future<Output = Result<crate::seta::deploys::DeployAnswer, crate::seta::client::SetaError>>,
+) -> Result<crate::seta::deploys::DeployAnswer, crate::seta::client::SetaError> {
+    // Named "sync" so deploy records stay comparable across the route change.
     let _phase = PhaseTrace::start("sync");
-    let diff = call.await.map_err(profiled_refusal)?;
-    count("files_needed", diff.need.len() as u64);
-    count("removed_files", diff.remove.len() as u64);
-    Ok(diff)
+    let answer = call.await?;
+    count("files_needed", answer.needed.len() as u64);
+    Ok(answer)
 }
 
 pub(crate) async fn commit(
-    call: impl Future<Output = Result<crate::seta::sites::CommitResponse, crate::seta::client::SetaError>>,
-) -> Result<crate::seta::sites::CommitResponse, PublishError> {
+    call: impl Future<Output = Result<crate::seta::deploys::DeployAnswer, crate::seta::client::SetaError>>,
+) -> Result<crate::seta::deploys::DeployAnswer, PublishError> {
     let _phase = PhaseTrace::start("publish");
-    let result = call.await.map_err(profiled_refusal)?;
-    count("server_files_updated", result.files_updated as u64);
-    count("removed_files", result.files_removed as u64);
-    Ok(result)
+    let answer = call.await.map_err(profiled_refusal)?;
+    landed_counts(&answer);
+    Ok(answer)
+}
+
+/// What a commit reports, from whichever request committed.
+pub(crate) fn landed_counts(answer: &crate::seta::deploys::DeployAnswer) {
+    if let Some(n) = answer.files_updated {
+        count("server_files_updated", n as u64);
+    }
+    if let Some(n) = answer.files_removed {
+        count("removed_files", n as u64);
+    }
 }
 
 #[cfg(test)]

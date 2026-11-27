@@ -16,7 +16,7 @@ pub(crate) struct Seta {
     /// Replies to the next sign-in requests, in order, as (status line,
     /// extra header lines, body); an empty queue answers 200.
     sign_in_replies: Arc<Mutex<std::collections::VecDeque<Reply>>>,
-    /// The body of an unverified key's 403 on `/sync`.
+    /// The body of an unverified key's 403 on opening a deploy.
     sync_refusal: Arc<Mutex<&'static str>>,
 }
 
@@ -66,10 +66,10 @@ impl Seta {
                         410 => ("410 Gone", r#"{"error":"Session expired"}"#.to_string()),
                         _ => ("500 Internal Server Error", r#"{"error":"upstream down"}"#.to_string()),
                     }
-                } else if path.ends_with("/sync") {
+                } else if path.ends_with("/deploys") {
                     // A key no sign-in has verified is not the site's owner.
                     if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
-                        ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
+                        ("200 OK", r#"{"deploy":"d0d0d0d0d0d0d0d0","state":"live","needed":[],"live_generation":"d0d0d0d0d0d0d0d0"}"#.to_string())
                     } else {
                         ("403 Forbidden", sr.lock().unwrap().to_string())
                     }
@@ -432,7 +432,7 @@ async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
     let identity = crate::identity::Identity::load_for_signing(folder.dir.path()).unwrap();
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &crate::build::site_config::resolve_environment(&folder.dir.path().to_string_lossy()));
     let sync = || async {
-        crate::deploy::profile::sync(client.sync_manifest("my-site", &Default::default(), &Default::default(), "gen")).await.map(|_| ())
+        client.open_deploy("my-site", &Default::default(), &Default::default(), false).await.map(|_| ()).map_err(crate::deploy::profile::profiled_refusal)
     };
 
     let err = sync().await.expect_err("not signed in");

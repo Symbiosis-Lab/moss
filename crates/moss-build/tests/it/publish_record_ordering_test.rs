@@ -57,8 +57,8 @@ fn last_published_record_is_saved_after_the_commit() {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let body = fn_body(&src, "push_site_inner_impl");
 
-    let commit = body.find("commit_sync(").expect(
-        "`push_site_inner_impl` must call `commit_sync` — if the commit moved to a helper, this \
+    let commit = body.find("transfer.finish(").expect(
+        "`push_site_inner_impl` must call `transfer.finish` — if the commit moved to a helper, this \
          invariant needs re-deriving, not deleting: the record must still follow the commit.",
     );
     let save = body.find("record_landed").expect(
@@ -69,7 +69,7 @@ fn last_published_record_is_saved_after_the_commit() {
 
     assert!(
         save > commit,
-        "`published_record::save` must come AFTER `commit_sync` in `push_site_inner_impl` \
+        "`published_record::save` must come AFTER `transfer.finish` in `push_site_inner_impl` \
          (found save at byte {save}, commit at byte {commit}). A record written before the \
          commit — or on a path where the commit failed — claims pages are live that never \
          shipped, so the NEXT publish reports nothing to publish while real changes sit \

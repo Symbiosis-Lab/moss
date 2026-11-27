@@ -12,6 +12,7 @@ pub mod dns;
 pub mod cdn;
 pub(crate) mod tls;
 pub mod sites;
+pub mod deploys;
 pub mod transfer;
 pub(crate) mod chunked_upload;
 pub mod upload_policy;

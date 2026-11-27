@@ -83,13 +83,7 @@ pub async fn publish(
     }
     let plan = Plan::new(owner, files, live);
     if let Some(live) = live {
-        super::mass_remove::check_mass_removal(
-            files.len(),
-            plan.puts.len(),
-            &plan.deletes,
-            Some(live.files().len()),
-            allow.mass_removal,
-        )?;
+        super::mass_remove::check_mass_removal(files.len(), &plan.deletes, live.files().len(), allow.mass_removal)?;
     }
     let puts = local_files(site_dir, files, &plan.puts)?;
 

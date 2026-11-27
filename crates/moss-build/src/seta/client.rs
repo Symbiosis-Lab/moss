@@ -33,7 +33,7 @@ const SEND_LOGS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// `reqwest::Client::new()` (the previous construction) installs **no**
 /// timeout at all, so any stalled request — most visibly the deploy's
-/// `sync_manifest`/`upload`/`commit` calls, which add no per-request timeout —
+/// open/send/commit calls, which add no per-request timeout —
 /// would await forever. Bounding it here means every seta call surfaces a
 /// retryable error instead of an unrecoverable hang.
 fn build_seta_http_client() -> Client {
@@ -477,6 +477,11 @@ pub enum SetaError {
     #[error("{message}")]
     DeploySuperseded { message: String },
 
+    /// The publish would remove most of the live site:
+    /// `409 {code:'mass_removal', files, live_files, removed}`.
+    #[error("{}", crate::deploy::mass_remove::wipe_refusal(*files, *live_files, *removed))]
+    MassRemoval { files: usize, live_files: usize, removed: usize },
+
     /// The server refuses this moss as too old for the route:
     /// `410 {code:'update_required', min_version?, message}`. Retrying cannot
     /// help; the app has to be updated first.
@@ -863,7 +868,9 @@ impl MossSetaClient {
     /// Send `request` and tally it: the one place a deploy's requests are counted.
     pub(super) async fn send(&self, request: RequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
         let request = request.build()?;
-        let upload = matches!(*request.method(), Method::PUT | Method::PATCH);
+        // A deploy's sends are POSTs to `.../deploys/:deploy/files`.
+        let upload = matches!(*request.method(), Method::PUT | Method::PATCH)
+            || (*request.method() == Method::POST && request.url().path().ends_with("/files"));
         let body = request.body().and_then(|b| b.as_bytes()).map_or(0, |b| b.len() as u64);
         let sent = self.client.execute(request).await;
         let ray = sent.as_ref().ok().and_then(|r| r.headers().get("cf-ray")).and_then(|v| v.to_str().ok());
