@@ -165,3 +165,48 @@ async fn the_press_posts_a_locked_or_deleted_copy_again_once() {
         assert!(run(root, &articles, false, None).await.is_empty());
     }
 }
+
+/// Publish of one post with a channel on: every copy it will not send says why.
+#[tokio::test]
+async fn a_one_post_publish_says_why_it_sends_nothing() {
+    let absent = "find_copy: async function () { return { success: true, copy: { absent: true } }; }";
+    let unknown = "find_copy: async function () { throw new Error('lookup down'); }";
+    for (case, state, lookup) in [("hand-off, draft gone", State::HandedOff, absent), ("hand-off, lookup down", State::HandedOff, unknown), ("unconfirmed", State::Unconfirmed, unknown)] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (_, articles) = site(root, state, |r| if state == State::HandedOff {
+            r.handoff = Some(Handoff { text: "Post it".into(), open_url: None, id: None });
+            r.redrafted = true;
+        });
+        channel(root, &format!("publish_copy: {NEVER}, update_copy: {NEVER}, {lookup}"));
+        let out = run(root, &articles, false, Some(SOURCE)).await;
+        assert!(matches!(&out[..], [Outcome::HandedOff { .. }] | [Outcome::Unconfirmed { .. }]), "{case}: {out:?}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (records, mut articles) = site(root, State::Due, |_| {});
+    articles.articles.get_mut("a/").unwrap().syndicate = Some(vec![]);
+    channel(root, &format!("publish_copy: {NEVER}"));
+    let before = records.get(UID, "social").unwrap();
+    assert!(matches!(&run(root, &articles, false, Some(SOURCE)).await[..], [Outcome::Held { why: HeldWhy::NotNamed, .. }]));
+    assert!(run(root, &articles, false, None).await.is_empty(), "a deploy says nothing of a channel the page dropped");
+    assert_eq!(records.get(UID, "social").unwrap(), before);
+}
+
+/// A deploy that changed the page meets a hand-off whose draft is gone: said once, then quiet.
+#[tokio::test]
+async fn a_changed_page_says_a_gone_draft_waits_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (records, articles) = site(root, State::HandedOff, |r| {
+        r.handoff = Some(Handoff { text: "Post it".into(), open_url: None, id: None });
+        r.redrafted = true;
+        r.update_due = true;
+    });
+    channel(root, &format!("publish_copy: {NEVER}, update_copy: {NEVER}, find_copy: async function () {{ return {{ success: true, copy: {{ absent: true }} }}; }}"));
+    assert!(matches!(&run(root, &articles, false, None).await[..], [Outcome::HandedOff { .. }]));
+    let r = records.get(UID, "social").unwrap();
+    assert!(r.state == State::HandedOff && !r.update_due, "{r:?}");
+    assert!(run(root, &articles, false, None).await.is_empty());
+}

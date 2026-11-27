@@ -166,6 +166,8 @@ pub enum HeldWhy {
     OtherAccount,
     /// The channel has no usable session; it waits for someone to sign in.
     SignedOut,
+    /// The page no longer names the channel; it waits for the page to name it again.
+    NotNamed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -382,6 +384,10 @@ impl Run<'_> {
             // The latest build is the author's latest word: a channel the post no
             // longer names gets nothing more, and its record keeps its history.
             if now.is_some_and(|p| !super::Named::of_post(p, &channels, choices).is_some_and(|n| n.ids().contains(&record.channel))) {
+                // Asked about this one post, the channel answers rather than staying silent.
+                if opts.only_source.is_some() {
+                    push(sent(&record, Outcome::Held { why: HeldWhy::NotNamed, reason: "its page does not name this channel".into() }));
+                }
                 continue;
             }
             let Some(channel) = channels.get(&record.channel) else { continue };
@@ -478,10 +484,10 @@ impl Run<'_> {
                         }
                         continue;
                     }
-                    // A page publish whose lookup fails still reaches the draft: rewritten
+                    // A page publish whose lookup fails or finds no draft still reaches it: rewritten
                     // when the network gave an id for it, else said again as it stands.
                     Found::Unknown(_) if reopen && record.draft().is_some() => Op::Update,
-                    Found::Unknown(_) if reopen && !retry => {
+                    Found::Absent | Found::Unknown(_) if reopen && !retry => {
                         record.update_due = false;
                         if let Some(h) = record.handoff.clone() {
                             push(settle(&records, record, Outcome::HandedOff { text: h.text, open_url: h.open_url }));
@@ -1614,7 +1620,8 @@ mod tests {
     async fn a_page_publish_of_an_idless_absent_draft_makes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let (records, articles) = waiting_without_ids(dir.path(), "{ success: true, copy: { absent: true } }", true);
-        assert!(run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await.is_empty());
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "still waiting, and said: {out:?}");
         let a = records.get("aaaa0000", "social").unwrap();
         assert!(a.state == State::HandedOff && a.draft().is_none());
     }
@@ -1726,7 +1733,8 @@ mod tests {
     async fn a_page_publish_never_overwrites_a_published_draft_or_remakes_a_deleted_one() {
         let dir = tempfile::tempdir().unwrap();
         let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { absent: true } }", true, true);
-        assert!(run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await.is_empty());
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "still waiting, and said: {out:?}");
         assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff);
         let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { id: 'f', url: 'https://social.example.net/f' } }", true, true);
         let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
