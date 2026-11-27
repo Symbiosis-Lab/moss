@@ -334,6 +334,21 @@ fn test_navigation_structure() {
     );
 }
 
+#[test]
+fn a_themed_masthead_keeps_the_name_first_and_the_toggles_last_inside_nav_right() {
+    let documents = vec![make_doc("about.html", "About", Some(1), Some(true))];
+    let nav = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, false)
+        .with_logo("/assets/logo.svg".into())
+        .with_themed(true)
+        .generate_navigation();
+
+    assert!(nav.starts_with(r#"<div class="nav-left">"#), "{nav}");
+    let (_, right) = nav.split_once(r#"<div class="nav-right">"#).expect(&nav);
+    let at = |class: &str| right.find(&format!(r#"class="{class}""#)).unwrap_or_else(|| panic!("no .{class} in {right}"));
+    assert!(at("mobile-menu-button") < at("nav-links") && at("nav-links") < at("nav-icons"), "{nav}");
+    assert!(!nav.contains("nav-logo-strut"), "the float's strut has no place in a flex row: {nav}");
+}
+
 // ===========================================
 // Auto-Navigation Tests (TDD)
 // ===========================================

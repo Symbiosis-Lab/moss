@@ -5,7 +5,9 @@ import path from "node:path";
  *  or dropped page is not built. True when it removed one.
  *
  *  Dot directories are never entered: another process may be building this
- *  site and deleting `.moss/cache` while the walk runs. Kept dependency-free
+ *  site and deleting `.moss/cache` while the walk runs. `.moss/theme` is the
+ *  exception, since a fixture's own stylesheet left behind themes the site.
+ *  Kept dependency-free
  *  so plain node can import it in a test.
  *  @param {string} siteDir
  *  @param {Iterable<string>} named
@@ -29,5 +31,6 @@ export function pruneUnnamed(siteDir, named) {
     }
   };
   walk("");
+  if (fs.existsSync(path.join(siteDir, ".moss/theme"))) walk(path.join(".moss", "theme"));
   return pruned;
 }

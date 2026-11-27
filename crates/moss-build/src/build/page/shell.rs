@@ -289,6 +289,10 @@ pub struct ShellVars {
     /// theme's own `header + …` need the next sibling. Site-level, like
     /// `runtime_js_tags`.
     pub inline_js: String,
+    /// The page links a stylesheet of its own (the theme's or the page's), so
+    /// `.nav-content` carries `data-nav-themed` and keeps the flex row that
+    /// stylesheet was written against, out of the plain name's float.
+    pub nav_themed: bool,
     /// The full-screen viewer's markup (`media_collection::lightbox_html`),
     /// set only on a page that has a picture the viewer opens; empty elsewhere. Dropped in
     /// just before the runtime scripts, which `fullscreen.js` finds it through.
@@ -367,8 +371,9 @@ impl ShellProcessor {
             String::new()
         } else {
             format!(
-                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>{}\n    </header>",
+                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\"{}>\n                {}\n            </div>\n        </nav>{}\n    </header>",
                 vars.header_attrs,
+                if vars.nav_themed { " data-nav-themed" } else { "" },
                 vars.navigation,
                 vars.inline_js,
             )

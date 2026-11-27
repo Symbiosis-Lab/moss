@@ -35,3 +35,13 @@ test('never enters a dot directory', { skip: process.getuid?.() === 0 && 'root r
     fs.chmodSync(cache, 0o755);
   }
 });
+
+test('removes a theme stylesheet the spec no longer names', () => {
+  const dir = site();
+  const sheet = path.join(dir, '.moss/theme/style.css');
+  fs.mkdirSync(path.dirname(sheet), { recursive: true });
+  fs.writeFileSync(sheet, 'x');
+  assert.equal(pruneUnnamed(dir, ['index.md', 'places/a.md', 'places/old.md']), true);
+  assert.ok(!fs.existsSync(sheet));
+  assert.ok(fs.existsSync(path.join(dir, '.moss/cache/objects/3c/blob')));
+});

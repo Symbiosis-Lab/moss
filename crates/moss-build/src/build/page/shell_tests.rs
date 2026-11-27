@@ -1658,6 +1658,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         post_article: String::new(),
         runtime_js_tags: String::new(),
         inline_js: String::new(),
+        nav_themed: false,
         lightbox: String::new(),
         robots_meta: None,
         colophon: true,

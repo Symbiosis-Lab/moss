@@ -3930,7 +3930,6 @@ logo: assets/lockup.svg
 Scratch site for the one-row masthead render gate.
 `,
     "assets/lockup.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="45" height="44" viewBox="0 0 45 44"><rect width="45" height="44" fill="#a11d1d"/></svg>`,
-    ".moss/theme/style.css": `.site-logo { height: 44px; }\n`,
     "Work.md": `---
 title: Work
 uid: "nor00102"
@@ -5580,6 +5579,49 @@ logo: assets/mark.svg
 `,
     "assets/mark.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><rect width="40" height="40" fill="#1d3aa1"/></svg>`,
     ".moss/theme/style.css": `${NAV_NOWRAP_GATE.files[".moss/theme/style.css"]}.site-logo { height: 40px; }\n`,
+  },
+};
+
+// A theme written against the flex masthead: it hides the toggles and shows moss's menu button, drawn as two
+// bars, up to 760px. The page links its own stylesheet, so the build marks the masthead themed and the
+// button stays on the name's row. Served by playwright/nav-themed.config.ts.
+export const NAV_THEMED_MENU_GATE: ScratchSiteSpec = {
+  name: "nav-themed-menu-gate",
+  files: {
+    "index.md": `---\ntitle: Linden Studio\nuid: "nth0m101"\n---\n\n# Linden Studio\n`,
+    ...Object.fromEntries(
+      ["About", "Work", "Talks", "Contact"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nth0m20${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `header .nav-links { gap: 6px 24px; }
+header .nav-icons { display: none; }
+@media (max-width: 760px) {
+  header .mobile-menu-button svg { display: none; }
+  header .mobile-menu-button { display: block; margin-inline-start: auto; inline-size: 34px; block-size: 24px; border: 0; background: none; }
+  header .nav-links:not(.mobile-open) { display: none; }
+}
+`,
+  },
+};
+
+// A theme that styles the flex row itself (a minimum height, its gap, and the split's columns) under a plain
+// name too long to share a row with its links: nav-split splits it, as the theme expects.
+export const NAV_THEMED_SPLIT_GATE: ScratchSiteSpec = {
+  name: "nav-themed-split-gate",
+  files: {
+    "index.md": `---\ntitle: The Laboratory for Coastal Air and Water\nuid: "nth0s101"\n---\n\n# Home\n`,
+    ...Object.fromEntries(
+      ["Research", "Publications", "People", "Teaching", "Contact"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nth0s20${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `.nav-content { min-block-size: 76px; padding-block-end: 0; gap: 24px; }
+.site-name { font: 500 1.375rem/1 serif; padding-block: 11px; }
+.nav-content[data-nav-split] .nav-links { gap: 0 20px; }
+`,
   },
 };
 

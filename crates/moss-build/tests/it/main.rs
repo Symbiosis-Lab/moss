@@ -121,6 +121,7 @@ mod math_wiring_invariant_test;
 mod missing_marked_picture_test;
 mod nav_island_rule_test;
 mod nav_partial_language_test;
+mod nav_themed_test;
 mod newsletter_config_test;
 mod no_string_emits;
 mod no_tokio_spawn_in_tauri_context_test;

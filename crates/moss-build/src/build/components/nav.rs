@@ -55,6 +55,9 @@ pub struct NavigationBuilder<'a> {
     /// interface), so reading it there labeled the page "EN" while every link
     /// beside it was already tag-labeled.
     current_lang_tag: String,
+    /// The page links a stylesheet of its own, written against the flex row:
+    /// the toggles go last, inside `.nav-right`, and there is no float strut.
+    themed: bool,
     /// Optional logo path (e.g., "/assets/logo.svg")
     logo_path: Option<String>,
     /// Snapshot the logo's intrinsic size is read from. `None` leaves the
@@ -113,7 +116,13 @@ impl<'a> NavigationBuilder<'a> {
             header_mode: HeaderMode::Brand,
             term_nav: Vec::new(),
             page_edition: "",
+            themed: false,
         }
+    }
+
+    pub fn with_themed(mut self, themed: bool) -> Self {
+        self.themed = themed;
+        self
     }
 
     /// Add term-kind roots as nav entries after the content entries: those of
@@ -354,7 +363,7 @@ impl<'a> NavigationBuilder<'a> {
         // A hidden copy of the logo opens both floats. The theme sizes it as it
         // sizes the logo, so a logo taller than the toggles makes each float as
         // tall and the toggles and links centre on it, as in a flex row.
-        let strut = if !nav_mode && self.logo_path.is_some() {
+        let strut = if !nav_mode && !self.themed && self.logo_path.is_some() {
             format!(r#"<span class="nav-logo-strut" aria-hidden="true">{}</span>"#, self.logo_img(None))
         } else {
             String::new()
@@ -372,8 +381,12 @@ impl<'a> NavigationBuilder<'a> {
 
         // The toggles come first so a plain name can wrap beside them as a
         // float from the first paint; site.css orders them to the end edge
-        // wherever the row is flex or grid. Focus follows this order.
+        // wherever the row is flex or grid. Focus follows this order. A themed
+        // masthead keeps the order its stylesheet was written against.
         let nav_icons = self.nav_icons_html(&strut);
+        if self.themed {
+            return format!(r#"{}<div class="nav-right">{}{}{}</div>"#, site_name, hamburger, nav_links, nav_icons);
+        }
         let nav_right = format!(r#"<div class="nav-right">{}{}</div>"#, hamburger, nav_links);
 
         format!("{}{}{}", nav_icons, site_name, nav_right)

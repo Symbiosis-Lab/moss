@@ -133,3 +133,5 @@ nav-flattened
 nav-flattened:beside
 nav-first-paint:owned
 nav-trail-clip
+nav-themed
+nav-themed:split

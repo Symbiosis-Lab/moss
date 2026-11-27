@@ -14,6 +14,14 @@
 import { test, expect, type Page } from "../../support/browser-test";
 import { holdScript, settle, shifts } from "./first-paint";
 
+// A built theme stylesheet would make the masthead the theme's flex row, so the 44px lockup the float is measured against rides in moss's own sheet.
+test.beforeEach(async ({ page }) => {
+  await page.route(/\.css(\?|$)/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `${await response.text()}\n.site-logo { height: 44px; }\n` });
+  });
+});
+
 async function masthead(page: Page) {
   return page.evaluate(() => {
     const content = document.querySelector(".nav-content") as HTMLElement;

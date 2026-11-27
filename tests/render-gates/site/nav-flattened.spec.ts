@@ -107,6 +107,7 @@ test("a theme that flattens only on a phone hands the masthead back and forth as
     const m = await at(width);
     const where = `${width}px: ${JSON.stringify(m)}`;
     expect(m.owned, where).toBe(theirs);
-    expect(m.floated, where).toBe(!theirs);
+    // Wider, the theme's stylesheet still marks the masthead its own flex row: the plain name's float stays off.
+    expect(m.floated, where).toBe(false);
   }
 });

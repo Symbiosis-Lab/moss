@@ -8,7 +8,8 @@
  * skip link, toggles, name or trail, menu button, links. moss's own masthead
  * with a plain site name needs nothing from here above the hamburger range:
  * site.css floats the toggles and the name wraps beside them from the first
- * paint.
+ * paint. A page with a stylesheet of its own carries `data-nav-themed` from
+ * the build and keeps the flex row instead, measured and split like a trail.
  *
  * A theme that flattens `.nav-right` (`display: contents`) or holds
  * `.nav-content` to one row (`flex-wrap: nowrap`) lays the masthead out
@@ -61,8 +62,10 @@ export interface RowWidths {
   links: number;
   /** The toggle cluster (its buttons are fixed boxes; no flex growth). */
   icons: number;
-  /** `.nav-content`'s column gap, before the links and again before the toggles. */
+  /** `.nav-content`'s column gap, before the links. */
   gap: number;
+  /** The gap before the toggles: their parent's, which is `.nav-right` on a themed masthead. */
+  iconsGap: number;
 }
 
 /**
@@ -72,7 +75,7 @@ export interface RowWidths {
  * then wrapped. 0.01px absorbs only float error in the sum.
  */
 export function oneRowFits(w: RowWidths): boolean {
-  return w.name + w.links + w.icons + 2 * w.gap <= w.container + 0.01;
+  return w.name + w.links + w.icons + w.gap + w.iconsGap <= w.container + 0.01;
 }
 
 /** `el`'s border box along the masthead's inline axis, unrounded. */
@@ -184,6 +187,8 @@ export function initNavSplit(): void {
   function layout(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
+    // Read at each call: tightening the phone gaps changes it.
+    const iconsGap = () => columnGap(icons!.parentElement!, 0);
     const { owned, flattened } = readOwned(navContent!);
     const mode = (m: Mode | null) => setMode(navContent!, m, owned);
     // Where the menu button shows (≤20rem, or wider where a theme shows it)
@@ -196,6 +201,7 @@ export function initNavSplit(): void {
           links: size(hamburger),
           icons: size(icons!),
           gap: columnGap(navContent!, 0),
+          iconsGap: iconsGap(),
         });
         if (beside) mode("split");
       } else if (nameLines(siteName!, vertical) > 2) {
@@ -211,7 +217,7 @@ export function initNavSplit(): void {
     }
     // Otherwise a plain name floats beside the toggles in CSS alone (site.css),
     // and links that do not fit beside its last line drop below it.
-    if (!trail && !owned) return;
+    if (!trail && !owned && !navContent!.hasAttribute("data-nav-themed")) return;
     const fitsOneRow = (): boolean => {
       const linkGap = columnGap(links!, 0);
       const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
@@ -221,6 +227,7 @@ export function initNavSplit(): void {
         links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
         icons: size(icons!),
         gap: columnGap(navContent!, 0),
+        iconsGap: iconsGap(),
       });
     };
     // Full spacing, then (on a phone) tight gaps, then two rows.

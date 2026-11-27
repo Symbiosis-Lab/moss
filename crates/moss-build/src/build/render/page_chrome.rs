@@ -119,11 +119,13 @@ impl PageChromeContext<'_, '_> {
         });
         // Generated folders historically scope the initial navigation in their
         // own language; authored pages scope it in the site language.
+        let page_css_link = self.assets.page_owned.link(doc.and_then(|d| d.source_path.as_deref()), &self.assets.paths);
+        let nav_themed = self.assets.has_user_css || !page_css_link.is_empty();
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
         ).with_color_scheme(self.layout.color_scheme).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
-            .with_asset_snapshot(self.media_lookup.asset_snapshot());
+            .with_asset_snapshot(self.media_lookup.asset_snapshot()).with_themed(nav_themed);
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
         }
@@ -229,7 +231,7 @@ impl PageChromeContext<'_, '_> {
                     "{}<link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">",
                     if generated { "\n    " } else { "" }, paths.user_css_path(),
                 )).unwrap_or_default(),
-                self.assets.page_owned.link(page_source, paths),
+                page_css_link,
             )).filter(|tags| !tags.is_empty()),
             user_js_tag: Some(format!(
                 "{}{}",
@@ -240,6 +242,7 @@ impl PageChromeContext<'_, '_> {
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
             inline_js: self.assets.scripts.inline_tags(&self.layout.assets),
+            nav_themed,
             content_width_attr: resolve_data_attr(page_width.as_ref(), site_width.as_ref(), "content-width", None),
             typesetting_attr: resolve_data_attr(doc.and_then(|d| d.typesetting.as_ref()), self.layout.typesetting.as_ref(), "typesetting", Some("horizontal")),
             comments_attr: resolve_comments_attr(doc.and_then(|d| d.comments), self.layout.comments),
