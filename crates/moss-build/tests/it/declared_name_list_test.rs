@@ -151,6 +151,23 @@ fn credited_names_and_roles_are_escaped() {
 }
 
 #[test]
+fn a_kind_of_one_field_credits_its_names_without_a_role() {
+    let config = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.stages]\nfields = [\"stage\"]\ncards = true\n";
+    let (_guard, out) = build_site("one-field", &[
+        (".moss/config.toml", config),
+        ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("bare/index.md", "---\ntitle: Bare\n---\n\nBare.\n"),
+        ("bare/gala.md", "---\ntitle: Gala\nstage: Approved\n---\n"),
+    ]);
+    let bare = fs::read_to_string(out.join("bare/index.html")).unwrap();
+    assert!(
+        bare.contains(r#"<span class="moss-credit" data-term="stages" data-value="approved">Approved</span>"#),
+        "the name stands alone:\n{bare}"
+    );
+    assert!(!bare.contains("moss-credit-role"), "no role to tell one field from another:\n{bare}");
+}
+
+#[test]
 fn a_kind_without_cards_puts_no_names_on_cards() {
     let (_guard, out) = cards_site(&CARDS_CONFIG.replace("cards = true\n", ""));
     for folder in ["described", "dated", "bare"] {

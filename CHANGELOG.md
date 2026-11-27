@@ -82,6 +82,7 @@ All notable changes to moss will be documented here.
 - The Obsidian plugin checks the notes of a moss folder inside a vault, below its top level, as it checks a vault that is a moss folder: each note against the files, fields and language of the moss folder it sits in, with links read from there. A moss folder inside another is its own site, left out of the one around it, as in a build. Notes outside every moss folder stay unchecked.
 - After you rename a folder, its old address forwards to the new one when you publish, whether or not the folder has an `index.md`. Before, publishing reported the folder's page deleted, and old links to it broke.
 - Search on a Chinese site finds every page with the words you type. The index split Chinese text into words with a different dictionary from the search box's, so a search for 酷兒 missed a page whose only 兒 was in 酷兒性.
+- A term kind of one field with `cards = true` credits its names on a card without a role: `fields = ["stage"]` reads "Approved", not "Approved, stage".
 
 ### Removed
 

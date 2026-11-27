@@ -672,7 +672,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
-        description: "The role after a credited name: the field's label, lowercased, after a comma.",
+        description: "The role after a credited name: the field's label, lowercased, after a comma. A kind of one field shows none.",
     },
     ComponentEntry {
         class: "moss-card-kicker",
