@@ -18,6 +18,7 @@ pub mod blocks;
 pub mod derivation;
 pub mod identity;
 pub mod listing_style;
+pub mod provider;
 pub mod platform;
 pub mod public_data;
 pub mod site_settings;
@@ -107,6 +108,55 @@ pub struct PluginContributes {
     /// filled on every build from `[services.<plugin-id>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<identity::Proof>>,
+
+    /// How the person signs in to the one account this plugin holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<provider::SignIn>,
+
+    /// The parts of the site that account serves, one entry per part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Vec<provider::ProviderEntry>>,
+}
+
+/// Does installing this plugin run code it brought: JavaScript, a pinned
+/// binary, a companion process, or a script on the site's pages? Only such a
+/// plugin needs the folder's trust; one that only declares data moss reads
+/// does not.
+///
+/// Every field is named so a new contribution kind does not compile until
+/// someone says whether it runs code.
+pub fn runs_code(manifest: &PluginManifest) -> bool {
+    manifest.entry.is_some()
+        || manifest.requires_stack
+        || manifest.contributes.as_ref().is_some_and(PluginContributes::run_code)
+}
+
+impl PluginContributes {
+    fn run_code(&self) -> bool {
+        let PluginContributes {
+            frontmatter: _,
+            jobs: _,
+            site_settings: _,
+            public_data: _,
+            identity: _,
+            account: _,
+            provider: _,
+            channel,
+            deploy_target,
+            processor,
+            stack,
+            derivations,
+            listing_styles,
+            blocks,
+        } = self;
+        channel.is_some()
+            || deploy_target.is_some()
+            || processor.is_some()
+            || stack.is_some()
+            || derivations.as_ref().is_some_and(|d| !d.is_empty())
+            || listing_styles.as_ref().is_some_and(|l| !l.is_empty())
+            || blocks.as_ref().is_some_and(|b| b.values().any(|block| block.script.is_some()))
+    }
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -431,6 +481,12 @@ impl PluginManifest {
         found
     }
 
+    /// The settings moss's sign-in row asks for: written to `config.toml`
+    /// before `login` runs, and left off the settings page.
+    pub fn sign_in_asks(&self) -> Vec<&Field> {
+        self.declared_settings().into_iter().filter(|f| f.at_sign_in).collect()
+    }
+
     /// The `secret` fields that apply given the plugin's resolved settings —
     /// what the settings page draws as credentials and what the publish gate
     /// asks the store about.
@@ -559,9 +615,10 @@ impl PluginManifest {
                 || c.blocks.as_ref().is_some_and(|b| !b.is_empty())
                 || c.public_data.is_some()
                 || c.site_settings.is_some()
+                || c.provider.as_ref().is_some_and(|p| !p.is_empty())
         });
         if manifest.entry.is_none() && !declarative {
-            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data or site_settings"));
+            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data, site_settings or provider"));
         }
         for (short, block) in manifest.contributes.iter().flat_map(|c| c.blocks.iter().flatten()) {
             blocks::validate(&manifest.name, short, block).map_err(serde_json::Error::custom)?;
@@ -572,6 +629,10 @@ impl PluginManifest {
         if let Some(site) = manifest.contributes.as_mut().and_then(|c| c.site_settings.as_mut()) {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
+        }
+        let has_entry = manifest.entry.is_some();
+        if let Some(c) = manifest.contributes.as_mut() {
+            provider::validate(c.account.as_ref(), c.provider.as_deref_mut().unwrap_or_default(), c.channel.is_some(), has_entry).map_err(serde_json::Error::custom)?;
         }
         if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
             let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
@@ -618,6 +679,12 @@ impl PluginManifest {
     fn fold_legacy_surfaces(&mut self) {
         let legacy_fields = self.legacy_config_fields();
         let fold_stack = self.requires_stack;
+        // A key account of a plugin with code is the plugin's own credential:
+        // the settings page and the publish gate ask for it like a declared one.
+        let account_key = match self.contributes.as_ref().and_then(|c| c.account.as_ref()) {
+            Some(provider::SignIn::Key(key)) if runs_code(self) => Some(key.url.clone()),
+            _ => None,
+        };
         let mut setups = match &mut self.contributes {
             Some(contributes) => contributes.setups_mut(),
             None => Vec::new(),
@@ -636,6 +703,13 @@ impl PluginManifest {
                 );
             }
             return;
+        }
+
+        if let Some(url) = account_key {
+            let setup = setups[0].get_or_insert_with(Default::default);
+            if !setup.settings.iter().any(|f| f.key == provider::TOKEN) {
+                setup.settings.push(Field::legacy_secret(provider::TOKEN.into(), String::new(), Some(url), HashMap::new()));
+            }
         }
 
         // Every contribution folds its own `credentials` — they were declared
@@ -768,6 +842,8 @@ impl PluginManifest {
                 add_label: None,
                 scale: None,
                 unit: None,
+                from: None,
+                at_sign_in: false,
             });
         }
         fields
@@ -898,7 +974,7 @@ mod tests {
         for name in ["channel", "deploy_target", "derivations", "identity", "processor", "site_settings", "stack"] {
             assert!(names.contains(&name.to_string()), "{name} in {names:?}");
         }
-        assert_eq!(names.len(), 12, "{names:?}");
+        assert_eq!(names.len(), 14, "{names:?}");
     }
     use moss_core::untrusted_text::{MAX_NAME, MAX_SENTENCE};
 
@@ -1052,6 +1128,17 @@ mod tests {
             r#"[{"key":"host","type":"string","label":"H","required":true,"default":"a"}]"#,
         );
         assert!(err.contains("both `required` and `default`"), "{err}");
+    }
+
+    #[test]
+    fn at_sign_in_asks_for_a_plain_drawn_string_only() {
+        for field in [
+            r#"{"key":"k","type":"secret","label":"K","at_sign_in":true}"#,
+            r#"{"key":"k","type":"string","label":"K","hidden":true,"at_sign_in":true}"#,
+        ] {
+            let err = settings_error(&format!("[{field}]"));
+            assert!(err.contains("`at_sign_in` asks for a plain, drawn `string`"), "{err}");
+        }
     }
 
     #[test]
@@ -1409,6 +1496,17 @@ mod tests {
         // And the name resolves off the same match, from the same contribution.
         assert_eq!(m.display_name_for(&Capability::Login), Some("Matters"));
         assert_eq!(m.display_name_for(&Capability::Deploy), None);
+    }
+
+    #[test]
+    fn sign_in_asks_are_the_settings_the_row_asks_for() {
+        let m = manifest_with_setup(
+            r#"{"settings":[
+                {"key":"server","type":"string","label":"Server","at_sign_in":true},
+                {"key":"tag","type":"string","label":"Tag"}
+            ]}"#,
+        );
+        assert_eq!(m.sign_in_asks().iter().map(|f| f.key.as_str()).collect::<Vec<_>>(), ["server"]);
     }
 
     /// The settings page's question: everything moss draws for this plugin,

@@ -1,7 +1,7 @@
 // The landing's sign-up is moss's own subscribe form. This walks every state a
 // reader can reach and checks what each looks like, not only what it says:
-// idle, loading (spinner shown, label hidden, button width held), success and
-// already subscribed (the button becomes a circle with a check, the message
+// idle, loading (spinner shown, label hidden, button width held), success
+// (the button becomes a circle with a check, the message
 // takes the field's row), error (server refusal and a failed connection, which
 // is how a refusal without CORS headers reaches the page), and the host's bot
 // check (passed, failed and closed). Every request is mocked; no subscriber is
@@ -32,18 +32,23 @@ const copySource = await readFile(new URL('../crates/moss-build/src/js-src/site/
 const COPY = Object.fromEntries(['en', 'zh-hans', 'zh-hant'].map((lang) => {
   const block = copySource.slice(copySource.indexOf(lang === 'en' ? '  en: {' : `  '${lang}': {`)).split('\n  },')[0];
   const field = (name) => block.match(new RegExp(`${name}: (['"])(.*?)\\1,`))?.[2];
-  return [lang, { 'check-email': field('checkEmail'), 'already-subscribed': field('alreadySubscribed'), error: field('error') }];
+  return [lang, { 'check-email': field('checkEmail'), error: field('error') }];
 }));
 
 /** One page with the network mocked; `next` sets how the next subscribe request is answered. */
 async function openForm(browser, locale, { reducedMotion = 'reduce', width = 1280, colorScheme = 'dark' } = {}) {
   const page = await browser.newPage({ reducedMotion, colorScheme, viewport: { width, height: width < 600 ? 844 : 900 } });
-  const mock = { calls: [], checks: [], tracked: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
+  const mock = { calls: [], checks: [], reports: [], tracked: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
   await page.route('https://api.mosspub.com/**', async (route) => {
     const url = new URL(route.request().url());
     if (/\/beacon$/.test(url.pathname)) {
       const event = JSON.parse(route.request().postData() || '{}').event;
       if (event) mock.tracked.push(event);
+      return route.fulfill({ status: 204 });
+    }
+    // A check that cannot finish is reported here, and the host lets the next send through.
+    if (url.pathname === '/captcha/report') {
+      mock.reports.push(route.request().postData() || '');
       return route.fulfill({ status: 204 });
     }
     if (url.pathname === '/captcha/') {
@@ -209,13 +214,6 @@ try {
         if (mock.tracked.length !== tracked) fail(`Tapping the circle was counted as a sign-up: ${JSON.stringify(mock.tracked.slice(tracked))}`);
         if (!mock.tracked.includes('subscribe-submit')) fail('A sign-up was not counted');
 
-        await submit(page, mock, { status: 200, body: { subscribed: true, alreadySubscribed: true } });
-        await waitState(page, 'success');
-        const already = await look(page);
-        says(already, 'already-subscribed');
-        await roundMark(page, `${locale || 'en'} already subscribed`, 'circle');
-        await reset(page);
-
         // errors: a refusal, and a request that never answers in a way the page can read
         // a 2xx that does not say the address is subscribed is an error too
         for (const answer of [{ status: 503, body: {} }, 'offline', { status: 200, body: {} }]) {
@@ -230,23 +228,26 @@ try {
           await reset(page);
         }
 
-        // the host's bot check: passed posts again, failed is an error, closed leaves the form as it was
-        const after = { passed: 'success', failed: 'error', cancelled: 'idle' };
+        // the host's bot check: passed posts again, failed is reported and posts again, closed leaves the form as it was
+        const after = { passed: 'success', failed: 'success', cancelled: 'idle' };
         for (const verdict of Object.keys(after)) {
           mock.challenge = true; mock.verdict = verdict;
           const before = mock.calls.length;
+          const reportsBefore = mock.reports.length;
           await submit(page, mock, { status: 200, body: { subscribed: true, confirmationSent: true } });
           await waitState(page, after[verdict]);
           const posts = mock.calls.length - before;
-          if (posts !== (verdict === 'passed' ? 2 : 1)) fail(`Bot check ${verdict}: ${posts} subscribe request(s)`);
-          if (verdict !== 'passed' && (await look(page)).email !== EMAIL) fail(`Bot check ${verdict} lost the address`);
+          if (posts !== (verdict === 'cancelled' ? 1 : 2)) fail(`Bot check ${verdict}: ${posts} subscribe request(s)`);
+          const reports = mock.reports.slice(reportsBefore);
+          if (JSON.stringify(reports) !== JSON.stringify(verdict === 'failed' ? ['reason=frame'] : [])) fail(`Bot check ${verdict} reported ${JSON.stringify(reports)}`);
+          if (verdict === 'cancelled' && (await look(page)).email !== EMAIL) fail(`Bot check ${verdict} lost the address`);
           await reset(page);
         }
         if (!mock.checks.length || !mock.checks.every((s) => s.startsWith('?quiet=1'))) fail(`The bot check was not asked for quietly: ${JSON.stringify(mock.checks)}`);
 
         const scope = locale.replace('/', '');
         if (mock.calls.some((c) => c.url !== ENDPOINT || c.body.scope !== scope || c.body.email !== EMAIL || !c.body.lang)) fail(`Wrong subscription contract: ${JSON.stringify(mock.calls.slice(-1))}`);
-        console.log(engine.name(), locale || 'en', 'idle, loading (spinner, width held), success, already subscribed, server and connection errors, bot check passed, failed and closed: PASS (mocked; no subscriber created)');
+        console.log(engine.name(), locale || 'en', 'idle, loading (spinner, width held), success, server and connection errors, bot check passed, failed and closed: PASS (mocked; no subscriber created)');
         await page.close();
       }
 
@@ -307,9 +308,6 @@ try {
           await submit(page, mock, { status: 200, body: { subscribed: true, confirmationSent: true } });
           await waitState(page, 'loading'); await shot(page, name('loading'));
           release(); mock.held = null; await waitState(page, 'success'); await shot(page, name('success'));
-          await reset(page);
-          await submit(page, mock, { status: 200, body: { subscribed: true, alreadySubscribed: true } });
-          await waitState(page, 'success'); await shot(page, name('already-subscribed'));
           await reset(page);
           await submit(page, mock, { status: 503, body: {} });
           await waitState(page, 'error'); await shot(page, name('error'));

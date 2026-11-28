@@ -4,7 +4,7 @@
  * engine can say the track moves, that the copy lines up with the real set,
  * and that the loop never widens the page.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const SIZES = [
   { width: 1280, height: 900 },
@@ -72,6 +72,8 @@ test("hovering pauses the loop by default", async ({ page }) => {
   await strip.hover();
   const track = trackOf(strip);
   expect(await track.evaluate((el) => getComputedStyle(el).animationPlayState)).toBe("paused");
+  // WebKit reports the paused state a frame before its held transform settles, about a pixel back.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const a = await shift(track);
   await page.waitForTimeout(400);
   expect(await shift(track)).toBe(a);

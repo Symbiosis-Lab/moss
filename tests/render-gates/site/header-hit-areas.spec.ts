@@ -43,7 +43,7 @@
  * Run via:
  *   npx playwright test -c playwright/header-hit-areas.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function setTheme(page: Page, theme: "light" | "dark") {
   await page.evaluate((t) => localStorage.setItem("moss-theme", t), theme);
@@ -142,6 +142,39 @@ for (const width of [1440, 390]) {
     }
   });
 }
+
+// Links that leave the name's row end under the toggles, a clearance below them; links that fit beside a second name line sit before them. Either way a touch link's hit area stays out of the toggles'.
+const SHORT_LAST_LINE = "Header Hit Areas With A Much Longer Name That Fills Row One Across";
+const FULL_LAST_LINE = "Header Hit Areas With A Much Longer Name That Fills Row One Across And Then Runs On Over Most Of A Second Row";
+test.describe("on a touch screen with a long name", () => {
+  test.use({ hasTouch: true });
+  for (const [width, name, place] of [
+    [390, SHORT_LAST_LINE, "under"],
+    [900, FULL_LAST_LINE, "under"],
+    [900, SHORT_LAST_LINE, "before"],
+  ] as const) {
+    test(`a tap anywhere on the toggles' 44px hit area is theirs with the links ${place} them, at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/", { waitUntil: "load" });
+      await page.evaluate((text) => {
+        document.querySelector(".site-name")!.textContent = text;
+      }, name);
+      const where = await page.evaluate(() => {
+        const icons = document.querySelector(".nav-icons")!.getBoundingClientRect();
+        const links = [...document.querySelectorAll(".nav-links a")].map((a) => a.getBoundingClientRect());
+        const under = links.some((r) => r.top >= icons.bottom && r.left < icons.right && r.right > icons.left);
+        const before = links.every((r) => r.right <= icons.left || r.left >= icons.right);
+        return under ? "under" : before ? "before" : "other";
+      });
+      expect(where).toBe(place);
+      for (const sel of [".nav-search-btn", ".nav-lang-link", ".nav-theme-btn"]) {
+        for (let dy = -20; dy <= 20; dy += 2) {
+          expect(await hitAt(page, sel, 0, dy), `${sel} ${dy}px`).toBe(sel.slice(1));
+        }
+      }
+    });
+  }
+});
 
 test(".nav-lang-link reaches a 44px hit area without leaving .nav-lang-toggle's own box, and without overlapping .nav-search-btn or .nav-theme-btn", async ({
   page,

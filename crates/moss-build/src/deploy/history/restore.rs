@@ -9,16 +9,19 @@
 //! save is. Composing them into one user-facing "Restore" action is
 //! for the slice that has a CLI verb and a panel to drive it from.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::record::{self, Entry};
-use super::store;
+use super::timeline::held;
+use super::{store, VersionScope};
 use crate::build::cache::ObjectStore;
 use super::tree::SourceTree;
 use crate::types::content::MODE_SYMLINK;
 
 /// Where a restored page's bytes go.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
 pub enum RestoreMode {
     /// Overwrite the file at its current vault path.
     InPlace,
@@ -54,11 +57,13 @@ pub(crate) fn restore_page(root: &Path, vault_root: &Path, id: &str, path: &str,
     restore_entry(&object_store, entry, &target).map_err(|e| format!("{path}: {e}"))
 }
 
-/// Restore the whole site to one version: every entry whose hash differs
-/// from `current` is written back (this covers both an edit since then and a
-/// deletion since then — a deleted-since path simply is not in `current`'s
-/// hashes); every page source `current` has that this version does not goes
-/// to the OS Trash. Other files absent from the version stay on disk.
+/// Restore what `scope` holds (the whole site, or one folder) to one version:
+/// every entry whose hash differs from `current` is written back (this covers
+/// both an edit since then and a deletion since then — a deleted-since path
+/// simply is not in `current`'s hashes); every page source `current` has
+/// that this version does not goes to the OS Trash ([`pages_to_trash`]).
+/// Other files absent from the version, and everything outside `scope`, stay
+/// on disk.
 ///
 /// Best-effort like the rest of publish history: one page's restore or trash
 /// failing does not stop the rest, and the report says exactly what
@@ -75,6 +80,7 @@ pub(crate) fn restore_site(
     vault_root: &Path,
     id: &str,
     current: &SourceTree,
+    scope: &VersionScope,
     trash: &dyn Fn(&Path, &str) -> Result<(), String>,
 ) -> RestoreReport {
     let mut report = RestoreReport::default();
@@ -86,9 +92,9 @@ pub(crate) fn restore_site(
         }
     };
     let object_store = store::object_store(root);
-    let current_hashes = current.hashes();
+    let current_hashes = held(current.hashes(), scope);
 
-    for (path, entry) in &record.entries {
+    for (path, entry) in record.entries.iter().filter(|(path, _)| scope.holds(path)) {
         if current_hashes.get(path) == Some(&entry.hash) {
             continue; // already matches; nothing to restore
         }
@@ -99,20 +105,28 @@ pub(crate) fn restore_site(
         }
     }
 
-    for path in current_hashes.keys() {
-        if record.entries.contains_key(path) || !crate::build::scan::classify::is_page_path(Path::new(path)) {
-            continue;
-        }
-        match trash(vault_root, path) {
-            Ok(()) => report.trashed.push(path.clone()),
-            Err(e) => report.failed.push((path.clone(), e)),
+    for path in pages_to_trash(&held(record::flat_hashes(&record), scope), &current_hashes) {
+        match trash(vault_root, &path) {
+            Ok(()) => report.trashed.push(path),
+            Err(e) => report.failed.push((path, e)),
         }
     }
 
     report.restored.sort();
-    report.trashed.sort();
     report.failed.sort_by(|a, b| a.0.cmp(&b.0));
     report
+}
+
+/// The page sources `current` has that the version does not, sorted: what a
+/// restore moves to the Trash, and what its confirmation counts first.
+pub(crate) fn pages_to_trash(version: &HashMap<String, String>, current: &HashMap<String, String>) -> Vec<String> {
+    let mut paths: Vec<String> = current
+        .keys()
+        .filter(|path| !version.contains_key(*path) && crate::build::scan::classify::is_page_path(Path::new(path)))
+        .cloned()
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// The record `id` names, when the whole site can be restored to it. A kept

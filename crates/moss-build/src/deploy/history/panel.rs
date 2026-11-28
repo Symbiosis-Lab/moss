@@ -24,7 +24,7 @@ use serde::Serialize;
 use specta::Type;
 
 use super::record::PublishRecord;
-use super::{restore, HistoryStore, RestoreMode, SourceTree, Trigger};
+use super::{restore, HistoryStore, RestoreMode, SourceTree, Trigger, VersionScope};
 use crate::build::manifest::change_set::ChangedPage;
 use crate::build::manifest::published_record;
 use crate::moss_paths::MossPaths;
@@ -39,9 +39,7 @@ use crate::moss_paths::MossPaths;
 
 /// One row in the Versions list — a publish, a manual save, a pre-restore
 /// save, or a kept outside edit of one page. `trigger` is
-/// `"publish" | "manual" | "restore" | "displaced"`, the same flattened-
-/// string convention [`restore_version`]'s `mode` argument uses, so the
-/// frontend never imports a second enum shape for the same words.
+/// `"publish" | "manual" | "restore" | "displaced"`.
 #[derive(Debug, Clone, Serialize, Type)]
 pub struct VersionRow {
     pub id: String,
@@ -54,13 +52,11 @@ pub struct VersionRow {
     pub removed: u32,
 }
 
-/// [`list_versions`]'s answer. `rows` is the day-grouped list the panel renders
-/// for either scope ("This page" → `page_timeline`, "Whole site" with no
-/// `path` → `site_timeline`); `changed_since`/`unchanged` are populated ONLY
-/// for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
-/// — the "A site version" sub-view's Changed-since/Unchanged groups — and
-/// `rows` is empty in that mode. One command rather than two: the drill-down
-/// reuses [`HistoryStore::site_version_pages`] in the same body as the list.
+/// [`list_versions`]'s answer. Without a `version`, `rows` is the scope's
+/// timeline. With one (site or folder scope), `rows` is empty and
+/// `changed_since`/`unchanged`/`to_trash` describe that version's pages in
+/// scope against the disk now: the drill-down screen and its restore's
+/// confirmation.
 #[derive(Debug, Clone, Serialize, Type)]
 pub struct VersionList {
     pub rows: Vec<VersionRow>,
@@ -73,6 +69,7 @@ pub struct VersionList {
     pub store_dir: String,
     pub changed_since: Vec<ChangedPage>,
     pub unchanged: Vec<String>,
+    pub to_trash: Vec<String>,
 }
 
 /// [`read_version`]'s answer. `kept: false` means the bytes at this version
@@ -225,9 +222,10 @@ fn known_id(records: &[(String, PublishRecord)], id: &str) -> Result<(), String>
 
 // ── Command bodies ───────────────────────────────────────────────────────
 
-/// The Versions panel's list, for either scope, and the site-version
-/// drill-down (see [`VersionList`]'s own doc for the three response shapes).
-pub fn list_versions(vault_root: &Path, scope: &str, path: Option<String>) -> Result<VersionList, String> {
+/// The Versions panel's list for `scope`, or with `version` the drill-down
+/// into that site or folder version (see [`VersionList`]).
+pub fn list_versions(vault_root: &Path, scope: VersionScope, version: Option<String>) -> Result<VersionList, String> {
+    let scope = scope.validated()?;
     let store = HistoryStore::in_vault(vault_root);
     let records = store.list_records();
     let live_id = resolve_live_id(vault_root, &records);
@@ -240,31 +238,24 @@ pub fn list_versions(vault_root: &Path, scope: &str, path: Option<String>) -> Re
         store_dir: store_dir.clone(),
         changed_since: Vec::new(),
         unchanged: Vec::new(),
+        to_trash: Vec::new(),
     };
+    let rows = |rows: Vec<super::Row>| list(rows.into_iter().map(to_version_row).collect());
 
-    match scope {
-        "page" => {
-            let page_path = path.ok_or_else(|| {
-                "list_versions: a page path is required for scope \"page\"".to_string()
-            })?;
-            Ok(list(store.page_timeline(&page_path).into_iter().map(to_version_row).collect()))
+    match (scope, version) {
+        (VersionScope::Page(path), None) => Ok(rows(store.page_timeline(&path))),
+        (VersionScope::Page(path), Some(_)) => Err(format!("list_versions: {path} is one page; read its version instead")),
+        (tree, None) => Ok(rows(store.site_timeline(&tree))),
+        (tree, Some(version_id)) => {
+            known_id(&records, &version_id)?;
+            let pages = store.site_version_pages(&version_id, &site_on_disk(vault_root)?, &tree)?;
+            Ok(VersionList {
+                changed_since: pages.changed_since,
+                unchanged: pages.unchanged,
+                to_trash: pages.to_trash,
+                ..list(Vec::new())
+            })
         }
-        // The editor names the site by its empty path, which is the timeline.
-        "site" => match path.filter(|p| !p.is_empty()) {
-            // The site-version drill-down: one version's pages against the
-            // tree on disk now (the Changed-since/Unchanged groups).
-            Some(version_id) => {
-                known_id(&records, &version_id)?;
-                let pages = store.site_version_pages(&version_id, &site_on_disk(vault_root)?)?;
-                Ok(VersionList {
-                    changed_since: pages.changed_since,
-                    unchanged: pages.unchanged,
-                    ..list(Vec::new())
-                })
-            }
-            None => Ok(list(store.site_timeline().into_iter().map(to_version_row).collect())),
-        },
-        other => Err(format!("list_versions: unknown scope \"{other}\"")),
     }
 }
 
@@ -292,33 +283,34 @@ pub fn read_version(vault_root: &Path, id: &str, path: &str) -> Result<VersionCo
     }
 }
 
-/// Restore a page (when `path` is given) or the whole site (when it is not),
-/// both after saving the present as a version first (design rule 3 via
-/// `save_before_restore`).
+/// Restore a page, a folder or the whole site, after saving the present as
+/// a version first. Only a page
+/// can be restored as a copy.
 ///
-/// A site restore's Trash closure is [`restore::real_trash`] — the shared
-/// default that joins the record's vault-relative path onto the root before
-/// handing it to `vault::fs::delete_entry_inner`, the one delete core
-/// `delete_entry` and `batch::delete_entries` already share. The app used to
-/// pass its own closure that skipped the join, so every page added since the
-/// version failed the delete core's own containment check and was reported as
-/// a restore failure instead of being trashed; `panel_tests.rs` pins the join.
-pub fn restore_version(vault_root: &Path, id: &str, path: Option<String>, mode: &str) -> Result<RestoreReport, String> {
-    restore_version_with(vault_root, id, path, mode, &restore::real_trash)
+/// A folder or site restore's Trash closure is [`restore::real_trash`], which
+/// joins the record's vault-relative path onto the root before the delete
+/// core's containment check sees it; `panel_tests.rs` pins the join.
+pub fn restore_version(vault_root: &Path, id: &str, scope: VersionScope, mode: RestoreMode) -> Result<RestoreReport, String> {
+    restore_version_with(vault_root, id, scope, mode, &restore::real_trash)
 }
 
-/// [`restore_version`] with the site restore's trash given: a test passes one
-/// that records the call instead of moving a real file to the OS Trash.
+/// [`restore_version`] with the Trash given: a test passes one that records
+/// the call instead of moving a real file to the OS Trash.
 pub(crate) fn restore_version_with(
     vault_root: &Path,
     id: &str,
-    path: Option<String>,
-    mode: &str,
+    scope: VersionScope,
+    mode: RestoreMode,
     trash: &dyn Fn(&Path, &str) -> Result<(), String>,
 ) -> Result<RestoreReport, String> {
+    let scope = scope.validated()?;
+    let is_page = matches!(scope, VersionScope::Page(_));
+    if mode == RestoreMode::AsCopy && !is_page {
+        return Err("restore_version: only a page can be restored as a copy".to_string());
+    }
     let store = HistoryStore::in_vault(vault_root);
     known_id(&store.list_records(), id)?;
-    if path.is_none() {
+    if !is_page {
         store.site_version(id)?;
     }
     let current = site_on_disk(vault_root)?;
@@ -328,35 +320,14 @@ pub(crate) fn restore_version_with(
     // rule 3), so it answers whether it wrote one.
     let undo_id = store.save_before_restore(vault_root, &current, &target, id)?;
 
-    match path {
-        Some(page_path) => {
-            let restore_mode = match mode {
-                "in_place" => RestoreMode::InPlace,
-                "copy" => RestoreMode::AsCopy,
-                other => return Err(format!("restore_version: unknown mode \"{other}\"")),
-            };
-            match store.restore_page(vault_root, id, &page_path, restore_mode) {
-                Ok(()) => Ok(RestoreReport {
-                    restored: vec![page_path],
-                    failed: Vec::new(),
-                    trashed: Vec::new(),
-                    undo_id,
-                }),
-                Err(error) => Ok(RestoreReport {
-                    restored: Vec::new(),
-                    failed: vec![RestoreFailure { path: page_path, error }],
-                    trashed: Vec::new(),
-                    undo_id,
-                }),
-            }
-        }
-        // Whole-site restore. `mode` has no site-scoped meaning (there is no
-        // "copy" form of restoring an entire tree) and is ignored here.
-        None => Ok(to_restore_report(
-            store.restore_site(vault_root, id, &current, trash),
-            undo_id,
-        )),
-    }
+    let VersionScope::Page(page_path) = scope else {
+        return Ok(to_restore_report(store.restore_site(vault_root, id, &current, &scope, trash), undo_id));
+    };
+    let (restored, failed) = match store.restore_page(vault_root, id, &page_path, mode) {
+        Ok(()) => (vec![page_path], Vec::new()),
+        Err(error) => (Vec::new(), vec![RestoreFailure { path: page_path, error }]),
+    };
+    Ok(RestoreReport { restored, failed, trashed: Vec::new(), undo_id })
 }
 
 /// [`super::RestoreReport`] → the boundary's [`RestoreReport`]: the same three

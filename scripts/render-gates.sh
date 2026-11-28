@@ -33,6 +33,7 @@
 #   bash scripts/render-gates.sh --list                 # print the selected gate names, one per line, and exit
 #   bash scripts/render-gates.sh --group nobuild --list   # same, scoped to one group
 #   bash scripts/render-gates.sh --select               # skip each gate whose inputs are byte-for-byte a green run's (scripts/render-gate-select.mjs)
+#   bash scripts/render-gates.sh --select-shadow        # run every gate, but print WOULD-SKIP for each --select would skip, and MISSED-INPUT for each file it reads now that its green record lacks
 #   bash scripts/render-gates.sh --jobs 6               # six gates at a time, one browser each; see "Sharding" below
 #   bash scripts/render-gates.sh --jobs auto            # as many as RENDER_GATES_MEM_GB allows; see "Sharding" below
 #   bash scripts/render-gates.sh --check                # every playwright/*.config.ts is classified exactly once; exit 1 and name it otherwise
@@ -62,6 +63,8 @@ GATES_BUILD=(
   nav-split-order
   nav-split-pack
   nav-nowrap
+  nav-themed
+  nav-trail-clip
   nav-flattened
   nav-one-row
   nav-first-paint
@@ -141,6 +144,8 @@ GATES_BUILD=(
   wcag-output
   archival-footer
   subscribed-state
+  subscribe-questions
+  subscribe-bodyless
   type-defaults
   diagrams
   browser-editor
@@ -156,9 +161,11 @@ GATES_BUILD=(
 # no display wrapper, no artifact to wait for.
 GATES_NOBUILD=(
   ambient-video
+  card-video-in-view
   bridge-capture
   iframe-open-url
   grid-block-rhythm
+  newpage-stall
   term-index-layout
   site-elevation
   card-media-track
@@ -179,7 +186,7 @@ GATES_NOBUILD=(
 )
 
 # Gates that assert timing which fails under load; --jobs runs them alone.
-SERIAL_GATES=(marquee places-explorer-ring browser-editor focus-point address-bar footnote-target progress-line)
+SERIAL_GATES=(marquee places-explorer-ring browser-editor focus-point address-bar footnote-target)
 
 # One linear-search helper, not three copies of the same loop. No namerefs —
 # this has to run under macOS's bash 3.2, not just CI's bash 5. `"$@"` after
@@ -261,7 +268,8 @@ PROJECT=""
 DO_LIST=false
 DO_CHECK=false
 SELECT=false
-JOBS=1
+SHADOW=false
+JOBS=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -281,6 +289,10 @@ while [ $# -gt 0 ]; do
       ;;
     --select)
       SELECT=true
+      shift
+      ;;
+    --select-shadow)
+      SELECT=true SHADOW=true
       shift
       ;;
     --jobs)
@@ -373,6 +385,8 @@ pw() {
 }
 record_green() {
   [ "$SELECT" = true ] || return 0
+  # Before recording, so the green record the check matched (its digest ends the SKIP line) is still in the store.
+  [ -z "$matched" ] || node scripts/render-gate-select.mjs missed "$gate" "$PROJECT" "${matched##* }" "$inputs" || true
   # A gate whose inputs cannot be stored simply runs again next time.
   GATE_HEAD="$(git rev-parse --short=10 HEAD 2>/dev/null || true)" node scripts/render-gate-select.mjs record "$gate" "$PROJECT" "$inputs" || true
 }
@@ -396,14 +410,20 @@ fi
 # RENDER_GATES_WORKERS already in the environment wins over the grant.
 #
 # RENDER_GATES_MEM_GB is the memory the run may use (default half the
-# machine's). One lane needs LANE_FIRST_GB, since the heaviest gate peaks near
-# that at one worker; each further lane needs LANE_MORE_GB, a lane's measured
-# share when lanes run together. That caps --jobs N, and --jobs auto takes as
+# machine's; inside a slot, --jobs above 1 needs a declared grant). One lane
+# needs LANE_FIRST_GB, since the heaviest gate peaks near that at one worker;
+# each further lane needs LANE_MORE_GB, a lane's measured share when lanes run
+# together. That caps --jobs N, and --jobs auto takes as
 # many lanes as it allows, one per CPU at most.
-WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=4
+WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=2
 TIMES="${RENDER_GATES_TIMES:-target/render-gate-times.tsv}"
 granted="${RENDER_GATES_MEM_GB:-}"
+# In a slot that declared its memory, no --jobs means as many lanes as the grant allows:
+# the full suite on one lane takes 60 to 90 minutes, past a slot's time limit.
+if [ -z "$JOBS" ]; then JOBS=1; [ -n "${MOSS_SLOT_HELD:-}" ] && [ -n "$granted" ] && JOBS=auto; fi
 if [ -z "${RENDER_GATES_MEM_GB:-}" ] && [ "$JOBS" != 1 ]; then
+  # Inside heavy-slot.sh the slot reserved less than half the machine; cargo-slot exports the grant only when --mem-gb was declared.
+  [ -z "${MOSS_SLOT_HELD:-}" ] || { echo "--jobs $JOBS inside a slot needs its memory declared: pass --mem-gb to heavy-slot.sh" >&2; exit 2; }
   if [ -r /proc/meminfo ]; then RENDER_GATES_MEM_GB=$(awk '/^MemTotal:/ { print int($2 / 2097152) }' /proc/meminfo)
   else RENDER_GATES_MEM_GB=$(( $(sysctl -n hw.memsize) / 2147483648 )); fi
 fi
@@ -420,6 +440,23 @@ if [ "$JOBS" -gt "$max_lanes" ]; then
   echo "── --jobs $JOBS needs more than RENDER_GATES_MEM_GB=$RENDER_GATES_MEM_GB ($LANE_FIRST_GB GB for one lane, $LANE_MORE_GB more for each further one): running $max_lanes" >&2
   JOBS=$max_lanes
 fi
+# recorded_times <default s> <gate>...: "<seconds>\t<gate>" per gate, from the last run's TIMES.
+recorded_times() {
+  local dflt=$1; shift
+  { cat "$TIMES" 2>/dev/null || true; printf '=\t%s\n' "$@"; } |
+    awk -F'\t' -v d="$dflt" '$1 != "=" { if (!($1 in t)) t[$1] = $2; next } { print ($2 in t ? t[$2] : d) "\t" $2 }'
+}
+# One lane in a slot: refuse before any gate starts if the gates' recorded times add up past the slot's
+# limit (MOSS_SLOT_LIMIT_SEC, exported by cargo-slot.sh). A gate with no recorded time counts 0. Not under
+# --select, which decides each skip only as the gate comes up, so the sum would count gates it skips.
+if [ -n "${MOSS_SLOT_HELD:-}" ] && [ "$JOBS" = 1 ] && { [ "$SELECT" = false ] || [ "$SHADOW" = true ]; }; then
+  slot_limit=${MOSS_SLOT_LIMIT_SEC:-3600}
+  serial_s=$(recorded_times 0 "${GATES[@]}" | awk '{ s += $1 } END { print int(s) }')
+  if [ "$serial_s" -gt "$slot_limit" ]; then
+    echo "${#GATES[@]} gates on one lane took $((serial_s / 60)) min last time, past the slot's limit of $((slot_limit / 60)) min: give heavy-slot.sh --mem-gb 20 for five lanes, a longer --timeout-min, or name the gates" >&2
+    exit 2
+  fi
+fi
 # A grant also caps the browsers a gate run alone may start.
 workers=$(awk -v g="${granted:-8}" -v w="$WORKER_GB" 'BEGIN { n = int(g / w); print (n > 4 ? 4 : (n < 1 ? 1 : n)) }')
 export RENDER_GATES_WORKERS="${RENDER_GATES_WORKERS:-$workers}"
@@ -427,11 +464,17 @@ export RENDER_GATES_WORKERS="${RENDER_GATES_WORKERS:-$workers}"
 # One gate: its Playwright run(s), then exit 0 green, 1 red, 2 skipped by --select.
 run_gate() {
   # pw and record_green read inputs through bash's dynamic scope.
-  local gate=$1 cfg="playwright/$1.config.ts" list_output="" result=0 inputs=""
+  local gate=$1 cfg="playwright/$1.config.ts" list_output="" result=0 inputs="" matched=""
   echo "── $gate ────────────────────────────────────────────"
   if [ "$SELECT" = true ]; then
-    if node scripts/render-gate-select.mjs check "$gate" "$PROJECT"; then return 2; fi
-    inputs="$(mktemp -t render-gate-inputs)"
+    if matched="$(node scripts/render-gate-select.mjs check "$gate" "$PROJECT")"; then
+      echo "$matched"
+      [ "$SHADOW" = true ] || return 2
+      echo "WOULD-SKIP $gate"
+    else
+      matched=""
+    fi
+    inputs="$(mktemp "${TMPDIR:-/tmp}/render-gate-inputs.XXXXXX")"
   fi
   if [ -n "$PROJECT" ]; then
     # Ask Playwright for the configured project set rather than grepping the
@@ -484,7 +527,7 @@ else
   done
   echo "── ${#spread[@]} gates on $JOBS lanes, one worker each, then ${#serial[@]} alone; logs in $logs"
   export -f run_logged run_gate pw record_green
-  export SELECT PROJECT JOBS logs
+  export SELECT SHADOW PROJECT JOBS logs
   pool() { RENDER_GATES_WORKERS=1 xargs -P "$JOBS" -I{} "$BASH" -c 'run_logged "$1"' _ {} < "$logs/queue"; }
   serial_tail() { for gate in "$@"; do run_logged "$gate"; done; }
   # Job control gives each phase its own process group, so an interrupt ends every Playwright it started.
@@ -494,8 +537,7 @@ else
   trap '[ -z "$group" ] || kill -TERM -- "-$group" 2>/dev/null; exit 143' TERM
   if [ ${#spread[@]} -gt 0 ]; then
     # A gate with no recorded time counts 60 s.
-    { cat "$TIMES" 2>/dev/null || true; printf '=\t%s\n' "${spread[@]}"; } |
-      awk -F'\t' '$1 != "=" { t[$1] = $2; next } { print ($2 in t ? t[$2] : 60) "\t" $2 }' | sort -rn | cut -f2 > "$logs/queue"
+    recorded_times 60 "${spread[@]}" | sort -rn | cut -f2 > "$logs/queue"
     in_group pool
   fi
   [ ${#serial[@]} -eq 0 ] || in_group serial_tail "${serial[@]}"

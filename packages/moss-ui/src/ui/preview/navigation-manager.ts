@@ -96,6 +96,12 @@ function tryParseUrl(url: string): URL | null {
   try { return new URL(url); } catch { return null; }
 }
 
+function sameOrigin(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = a ? tryParseUrl(a) : null;
+  const y = b ? tryParseUrl(b) : null;
+  return !!x && !!y && x.origin === y.origin;
+}
+
 /**
  * Navigation event from preview webview
  */
@@ -299,6 +305,8 @@ export class NavigationManager {
 
   getRequestRevision(): number { return this.pageRequest.current(); }
   isNavigationPending(): boolean { return this.requestedUrl !== null; }
+  /** A page the preview shows is on `url`'s origin; a page it loads from there is that site's too. */
+  onSite(url: string): boolean { return sameOrigin(this.activePage?.url, url); }
 
   /** Public read access for identity validation and testing. */
   getActivePage(): ActivePage | null {
@@ -588,14 +596,16 @@ export class NavigationManager {
       return;
     }
 
-    // Navigation messages from the bridge: the start of a link click, and the page that reported in.
+    // Navigation messages from the bridge: a page load starting, and the page that reported in.
     window.addEventListener("message", (event) => {
       if (event.data?.type === "moss-navigation" && this.isFromPreview(event)) {
         this.handleNavigationUpdate(event.data);
       }
-      // A link click the bridge is about to follow: recorded before the frame unloads, so a build that
-      // lands meanwhile yields to it instead of reloading the page being left.
-      if (event.data?.type === "moss-navigation-start" && this.isFromPreview(event) && this.onPreviewOrigin(event.data.url)) {
+      // A page load the bridge saw start: recorded before the frame unloads, so a build that lands
+      // meanwhile yields to it instead of reloading the page being left. The shell's own loads are
+      // announced too, and one already under way changes nothing.
+      if (event.data?.type === "moss-navigation-start" && this.isFromPreview(event) && this.onPreviewOrigin(event.data.url)
+        && !(this.requestedUrl && this.sameRoute(this.requestedUrl, event.data.url))) {
         this.beginNavigation(event.data.url);
       }
 
@@ -731,9 +741,7 @@ export class NavigationManager {
 
   /** Only a URL on the preview's own origin starts a navigation. */
   private onPreviewOrigin(url: unknown): url is string {
-    const target = typeof url === "string" ? tryParseUrl(url) : null;
-    const base = this.iframe?.src ? tryParseUrl(this.iframe.src) : null;
-    return !!target && !!base && target.origin === base.origin;
+    return typeof url === "string" && sameOrigin(url, this.iframe?.src);
   }
 
   /**
@@ -1333,19 +1341,23 @@ export class NavigationManager {
 
   /**
    * Morph the current document in place, preserving scroll, focus and undo.
-   * False lets the current request fall back to reload.
+   * Anything but `applied` lets the current request fall back to reload.
    */
-  async morph(): Promise<boolean> {
-    if (!this.rpc || this.requestedUrl) return false;
+  async morph(): Promise<"applied" | "declined" | "failed"> {
+    if (!this.rpc || this.requestedUrl) return "failed";
     const request = this.pageRequest.current();
     const result = await this.rpc.morph();
-    if (this.pageRequest.isStale(request)) return false;
+    if (this.pageRequest.isStale(request)) return "failed";
     if (result.applied) {
       this.applyMorphedTitle(result.title);
-      return true;
+      return "applied";
+    }
+    if ("declined" in result) {
+      debug(`[NavigationManager] morph declined, author scripts [${result.declined.join(", ")}] → reload`);
+      return "declined";
     }
     warn(`[NavigationManager] morph failed: ${result.error} → reload fallback`);
-    return false;
+    return "failed";
   }
 
   /** One call into the previewed page; rejects when it has no bridge. */

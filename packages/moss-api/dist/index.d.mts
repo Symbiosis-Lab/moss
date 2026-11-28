@@ -654,10 +654,14 @@ interface CopyJob {
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
-  /** The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host. */
+  /**
+   * The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host.
+   * `icon` is the absolute URL of the largest square raster of at least 256 px, present only when the site has its own icon.
+   */
   site: {
     url: string;
     name: string;
+    icon?: string;
   };
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: {
@@ -712,7 +716,12 @@ interface CopyJob {
  *
  * `find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
  * Any other answer, an empty one included, leaves whether the copy exists
- * unknown, and only `absent` lets moss send it again.
+ * unknown, and only `absent` lets moss send it again. `update_copy` may also
+ * answer `absent: true`: a deleted draft is made again, a deleted published
+ * copy is left until the author presses retry on that post. An edit the
+ * network will not take (past its edit window or revision limit) is
+ * `success: false` with `refused.cause: "locked"`, said only on the network's
+ * explicit refusal; the copy then stays as posted.
  *
  * @category Copies
  */
@@ -726,8 +735,24 @@ interface CopyOutcome {
     open_url?: string;
     id?: string;
   };
-  /** `find_copy` only: the network says there is no such copy. */
+  /** `find_copy` or `update_copy`: the network says there is no such copy. */
   absent?: boolean;
+  /**
+   * What the site should carry so the network can tie this copy back to it. moss
+   * reads it on every build: `page_link` goes in the head of the copied page and
+   * `site_file` is written under `.well-known/`. Only `site.standard.document`
+   * (an `at:` href) and `.well-known/site.standard.publication` are accepted.
+   */
+  verify?: {
+    page_link?: {
+      rel: string;
+      href: string;
+    };
+    site_file?: {
+      path: string;
+      body: string;
+    };
+  };
   /** `copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account. */
   account?: string;
   /** `copy_account` only: the account as a person knows it (`@ada`), for display; never compared. */
@@ -739,7 +764,7 @@ interface CopyOutcome {
    */
   signed_out?: boolean;
   refused?: {
-    cause: "auth" | "content" | "rate" | "network" | "unknown";
+    cause: "auth" | "content" | "rate" | "network" | "locked" | "unknown";
     message?: string;
   };
 }
@@ -895,15 +920,6 @@ interface HookResult {
   setup?: SetupVerdict | LegacySetupVerdict;
   /** A copy hook's answer (populated by `publish_copy` and its siblings) */
   copy?: CopyOutcome | null;
-  /**
-   * Work a `process` hook started by a build found and leaves to the person,
-   * because it would write their folder. moss shows `title` with a Sync
-   * action that runs the hook again as the person's own act. Ignored from any
-   * other run. Needs moss 0.15.20.
-   */
-  offer?: {
-    title: string;
-  } | null;
 }
 /**
  * What a channel's `login` answers. moss records the folder as signed in to
@@ -1355,14 +1371,14 @@ interface BrowserSignIn {
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
    * included; check `state` yourself. Rejects with {@link SignInCancelled}
-   * when the person closes the sign-in panel or another sign-in starts. Any
+   * when the person presses Sign in again or another sign-in starts. Any
    * other rejection is a failure, such as "the sign-in took longer than ten
    * minutes" or "the sign-in stopped listening".
    */
   open(authorizeUrl: string): Promise<URLSearchParams>;
 }
 /**
- * The person stopped the sign-in: they closed it, or another sign-in started.
+ * The person stopped the sign-in: they pressed Sign in again, or another sign-in started.
  * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
  *
  * @example
@@ -1605,6 +1621,8 @@ interface EditorFillAnswer {
  * panel, as the author would paste it: moss runs its own script there with
  * this data, never the plugin's code, and only on a page of one of the
  * plugin's declared domains.
+ *
+ * With no parts and no title it waits for editor.body and changes nothing, so a plugin can use it to check that an element is there.
  *
  * Only in the moss app; elsewhere it rejects.
  *
@@ -2307,7 +2325,11 @@ interface ExecuteOptions {
   /** Timeout in milliseconds (default: 60000) */
   timeoutMs?: number;
   /**
-   * Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+   * Environment variables to add. The program inherits only `PATH`,
+   * `HOME`, the user name, locale, temp directory, proxy and certificate
+   * settings (and Windows' system variables) from moss's environment, so
+   * an SSH agent or a token the person exported never reaches it.
+   * Only `GIT_TERMINAL_PROMPT`,
    * `COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
    * refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
    * `context.index_file`.

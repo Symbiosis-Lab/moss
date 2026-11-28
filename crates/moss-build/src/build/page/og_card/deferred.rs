@@ -49,22 +49,33 @@ impl CardRequest {
     }
 }
 
-/// One blocking worker, one card allocation at a time. Keeping its sender until
-/// completion makes every promised sharing image part of the existing seal.
+/// Cards render on their own pool of at most four workers. Each worker holds
+/// one card's pixels while it draws, so on a machine with many cores more
+/// workers would raise peak memory and CPU for little wall time.
+static CARD_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("moss-card-{i}"))
+        .num_threads(rayon::current_num_threads().min(4))
+        .build()
+        .expect("moss-card pool")
+});
+
+/// Keeping the sender until every card is sent makes each promised sharing
+/// image part of the existing seal.
 pub(crate) fn render_requests(
     requests: Vec<CardRequest>,
     output_root: &Path,
     tx: Sender<EmitMessage>,
-    cancelled: impl Fn() -> bool,
+    cancelled: impl Fn() -> bool + Sync,
 ) -> Result<(), BuildError> {
+    use rayon::prelude::*;
     let _phase = crate::build::phase::PhaseTrace::start("render_sharing_cards");
     let mut emitted = HashSet::new();
-    for request in requests {
+    let requests: Vec<_> = requests.into_iter().filter(|r| emitted.insert(r.served_path.as_str().to_string())).collect();
+    let cancel = || BuildError::Worker("sharing card rendering cancelled".into());
+    CARD_POOL.install(|| requests.par_iter().try_for_each(|request| {
         if cancelled() {
-            return Err(BuildError::Worker("sharing card rendering cancelled".into()));
-        }
-        if !emitted.insert(request.served_path.as_str().to_string()) {
-            continue;
+            return Err(cancel());
         }
         let card = super::render_card(&request.inputs(), output_root, &HashMap::new())
             .map_err(|error| BuildError::Worker(format!("sharing card failed: {error}")))?;
@@ -75,10 +86,10 @@ pub(crate) fn render_requests(
         tx.blocking_send(EmitMessage::File {
             rel_path: card.served_path().as_str().into(),
             hash, bucket: HashBucket::ImageOutputs, oid: None,
-        }).map_err(|_| BuildError::Worker("sharing card coordinator closed".into()))?;
-    }
+        }).map_err(|_| BuildError::Worker("sharing card coordinator closed".into()))
+    }))?;
     if cancelled() {
-        return Err(BuildError::Worker("sharing card rendering cancelled".into()));
+        return Err(cancel());
     }
     Ok(())
 }

@@ -73,8 +73,7 @@ fn counts_split_direct_from_descendant() {
     let info = f.lookup("awards").expect("awards is in the map");
     // direct: a, b, and the 2024/ folder page. The grandchild is not direct.
     assert_eq!(info.direct_child_count, 3);
-    // descendant: a, b, 2024/x — ARTICLES only; the folder page is excluded
-    // (page_kind::is_listable_at_depth_all is Article-only).
+    // descendant: a, b, 2024/x — articles only; the folder page is excluded.
     assert_eq!(info.descendant_count, 3);
 }
 

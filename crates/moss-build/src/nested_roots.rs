@@ -139,15 +139,27 @@ impl Default for ScanLimits {
 /// moss's own home (`MOSS_HOME`, by default `~/.moss`) is tooling, not a site
 /// marker, so its parent is never a site, through a symlink either.
 pub fn owns_moss(dir: &Path) -> bool {
+    dir.join(".moss").is_dir() && owns_moss_below(dir, crate::infra::home::account_home().as_deref())
+}
+
+/// [`owns_moss`] with the account's home passed in. The `.moss` beside the
+/// account's real home is moss's machine state whichever `MOSS_HOME` or `HOME`
+/// this process was started with, so a launch that points either at a scratch
+/// folder does not turn the user's home into a site.
+fn owns_moss_below(dir: &Path, account_home: Option<&Path>) -> bool {
     let marker = dir.join(".moss");
-    marker.is_dir() && !is_moss_home(&marker)
+    marker.is_dir() && !is_moss_home(&marker) && !account_home.is_some_and(|h| same_dir(dir, h))
+}
+
+/// Equal as written or once canonical: on Windows an ancestor can surface as an
+/// 8.3 short path (`C:\Users\RUNNER~1`) while the home is the long form.
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 fn is_moss_home(marker: &Path) -> bool {
     let Ok(home) = crate::infra::home::moss_home() else { return false };
-    let home = crate::vault_root::resolve_input(home);
-    home == marker
-        || matches!((marker.canonicalize(), home.canonicalize()), (Ok(m), Ok(h)) if m == h)
+    same_dir(marker, &crate::vault_root::resolve_input(home))
 }
 
 /// Is this path under a known cloud-storage mount? Substring shape match,
@@ -402,6 +414,12 @@ pub fn is_sync_copy_of(name: &str, base: &str) -> bool {
     let Some(rest) = rest.strip_prefix(' ') else { return false };
     (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
         || (rest.len() > 2 && rest.starts_with('(') && rest.ends_with(')'))
+}
+
+/// A sync client's copy (see [`is_sync_copy_of`]) of an entry whose own name has
+/// no space, such as a content hash.
+pub fn is_sync_copy(name: &str) -> bool {
+    [" ", ".sync-conflict-"].iter().any(|mark| name.split_once(mark).is_some_and(|(base, _)| is_sync_copy_of(name, base)))
 }
 
 /// What a copy says about itself, read without downloading. A directory the

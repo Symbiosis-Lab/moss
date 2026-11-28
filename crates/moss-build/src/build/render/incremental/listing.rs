@@ -33,9 +33,8 @@ use moss_core::PageKind;
 use serde::{Deserialize, Serialize};
 
 use crate::build::facade::debug_hash;
-use crate::build::folder_embed::{
-    effective_group_for_axis, resolve_children_config, select_children_by_slug,
-};
+use crate::build::folder_embed::{excerpt_and_rich, select_children_by_slug};
+use moss_core::page::listing::{effective_group, listing_config};
 use crate::build::types::ParsedDocument;
 use crate::types::content::{MediaMetadata, ProjectStructure};
 
@@ -138,10 +137,11 @@ impl ListingGroups {
         // One projection per document, not per (document, group) pair: the
         // projection is a function of the document and the corpus, never of
         // the group that lists it.
+        use rayon::prelude::*;
         let all_refs: Vec<&ParsedDocument> = documents.iter().collect();
-        let projections: HashMap<&str, String> = documents
-            .iter()
-            .map(|doc| (doc.url_path.as_str(), project_child(doc, &all_refs, project, math)))
+        let projections: HashMap<&str, Projected> = documents
+            .par_iter()
+            .map(|doc| (doc.url_path.as_str(), project_child(doc, &all_refs, math)))
             .collect();
 
         let mut keys: BTreeMap<String, GroupKey> = BTreeMap::new();
@@ -171,7 +171,7 @@ impl ListingGroups {
                     documents,
                     project,
                 );
-                (id, digest_of(&members, &projections, math))
+                (id, digest_of(&members, &projections))
             })
             .collect();
 
@@ -181,13 +181,12 @@ impl ListingGroups {
 
 fn digest_of(
     members: &[&ParsedDocument],
-    projections: &HashMap<&str, String>,
-    math: bool,
+    projections: &HashMap<&str, Projected>,
 ) -> GroupDigest {
     let membership: Vec<&str> = members.iter().map(|d| d.url_path.as_str()).collect();
     let contents: Vec<Option<&String>> = members
         .iter()
-        .map(|d| projections.get(d.url_path.as_str()))
+        .map(|d| projections.get(d.url_path.as_str()).map(|p| &p.hash))
         .collect();
 
     // The member-derived half of the listing plan (rule 1, second
@@ -196,17 +195,22 @@ fn digest_of(
     // host's facade; what the host cannot see in its own fingerprint is how
     // its children's `weight:`/`date:`/richness resolve the plan for it.
     //
-    // `resolve_children_config` reads `resolve_page_description(.., content)`
-    // to decide "rich" — a body-derived input, and the reason the plan half
+    // Richness reads `resolve_page_description(.., content)`, taken once per
+    // child in its projection — a body-derived input, and the reason the plan half
     // exists at all rather than falling out of the projection.
-    let (style, group) = resolve_children_config(members, None, None, math);
+    let (style, group) = listing_config(members, None, None, |d: &ParsedDocument| {
+        projections
+            .get(d.url_path.as_str())
+            .expect("every member was projected from the same documents")
+            .rich
+    });
     // A default folder declares no `sort:`, so `resolve_folder_sort` reduces
     // to `infer_axis` over the members — exactly the child-derived half.
-    let axis = moss_core::sort::resolve_folder_sort(&ParsedDocument::default(), members).axis;
+    let sort = moss_core::sort::resolve_folder_sort(&ParsedDocument::default(), members);
     let plan = (
-        axis,
+        sort.axis,
         style.value.clone(),
-        effective_group_for_axis(&group, axis),
+        effective_group(&group, &sort),
     );
 
     GroupDigest {
@@ -243,23 +247,29 @@ struct ChildProjection<'a> {
     /// folder even though the folder's own document did not change. This is
     /// what makes the root home re-render when `writings/` gains a post.
     child_count: Option<usize>,
+    /// Whether the card leads the pages: a listable subfolder drafted or added
+    /// two levels down reorders its parent's hosts.
+    leads: bool,
     folder_latest_date: Option<String>,
-    /// `extract_date_from_doc` reaches past frontmatter into filename and
-    /// filesystem fallbacks, so `date_raw` can be `Some` where `doc.date` is
-    /// `None`.
-    date_display: String,
+    /// Reaches past frontmatter into the filename, so it can be `Some` where
+    /// `doc.date` is `None`; the row's date display is a function of it.
     date_raw: Option<String>,
-    date_explicit: bool,
     /// Kept as a borrow so the hash covers the identity the group orders by.
     url_path: &'a str,
+}
+
+/// One child's [`ChildProjection`] hash, and whether it is rich
+/// ([`excerpt_and_rich`]), read from the same excerpt.
+struct Projected {
+    hash: String,
+    rich: bool,
 }
 
 fn project_child(
     doc: &ParsedDocument,
     all_refs: &[&ParsedDocument],
-    project: &ProjectStructure,
     math: bool,
-) -> String {
+) -> Projected {
     let mut stripped = doc.clone();
     stripped.content = String::new();
     stripped.html_content = String::new();
@@ -280,38 +290,23 @@ fn project_child(
     // No card renders a page's uid.
     stripped.uid = None;
 
-    // Mirrors `child_list::props_for_document`: the card's count is always
-    // recursive (subfolders included), independent of `children_depth`, so
-    // the digest must move on the same trigger the card does — a page added
-    // two levels down still has to re-render every host of this card.
-    let article_count = (doc.kind == PageKind::Folder)
-        .then(|| {
-            crate::build::page::page::count_listable_articles(
-                all_refs,
-                doc.url_path.trim_end_matches("index.html"),
-                &doc.url_path,
-            )
-        })
-        .filter(|n| *n > 0);
-    let folder_latest_date = article_count
-        .and_then(|_| crate::build::folder_embed::folder_latest_date(doc, all_refs, &project.root_path));
-    let (date_display, date_raw, date_explicit) =
-        crate::build::components::extract_date_from_doc(doc, &project.root_path);
+    // The card's own facts, so the digest moves when the card does: a page
+    // added two levels down re-renders every host of this card.
+    let (article_count, leads) = moss_core::page::card::folder_card_facts(doc, all_refs, doc.term_card.is_some());
+    let folder_latest_date = article_count.and_then(|_| moss_core::page::card::folder_latest_date(doc, all_refs));
+    let date_raw = moss_core::page::card::listing_date(doc);
 
-    debug_hash(&ChildProjection {
+    let (resolved_excerpt, rich) = excerpt_and_rich(doc, math);
+    let hash = debug_hash(&ChildProjection {
         stripped,
-        resolved_excerpt: crate::build::page::meta::resolve_page_description(
-            crate::build::components::child_list::explicit_card_text(doc).as_deref(),
-            &doc.content,
-            math,
-        ),
+        resolved_excerpt,
         child_count: article_count,
+        leads,
         folder_latest_date,
-        date_display,
         date_raw,
-        date_explicit,
         url_path: &doc.url_path,
-    })
+    });
+    Projected { hash, rich }
 }
 
 /// The demoted predicate. It used to answer "render it"; it now answers
@@ -338,17 +333,15 @@ pub fn draws_own_listing(doc: &ParsedDocument, is_explorer_root: bool) -> bool {
         && !is_explorer_root
 }
 
-/// The one listing a host's page ends in, as the renderer chooses it
-/// (`render::html::own_listing_target`), with the filters its marker carries.
+/// The one listing a host's page ends in, as the renderer chooses it, with
+/// the filters its marker carries.
 pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<GroupKey> {
-    let (folder_slug, names_scoped_home) = crate::build::render::html::own_listing_target(doc, documents)?;
-    let home = crate::build::folder_embed::home_defaults(doc);
-    let scoped = home.scoped || names_scoped_home;
+    let own = moss_core::page::listing::own_listing(doc, documents)?;
     Some(GroupKey {
-        folder_slug,
-        depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
-        scope_default_tree: scoped,
-        exclude_nav: scoped,
+        folder_slug: own.folder,
+        depth: if own.flatten { Depth::All } else { Depth::Direct },
+        scope_default_tree: own.scoped,
+        exclude_nav: own.scoped,
         edition: doc.edition.clone(),
     })
 }
@@ -408,22 +401,17 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     }
 
     // (e) A series-chain step reads its parent folder's listing for prev/next
-    //     ordering (`sequence_siblings`, `render/html.rs`): the key (a) builds
+    //     ordering (`moss_core::page::series::chain`): the key (a) builds
     //     for the parent's own folder index, since `select_children_by_slug`
     //     is the same membership call either way.
-    if is_series_member(doc, documents) {
-        let parent_folder = series_parent_folder(doc);
-        if let Some(parent_doc) =
-            documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
-        {
-            keys.push(GroupKey {
-                folder_slug: parent_folder,
-                depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
-                scope_default_tree: false,
-                exclude_nav: false,
-                edition: doc.edition.clone(),
-            });
-        }
+    if let Some(parent_doc) = moss_core::page::series::series_parent(doc, documents) {
+        keys.push(GroupKey {
+            folder_slug: parent_doc.url_path.trim_end_matches("/index.html").to_string(),
+            depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
+            scope_default_tree: false,
+            exclude_nav: false,
+            edition: doc.edition.clone(),
+        });
     }
 
     // A host that matched the predicate but no arm above (e.g. a home-override
@@ -437,47 +425,19 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     }
 }
 
-/// `doc`'s parent folder, in the same shape `render/html.rs`'s series-nav
-/// block derives it from a direct-child URL (`"series/part-1/index.html"` ->
-/// `"series"`). Callers must have already checked `parts.len() >= 3` (via
-/// [`is_series_member`], which shares this exact derivation) before trusting
-/// the result.
-fn series_parent_folder(doc: &ParsedDocument) -> String {
-    let parts: Vec<&str> = doc.url_path.split('/').collect();
-    parts[..parts.len() - 2].join("/")
-}
-
-/// True when `doc` is a step in a parent folder's series prev/next chain —
-/// the exact membership `sequence_siblings` (`render/html.rs`) walks when it
-/// builds that chrome. A `label`/`weight`/`date`/`series` edit on any one
-/// member can reorder or relabel every other member's prev/next block, and
-/// nothing about that reaches the dependency graph (no link, no listing
-/// host) or the ordinary per-page facade diff.
+/// True when `doc` is a step in a parent folder's series prev/next chain. A
+/// `label`/`weight`/`date`/`series` edit on any one member can reorder or
+/// relabel every other member's prev/next block, and nothing about that
+/// reaches the dependency graph (no link, no listing host) or the ordinary
+/// per-page facade diff. Asks the series navigation's own
+/// [`moss_core::page::series::series_parent`], so the two cannot disagree.
 ///
 /// Deliberately does not re-derive the resolved shell type (`ShellType`,
 /// `page/shell.rs`) that decides whether `doc` actually renders the series
 /// block — over-approximating past that costs one extra render, never a
-/// stale one, and re-deriving it here would duplicate render/html.rs's own
-/// resolution instead of asking it.
+/// stale one.
 pub fn is_series_member(doc: &ParsedDocument, documents: &[ParsedDocument]) -> bool {
-    if !crate::build::render::html::is_sequence_step(doc) {
-        return false;
-    }
-    let parts: Vec<&str> = doc.url_path.split('/').collect();
-    if parts.len() < 3 {
-        return false;
-    }
-    let parent_folder = series_parent_folder(doc);
-    let Some(parent_doc) =
-        documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
-    else {
-        return false;
-    };
-    // `is_sequence_step` above already excludes a member that opted itself
-    // out with `series: false`; what's left is whether the PARENT's chrome
-    // is on at all, the one precedence decision `render::html::series_chrome_on`
-    // owns.
-    crate::build::render::html::series_chrome_on(parent_doc)
+    moss_core::page::series::series_parent(doc, documents).is_some()
 }
 
 /// Mirrors the sidebar source resolution in `render/html.rs`: the provenance
@@ -492,25 +452,14 @@ fn sidebar_reference(doc: &ParsedDocument) -> Option<&str> {
     }
 }
 
-/// Mirrors `render/html.rs`'s `resolve_children_source_folder_path` lookup
-/// for `children_source:`.
+/// The folder `children_source:` names, as the renderer reads it. Core falls
+/// back to the bare stem when no folder matches; that guess is kept only when
+/// it names a page that exists, otherwise the host's shape is not modelled
+/// and it must render.
 fn resolve_children_source_slug(reference: &str, documents: &[ParsedDocument]) -> Option<String> {
-    let stem = crate::build::markdown::frontmatter_ref_to_stem(reference);
-    let found = documents.iter().find(|d| {
-        let d_stem = d.url_path.trim_end_matches("/index.html").trim_end_matches('/');
-        d_stem.eq_ignore_ascii_case(&stem) && d.kind == PageKind::Folder
-    });
-    match found {
-        Some(d) => Some(d.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string()),
-        // html.rs falls back to `{stem}/` here. Keep the fallback only when it
-        // names a folder that exists in URL space; otherwise the host's shape
-        // is not modelled and it must render.
-        None => {
-            let guess = stem.to_lowercase();
-            let target = format!("{}/index.html", guess);
-            documents.iter().any(|d| d.url_path == target).then_some(guess)
-        }
-    }
+    let (path, _) = moss_core::page::listing::children_source_folder(reference, documents);
+    let target = if path.is_empty() { "index.html".to_string() } else { format!("{path}/index.html") };
+    documents.iter().any(|d| d.url_path == target).then_some(path)
 }
 
 /// Mirrors `render/html.rs`'s sidebar target lookup (last url segment OR

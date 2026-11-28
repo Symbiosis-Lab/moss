@@ -50,12 +50,16 @@ pub struct GrantRegistry {
 /// settings — declared custody, the keys that arm admits.
 #[derive(Clone, Debug, Default)]
 pub struct Declared {
+    /// The name a person knows the plugin's channel by.
+    pub title: Option<String>,
     pub requires: Vec<String>,
     pub user_supplied_secrets: Vec<String>,
     pub plugin_owned_secrets: Vec<String>,
     /// `contributes.jobs`: the verb/noun a plugin proposes for each job id, so
     /// the lifecycle arm can stamp a task's receipt without asking the app.
     pub jobs: std::collections::HashMap<String, crate::plugins::contributions::JobDescriptor>,
+    /// The manifest's `network` field, as discovered.
+    pub network: Option<crate::plugins::types::NetworkDecl>,
 }
 
 impl GrantRegistry {
@@ -74,6 +78,13 @@ impl GrantRegistry {
                 (
                     p.manifest.name.clone(),
                     Declared {
+                        title: p
+                            .manifest
+                            .contributes
+                            .as_ref()
+                            .and_then(|c| c.channel.as_ref())
+                            .and_then(|c| c.display_name.clone())
+                            .or_else(|| p.manifest.display_name.clone()),
                         requires: p.manifest.requires.clone().unwrap_or_default(),
                         user_supplied_secrets: p.manifest.user_supplied_secret_keys(),
                         plugin_owned_secrets: p.manifest.plugin_owned_secret_keys(),
@@ -84,6 +95,7 @@ impl GrantRegistry {
                             .and_then(|c| c.jobs.as_ref())
                             .map(|jobs| jobs.descriptors.clone())
                             .unwrap_or_default(),
+                        network: p.manifest.network.clone(),
                     },
                 )
             })

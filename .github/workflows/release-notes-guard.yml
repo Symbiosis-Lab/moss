@@ -1,0 +1,33 @@
+# Every workflow that ships on `release: published` needs this job first. A
+# release whose body is not real notes goes back to draft here, and nothing
+# downstream runs. The check is scripts/release-notes-check.mjs.
+name: Release notes guard
+
+on:
+  workflow_call:
+
+jobs:
+  notes-guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The commit this workflow was read from, so the script is there even
+      # when the tag is a draft's untagged- name that no ref carries.
+      - uses: actions/checkout@v4
+        if: github.event_name == 'release'
+        with:
+          ref: ${{ github.sha }}
+      - name: Refuse a release without real notes
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ github.event.release.body }}
+          TAG: ${{ github.event.release.tag_name }}
+          ID: ${{ github.event.release.id }}
+        run: |
+          printf '%s\n' "$BODY" > "$RUNNER_TEMP/body.md"
+          node scripts/release-notes-check.mjs check "$RUNNER_TEMP/body.md" "$TAG" && exit 0
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -F draft=true > /dev/null
+          echo "::error::$TAG is back to draft. Write the real notes, then publish again."
+          exit 1

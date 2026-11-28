@@ -14,7 +14,7 @@
 
 import { Idiomorph } from "idiomorph";
 import { pickThemeFromMessage, startPageColor } from "./iframe-bridge-theme";
-import { describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
+import { authorScriptKeys, describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
 import { createAssetSwapBuffer } from "./asset-swap-buffer";
 import { bustSrcset, normPath, refetchSrc, srcsetMatches } from "./asset-urls";
 import { FOCUS_FRACTION, getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "./scroll-interpolate";
@@ -509,6 +509,25 @@ import { installCaptureResponder } from "./capture/responder";
   // Handle hashchange
   window.addEventListener("hashchange", () => notifyNavigation());
 
+  // A document load leaving this page is told to the shell before the frame
+  // unloads, so a build that lands meanwhile yields to it instead of reloading
+  // the page being left, which would cancel the load. Site scripts navigate
+  // too (search, the series keys, forms), so where the Navigation API exists
+  // every push or replace that loads a document is read from it; elsewhere
+  // only a link click is. A same-document change (pushState, replaceState, a
+  // #fragment) loads nothing, so announcing it would hold off the next refresh.
+  type NavigateEvent = Event & { navigationType: string; downloadRequest: string | null; destination: { url: string; sameDocument: boolean } };
+  const navigation = (window as unknown as { navigation?: EventTarget }).navigation;
+  const announceLeaving = (url: string) => window.parent.postMessage({ type: "moss-navigation-start", url }, "*");
+  if (isShellMounted && navigation) {
+    navigation.addEventListener("navigate", (event) => {
+      const e = event as NavigateEvent;
+      if ((e.navigationType === "push" || e.navigationType === "replace") && !e.destination.sameDocument && e.downloadRequest === null) {
+        announceLeaving(e.destination.url);
+      }
+    });
+  }
+
   // ============================================================
   // Link Click Interceptor
   // ============================================================
@@ -579,9 +598,7 @@ import { installCaptureResponder } from "./capture/responder";
       const url = new URL(href, window.location.href);
       if (isShellMounted) {
         url.searchParams.set("__moss_shell", "1");
-        if (loadsDocument(anchor, url, new URL(location.href))) {
-          window.parent.postMessage({ type: "moss-navigation-start", url: url.href }, "*");
-        }
+        if (!navigation && loadsDocument(anchor, url, new URL(location.href))) announceLeaving(url.href);
       }
       window.location.href = url.href;
     },
@@ -977,6 +994,12 @@ import { installCaptureResponder } from "./capture/responder";
     if (e.data?.type !== "moss-morph") return;
     const { gen } = e.data as { gen?: number };
     const url = location.href; // same-origin; carries ?__moss_shell=1
+    // What the author's own scripts built would not survive a morph: decline, and the shell reloads.
+    const scripts = authorScriptKeys(document);
+    if (scripts.length > 0) {
+      window.parent.postMessage({ type: "moss-morph-declined", gen, url, scripts }, "*");
+      return;
+    }
     // `cache: "reload"` forces a fresh fetch of the just-rebuilt page.
     fetch(url, { cache: "reload" })
       .then((r) => {

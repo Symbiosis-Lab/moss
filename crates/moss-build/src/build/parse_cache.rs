@@ -161,6 +161,8 @@ struct ParseCacheEntry {
     /// entry replays only while every one of them still gives that answer.
     reads: Vec<Read>,
     doc: ParsedDocument,
+    /// The problems the parse reported, which a replay reports again.
+    problems: Vec<crate::build::cli_output::Problem>,
 }
 
 /// One thing a parse read beyond its own bytes, with what it read then.
@@ -512,6 +514,8 @@ pub struct ParseSession {
     decisions: Mutex<HashMap<String, bool>>,
     /// Each page's reads this build, from its parse or carried with its replay.
     reads: Mutex<HashMap<String, Vec<Read>>>,
+    /// Each page's problems this build, from its parse or its replay.
+    problems: Mutex<HashMap<String, Vec<crate::build::cli_output::Problem>>>,
     /// Pages that showed a block that is not final (derived text still being read).
     withheld: Mutex<std::collections::HashSet<String>>,
     stats: Mutex<ParseCacheStats>,
@@ -572,6 +576,7 @@ impl ParseSession {
             began_at: crate::build::stat::recording_clock(),
             decisions: Mutex::new(HashMap::new()),
             reads: Mutex::new(HashMap::new()),
+            problems: Mutex::new(HashMap::new()),
             withheld: Mutex::new(std::collections::HashSet::new()),
             stats: Mutex::new(stats),
             #[cfg(test)]
@@ -598,10 +603,13 @@ impl ParseSession {
         if self.shadow {
             return None;
         }
-        hit
+        let (doc, problems) = hit?;
+        problems.iter().for_each(crate::build::cli_output::Problem::report);
+        self.note_problems(relative_path, problems);
+        Some(doc)
     }
 
-    fn decide(&self, relative_path: &str, answers: &Answers<'_>) -> Option<ParsedDocument> {
+    fn decide(&self, relative_path: &str, answers: &Answers<'_>) -> Option<(ParsedDocument, Vec<crate::build::cli_output::Problem>)> {
         let previous = self.previous.as_ref()?;
         let entry = previous.entries.get(relative_path)?;
         if self.hasher.hash(relative_path).as_deref() != Some(entry.content_hash.as_str()) {
@@ -617,16 +625,27 @@ impl ParseSession {
         // the identity is this build's: every graph read was just shown to hold.
         let carried = entry.reads.iter().filter(|read| !matches!(read, Read::Bytes { .. } | Read::GraphIdentity(_))).cloned();
         self.note_reads(relative_path, carried.chain([Read::GraphIdentity(identity)]));
-        Some(entry.doc.clone())
+        Some((entry.doc.clone(), entry.problems.clone()))
     }
 
     /// Run `parse` for `relative_path`, recording what it asked of the rest of
     /// the site: each question put to the graph, the URL of the page itself
     /// and of every page a link resolved to, and its folder's language.
     pub fn recording<R>(&self, relative_path: &str, answers: &Answers<'_>, parse: impl FnOnce() -> R) -> R {
-        let (value, graph_reads) = moss_core::content_graph::recorded(parse);
+        let ((value, graph_reads), problems) =
+            crate::build::cli_output::recorded_problems(|| moss_core::content_graph::recorded(parse));
         self.record(relative_path, graph_reads, answers);
+        match problems {
+            Some(problems) => self.note_problems(relative_path, problems),
+            None => self.withhold(relative_path),
+        }
         value
+    }
+
+    fn note_problems(&self, relative_path: &str, problems: Vec<crate::build::cli_output::Problem>) {
+        if let Ok(mut all) = self.problems.lock() {
+            all.entry(relative_path.to_owned()).or_default().extend(problems);
+        }
     }
 
     fn record(&self, relative_path: &str, graph_reads: Vec<GraphRead>, answers: &Answers<'_>) {
@@ -744,6 +763,7 @@ impl ParseSession {
 
         let withheld = self.withheld.lock().map(|w| w.clone()).unwrap_or_default();
         let mut recorded = std::mem::take(&mut *self.reads.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut problems = std::mem::take(&mut *self.problems.lock().unwrap_or_else(|e| e.into_inner()));
         let mut entries: HashMap<String, ParseCacheEntry> = HashMap::new();
         for doc in documents {
             let Some(path) = doc.source_path.as_ref().filter(|p| !withheld.contains(*p)) else {
@@ -777,6 +797,7 @@ impl ParseSession {
                     content_hash,
                     reads,
                     doc: doc.clone(),
+                    problems: problems.remove(path).unwrap_or_default(),
                 },
             );
         }
@@ -1648,7 +1669,7 @@ mod tests {
         reset_for_tests();
         let doc = ParsedDocument {
             source_path: Some("a.md".to_string()),
-            missing_reference_occurrences: vec![crate::build::types::MissingReferenceOccurrence {
+            missing_reference_occurrences: vec![crate::build::types::ReferenceOccurrence {
                 source_path: "a.md".to_string(),
                 source_revision: crate::build::types::SourceRevision::from_source("revision"),
                 reference: "gone.png".to_string(),
@@ -1667,6 +1688,29 @@ mod tests {
         assert_eq!(replayed.missing_reference_occurrences.len(), 1);
         assert_eq!(replayed.missing_reference_occurrences[0].reference, "gone.png");
         session.finish(&[replayed]);
+        reset_for_tests();
+    }
+
+    #[test]
+    fn every_replay_prints_the_problems_its_parse_printed() {
+        use crate::build::cli_output::{problem_mark, problems_since};
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index_json = dir.path().join("hash-index.json");
+        std::fs::write(dir.path().join("a.md"), "[[gone]]\n").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument { source_path: Some("a.md".to_string()), ..Default::default() };
+        let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
+        session.recording("a.md", &no_answers(), || crate::build::cli_output::cli_warn!("[a.md] unresolved link: gone"));
+        session.finish(std::slice::from_ref(&doc));
+
+        for replay in 0..2 {
+            let mark = problem_mark();
+            let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
+            let replayed = session.lookup("a.md", &no_answers()).expect("unchanged source is warm");
+            assert_eq!(problems_since(mark), Some(vec!["[a.md] unresolved link: gone".to_string()]), "replay {replay}");
+            session.finish(&[replayed]);
+        }
         reset_for_tests();
     }
 

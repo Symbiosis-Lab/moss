@@ -486,7 +486,7 @@ async function openSystemBrowser(url) {
 /** The text moss ends a cancelled sign-in with. */
 const CANCELLED = "sign-in cancelled";
 /**
-* The person stopped the sign-in: they closed it, or another sign-in started.
+* The person stopped the sign-in: they pressed Sign in again, or another sign-in started.
 * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
 *
 * @example
@@ -710,6 +710,8 @@ async function showBrowserForm(html, options) {
 * panel, as the author would paste it: moss runs its own script there with
 * this data, never the plugin's code, and only on a page of one of the
 * plugin's declared domains.
+*
+* With no parts and no title it waits for editor.body and changes nothing, so a plugin can use it to check that an element is there.
 *
 * Only in the moss app; elsewhere it rejects.
 *

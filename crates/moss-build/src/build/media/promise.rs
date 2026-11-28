@@ -125,6 +125,7 @@ pub(crate) fn promise_image_variants(
         let never = item.skip.as_ref().and_then(SkipReason::failure_message);
         for url in variants {
             manifest.register_preview_original(url.clone(), item.source_path.to_string_lossy().into_owned());
+            if never.is_some() { manifest.register_never_made(url.clone()); }
             if let Some(registry) = registry { match never {
                 Some(why) => registry.set_failed(url, Failure::skip(why)),
                 None => {
@@ -310,7 +311,7 @@ pub(crate) fn trigger_media_settle_rerender(
     let needs_rerender = settled.iter().any(|a| {
         a.asset_type == "thumbnail"
             || (a.asset_type == "image"
-                && !a.path.starts_with(crate::build::served_path::OG_CARD_PREFIX)
+                && !crate::build::served_path::is_sharing_card(&a.path)
                 && !previous.files.contains_key(&a.path))
     });
     if !needs_rerender {
@@ -331,6 +332,20 @@ pub(crate) fn trigger_media_settle_rerender(
     worker.enqueue(request);
     // The worker owns the re-render; a build must not also run a second pass.
     false
+}
+
+/// Keep the settled build a save promised when it left pages on a moved image
+/// placeholder (`image::promise_settled_build`), once the image work it saw is
+/// done. Called at a shipping seal, the point the settled placeholders are on
+/// disk for the next build's scan.
+pub(crate) fn keep_settle_promise(folder_path: &str) {
+    if !crate::build::media::image::take_settle_promise(folder_path) {
+        return;
+    }
+    if let Some(worker) = crate::ops::watch::worker::get(folder_path) {
+        log::info!("media settle: the pictures a save left to this build settled for '{folder_path}' — re-rendering the pages showing them");
+        worker.enqueue(crate::ops::watch::worker::RebuildRequest::images_settled());
+    }
 }
 
 /// A one-shot build (`moss build`, `moss deploy`) renders its pages once more

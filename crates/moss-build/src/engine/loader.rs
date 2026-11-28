@@ -24,7 +24,8 @@ pub fn load_bundle<'js>(ctx: &Ctx<'js>, bundle: &str, global_name: &str) -> Resu
 /// :208-221). onunload is deliberately NOT implemented — the webview never calls
 /// it. Contract is {project_path} ONLY: manifest.config rides
 /// config.json via plugin-file commands, not this call.
-pub async fn call_onload<'js>(ctx: &Ctx<'js>, project_path: &str) -> std::result::Result<(), String> {
+/// `stopped` is set when the code failed with moss's interrupt.
+pub async fn call_onload<'js>(ctx: &Ctx<'js>, project_path: &str, stopped: &std::cell::Cell<bool>) -> std::result::Result<(), String> {
     let instance: Object = ctx.globals().get("__moss_loaded").map_err(|e| format!("{e}"))?;
     let onload_val: Value = instance.get("onload").map_err(|e| format!("{e}"))?;
     let Some(onload_fn) = onload_val.into_function() else {
@@ -36,7 +37,9 @@ pub async fn call_onload<'js>(ctx: &Ctx<'js>, project_path: &str) -> std::result
         Ok(v) => v,
         Err(e) => {
             if matches!(e, rquickjs::Error::Exception) {
-                return Err(format!("{:?}", ctx.catch()));
+                let caught = ctx.catch();
+                stopped.set(super::budgets::is_interrupt(&caught));
+                return Err(format!("{caught:?}"));
             }
             return Err(format!("{e}"));
         }
@@ -49,7 +52,9 @@ pub async fn call_onload<'js>(ctx: &Ctx<'js>, project_path: &str) -> std::result
         Ok(_) => Ok(()),
         Err(e) => {
             if matches!(e, rquickjs::Error::Exception) {
-                return Err(format!("{:?}", ctx.catch()));
+                let caught = ctx.catch();
+                stopped.set(super::budgets::is_interrupt(&caught));
+                return Err(format!("{caught:?}"));
             }
             Err(format!("{e}"))
         }

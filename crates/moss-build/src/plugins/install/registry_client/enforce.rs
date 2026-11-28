@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
+use crate::plugins::contributions::runs_code;
 use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -35,10 +36,13 @@ static SNAPSHOT: RwLock<Option<CachedRegistry>> = RwLock::new(None);
 /// want of an answer (the same posture as a kill list moss never fetched).
 static TRUST: RwLock<Option<Trust>> = RwLock::new(None);
 
+
 struct Trust {
     /// Where answers are written. `None` for a headless build, which reads
     /// the app's answers and never writes them.
     writes_to: Option<PathBuf>,
+    /// The command consented to every plugin (`--allow-plugins`).
+    consent: bool,
     record: TrustRecord,
     /// The per-plugin approvals an earlier moss kept, and what they settled
     /// for each folder asked about since.
@@ -50,6 +54,7 @@ impl Trust {
     fn read(root: Option<&Path>, writes: bool) -> Self {
         Trust {
             writes_to: root.filter(|_| writes).map(Path::to_path_buf),
+            consent: false,
             record: root.map(trust::load).unwrap_or_default(),
             legacy: root.map(|root| trust::load_legacy(root, &std::env::temp_dir())).unwrap_or_default(),
             settled: Mutex::default(),
@@ -58,8 +63,8 @@ impl Trust {
 
     /// The recorded answer; for a folder never asked, trusted when the
     /// earlier approvals covered every plugin in it at its current code.
-    fn answer(&self, folder: &Path) -> Option<bool> {
-        self.record.answer(folder).or_else(|| self.settled_by_legacy(folder).then_some(true))
+    fn answer(&self, folder: &Path, id: Option<&str>) -> Option<bool> {
+        self.record.answer(folder, id).or_else(|| self.settled_by_legacy(folder).then_some(true))
     }
 
     fn settled_by_legacy(&self, folder: &Path) -> bool {
@@ -155,7 +160,7 @@ pub fn install_headless(registry_dir: Option<&Path>, trust_root: Option<&Path>, 
     // With no trust root nothing was ever trusted, which is not the same as
     // trust going unenforced: the record is installed empty, so headless is
     // always the enforced state.
-    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(trust_root, false));
+    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust { consent: allow_plugins, ..Trust::read(trust_root, false) });
     crate::plugins::admission::install_check(if allow_plugins {
         refusal_without_consent
     } else {
@@ -318,9 +323,7 @@ impl Refusal {
             Refusal::Revoked { reason } => {
                 format!("{name} {version} was withdrawn by the plugin registry: {reason}")
             }
-            Refusal::Incompatible { needs, host } => {
-                format!("{name} {version} needs moss {needs} or newer, and this is moss {host}")
-            }
+            Refusal::Incompatible { needs, host } => incompatible_sentence(&name, &version, needs, host),
             Refusal::Untrusted => format!("{name} {version} is off until you trust this folder"),
             Refusal::Unavailable { platforms } => {
                 crate::plugins::contributions::platform::sentence(&name, platforms)
@@ -339,10 +342,17 @@ impl Refusal {
 /// What vouches for the plugin decides what is asked. Bytes moss shipped are
 /// vouched for by the notarized binary they arrived in, so they are neither
 /// held to a floor nor wait for the folder's answer; anything else needs the
-/// registry's word that it is not withdrawn, a floor this moss meets, and a
+/// registry's word that it is not withdrawn, a floor this moss meets, and,
+/// unless it brings no code and the registry lists these exact bytes, a
 /// folder the user trusts.
 pub fn verdict(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Refusal> {
     verdict_when(manifest, plugin_dir, false)
+}
+
+/// Whether the loader would run this copy once the folder is trusted: its
+/// [`verdict`] is nothing, or only that the folder is not trusted yet.
+pub fn refused_only_for_trust(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
+    matches!(verdict(manifest, plugin_dir), None | Some(Refusal::Untrusted))
 }
 
 /// [`verdict`] with consent already given (`--allow-plugins`): the
@@ -352,14 +362,22 @@ fn verdict_when(manifest: &PluginManifest, plugin_dir: &Path, consent_given: boo
     if let Some(refusal) = withheld(manifest, shipped) {
         return Some(refusal);
     }
-    (!consent_given && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Untrusted)
+    (!consent_given && needs_folder_answer(manifest, plugin_dir) && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Untrusted)
+}
+
+/// Does running this copy wait on the folder's answer? Code it brings does;
+/// so does a copy moss's registry does not list at these exact bytes, since a
+/// passed-on manifest's links and words are the sender's to choose.
+fn needs_folder_answer(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
+    runs_code(manifest) || !is_moss_own(manifest, plugin_dir)
 }
 
 /// Does anything vouch for the code now in `plugin_dir`: did moss ship these
 /// exact bytes, or does the user trust the folder they are in?
 ///
 /// The trust half of [`verdict`] — that one returns `Untrusted` exactly when
-/// nothing does, so the rule lives here and not in both.
+/// nothing does and the folder's answer is needed, so the rule lives here and
+/// not in both.
 ///
 /// Asked on its own for a row's IDENTITY, which is not the same question as
 /// whether the plugin may run. Catalog rows merge by id, so a folder that
@@ -474,35 +492,82 @@ fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
 pub fn folder_of(plugin_dir: &Path) -> Option<PathBuf> {
     let plugins = plugin_dir.parent()?;
     let moss = plugins.parent()?;
-    (plugins.file_name()? == "plugins" && moss.file_name()? == ".moss").then(|| moss.parent().map(Path::to_path_buf))?
+    // `plugins-removed` holds the copies a removal kept, in the same folder.
+    let kept_or_installed = matches!(plugins.file_name()?.to_str()?, "plugins" | "plugins-removed");
+    (kept_or_installed && moss.file_name()? == ".moss").then(|| moss.parent().map(Path::to_path_buf))?
 }
 
 /// Whether the user trusts `folder`, or nothing enforces trust.
 ///
-/// Keyed by the canonical folder, so a folder reached through two paths is
-/// one folder; falls back to the path as given when it cannot be
-/// canonicalized, which is also what [`set_folder_trust`] does, so the two
-/// agree.
+/// Keyed by the folder's id on this computer, so a renamed folder keeps its
+/// answer and a copy is asked again, and by the canonical folder where it has
+/// no id; falls back to the path as given when it cannot be canonicalized,
+/// which is also what [`set_folder_trust`] does, so the two agree.
 pub fn is_trusted(folder: &Path) -> bool {
+    if TRUST.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+        return true;
+    }
+    let folder = canonical(folder);
+    let id = id_of(&folder);
     let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().is_none_or(|trust| trust.answer(&canonical(folder)) == Some(true))
+    guard.as_ref().is_none_or(|trust| trust.answer(&folder, id.as_deref()) == Some(true))
+}
+
+/// Each folder's id as the app last asked about it. The process-wide store
+/// memo would keep an id for a path after its folder moved away and a copy
+/// took its place, so the copy would inherit the answer. Asking about a folder
+/// resolves it again; [`is_trusted`] only reads.
+static IDS: RwLock<Option<HashMap<PathBuf, Option<String>>>> = RwLock::new(None);
+
+/// The id this computer's store for `folder` carries; `None` for a folder
+/// that is gone or has no store, which is then known by its place.
+fn id_of(folder: &Path) -> Option<String> {
+    let asked = IDS.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|ids| ids.get(folder).cloned());
+    asked.unwrap_or_else(|| crate::infra::folder_store::try_for_folder(folder).ok().map(|store| store.id))
+}
+
+/// [`id_of`], resolved now, and kept for the hot path.
+fn id_now(folder: &Path) -> Option<String> {
+    let id = crate::infra::folder_store::FolderStores::running_for(folder)
+        .and_then(|stores| stores.resolve(folder).ok())
+        .map(|store| store.id);
+    IDS.write().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(folder.to_path_buf(), id.clone());
+    id
+}
+
+/// Which of a folder's plugins may run, in one word: everything this command
+/// consented to, or what the user's answer for the folder allows.
+pub fn folder_admission(folder: &Path) -> &'static str {
+    let consent = TRUST.read().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|trust| trust.consent);
+    match (consent, is_trusted(folder)) {
+        (true, _) => "consent",
+        (false, true) => "trusted",
+        (false, false) => "untrusted",
+    }
 }
 
 /// The user's answer for `folder`, for the app to decide whether to ask:
 /// `None` when it was never asked. A folder the earlier per-plugin approvals
 /// settle is recorded as trusted here, the first time the app asks about it,
-/// so it keeps its answer once that file is gone. `Some(true)` when nothing
-/// enforces trust.
+/// so it keeps its answer once that file is gone, and a recorded answer is
+/// written again under the folder's id and where it is now. `Some(true)` when
+/// nothing enforces trust.
 pub fn folder_answer(folder: &Path) -> Option<bool> {
+    if TRUST.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+        return Some(true);
+    }
     let folder = canonical(folder);
-    let (recorded, answer) = {
+    let id = id_now(&folder);
+    let (stale, answer) = {
         let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
         let Some(trust) = guard.as_ref() else { return Some(true) };
-        (trust.record.answer(&folder), trust.answer(&folder))
+        let stale = trust.writes_to.is_some()
+            && trust.record.row(&folder, id.as_deref()).is_none_or(|row| row.dir != folder || (id.is_some() && row.id != id));
+        (stale, trust.answer(&folder, id.as_deref()))
     };
-    if recorded.is_none() && answer == Some(true) {
-        if let Err(error) = set_folder_trust(&folder, true) {
-            log::warn!(target: "registry", "could not record {} as trusted: {error}", folder.display());
+    if let Some(answer) = answer.filter(|_| stale) {
+        if let Err(error) = set_folder_trust(&folder, answer) {
+            log::warn!(target: "registry", "could not record the answer for {}: {error}", folder.display());
         }
     }
     answer
@@ -512,30 +577,67 @@ pub fn folder_answer(folder: &Path) -> Option<bool> {
 /// the app records answers: a headless build holds a record it reads and
 /// never writes.
 pub fn set_folder_trust(folder: &Path, trusted: bool) -> Result<(), String> {
-    let mut guard = TRUST.write().unwrap_or_else(|e| e.into_inner());
-    // Nothing enforces trust without a record, so there is nothing to keep.
-    let Some(trust) = guard.as_mut() else { return Ok(()) };
-    let root = trust.writes_to.clone().ok_or("this moss reads folder answers and does not record them")?;
-    let mut record = trust.record.clone();
-    record.set(canonical(folder), trusted);
-    trust::save(&root, &record)?;
-    trust.record = record;
-    Ok(())
+    let folder = canonical(folder);
+    let id = id_now(&folder);
+    change_record(|record| record.set(folder, id, trusted))
 }
 
-/// Each plugin directory in `folder` that moss did not ship, canonical, with
-/// the hash of its code now (`None` when it cannot be read).
+/// Drop the answer for `folder`, so its next open asks again, and return it:
+/// for the app when the person removes the folder from its recent folders,
+/// the one thing that ends an answer, and whose Undo puts it back. A folder
+/// that is gone is found by where it was last asked about.
+pub fn forget_folder(folder: &Path) -> Result<Option<bool>, String> {
+    let folder = canonical(folder);
+    let id = id_now(&folder);
+    change_record(|record| {
+        let answer = record.answer(&folder, id.as_deref());
+        record.forget(&folder, id.as_deref());
+        answer
+    })
+}
+
+fn change_record<T: Default>(change: impl FnOnce(&mut TrustRecord) -> T) -> Result<T, String> {
+    let mut guard = TRUST.write().unwrap_or_else(|e| e.into_inner());
+    // Nothing enforces trust without a record, so there is nothing to keep.
+    let Some(trust) = guard.as_mut() else { return Ok(T::default()) };
+    let root = trust.writes_to.clone().ok_or("this moss reads folder answers and does not record them")?;
+    let mut record = trust.record.clone();
+    let out = change(&mut record);
+    trust::save(&root, &record)?;
+    trust.record = record;
+    Ok(out)
+}
+
+/// Each plugin directory in `folder` that moss did not ship and that waits on
+/// the folder's answer, canonical, with the hash of its code now (`None` when
+/// it cannot be read).
 pub fn carried(folder: &Path) -> Vec<(PathBuf, Option<String>)> {
     let Ok(entries) = std::fs::read_dir(folder.join(".moss").join("plugins")) else { return Vec::new() };
     entries
         .flatten()
         .map(|entry| canonical(&entry.path()))
         .filter_map(|dir| Some((crate::plugins::bundled::read_installed_manifest(&dir)?, dir)))
+        .filter(|(manifest, dir)| needs_folder_answer(manifest, dir))
         .filter_map(|(manifest, dir)| match code_of(&manifest, &dir) {
             Some(code) if code.shipped => None,
             code => Some((dir, code.map(|code| code.hash))),
         })
         .collect()
+}
+
+/// The names of the plugins in `folder` that the installed check refuses only
+/// because the folder is not trusted.
+pub fn waiting_on_trust(folder: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder.join(".moss").join("plugins")) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| canonical(&entry.path()))
+        .filter_map(|dir| Some((crate::plugins::bundled::read_installed_manifest(&dir)?, dir)))
+        .filter(|(manifest, dir)| matches!(verdict(manifest, dir), Some(Refusal::Untrusted)))
+        .map(|(manifest, _)| manifest.name)
+        .collect();
+    names.sort();
+    names
 }
 
 /// What the registry's last accepted index says about a plugin directory.
@@ -590,6 +692,13 @@ fn registry_status_in(
 
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// "needs moss X", in English for a log or an error. Every plugin-authored
+/// value is bounded here, so a caller cannot forget to.
+pub(crate) fn incompatible_sentence(name: &str, version: &str, needs: &str, host: &str) -> String {
+    let (name, version, needs) = (bounded(name, MAX_NAME), bounded(version, MAX_NAME), bounded(needs, MAX_NAME));
+    format!("{name} {version} needs moss {needs} or newer, and this is moss {host}")
 }
 
 /// The refusal when a plugin needs a newer moss than this one.

@@ -150,7 +150,7 @@ pub fn to_webp(source: &str) -> String {
             return format!("{stem}.webp");
         }
     }
-    // Fallback: append .webp (shouldn't happen with known image files)
+    // Anything else appends: a HEIF on purpose (see `is_heif_source_ext`).
     format!("{source}.webp")
 }
 
@@ -173,6 +173,9 @@ pub fn to_webp(source: &str) -> String {
 ///    (`build/media/image.rs`);
 /// 6. **`should_skip`'s AlreadySmall carve-out** — `raster_with_picture`
 ///    (`build/media/image.rs`).
+///
+/// HEIF joins as a ladder source at every site; emission alone treats it apart
+/// ([`is_heif_source_ext`]).
 ///
 /// NOTE: `encode_rungs` is NOT a gate site — it is a
 /// [`ladder_rungs`] DERIVATION consumer (it computes the rung SET, it does not
@@ -202,8 +205,22 @@ pub fn to_webp(source: &str) -> String {
 /// assert!(is_ladder_source_ext("webp")); // webp participates in the ladder
 /// ```
 pub fn is_ladder_source_ext(ext: &str) -> bool {
-    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
+    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp") || is_heif_source_ext(ext)
 }
+
+/// True when `ext` is a HEIF picture (`heic`, `heif`): a ladder source no
+/// browser but Safari can draw, so its page names only its webp encodes and
+/// never the original. A HEIF keeps [`to_webp`]'s appended name
+/// (`IMG_1.heic.webp`), so the `IMG_1.HEIC` and `IMG_1.JPG` a phone saves side
+/// by side never share an encode.
+pub fn is_heif_source_ext(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif")
+}
+
+/// The widest picture a plain `<img src>` names when the page cannot name the
+/// original: a HEIF's, which also reaches feeds and email. The phone's rung
+/// (see [`LADDER`]), so a reader without `srcset` still gets a sharp picture.
+pub const PLAIN_SRC_MAX_WIDTH: u32 = 1200;
 
 /// True when `ext` is a WebP source extension (`webp`, case-insensitive).
 ///
@@ -1266,7 +1283,7 @@ mod tests {
         // Phase B (Task 12) added webp/WEBP: a webp SOURCE now participates in
         // the responsive ladder (emitted on `<img srcset>`, not `<picture>`).
         for ext in [
-            "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "Jpg", "jPeG", "webp", "WEBP", "WebP",
+            "png", "PNG", "jpg", "JPG", "jpeg", "JPEG", "Jpg", "jPeG", "webp", "WEBP", "WebP", "heic", "HEIC", "heif",
         ] {
             assert!(is_ladder_source_ext(ext), "{ext} must be a ladder source");
         }
@@ -1275,7 +1292,7 @@ mod tests {
     #[test]
     fn is_ladder_source_ext_rejects_non_ladder_formats() {
         // webp joined in Phase B (asserted above); these never join.
-        for ext in ["gif", "svg", "avif", "heic", "bmp", "tiff", ""] {
+        for ext in ["gif", "svg", "avif", "bmp", "tiff", ""] {
             assert!(!is_ladder_source_ext(ext), "{ext} must NOT be a ladder source");
         }
     }

@@ -10,9 +10,10 @@
 
 use std::path::Path;
 
+use moss_core::page::site_page::SitePage;
+
 use crate::build::scan::path_collision::on_disk;
 
-use super::slug::slugify_path_segments;
 
 mod frontmatter_cache;
 pub(crate) use frontmatter_cache::{build_page_map_and_external_urls_cached, FrontmatterScanCache};
@@ -24,6 +25,7 @@ pub(crate) use home_election::{elect_homes, elect_homes_with_evicted, is_home_tr
 
 mod folder_lang;
 pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCache};
+pub(crate) use moss_core::page::page_map::{apply_cascading_dir_overrides, folder_homes, page_map_entry};
 
 /// Pre-scan markdown frontmatter to elect each folder's home file, returning a
 /// map from `parent_directory → file_path`. A file in this map wins its
@@ -84,27 +86,7 @@ pub(crate) fn compute_home_overrides_with_evicted(
     locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, String> {
-    use std::collections::HashMap;
-
-    /// Per-file facts collected in a single frontmatter read.
-    struct FileFacts {
-        path: String,
-        parent: String,
-        filename: String,
-        home: Option<bool>,
-        translation_key: Option<String>,
-        /// `true` when the file is its own folder's home by NAME
-        /// (self-named / index-stem / lang-suffixed) — the name-based anchor.
-        name_anchor: bool,
-    }
-
-    // THE root name, resolved once at the entry point. This line used to be
-    // `source_path.file_name()...unwrap_or("")` — which read `""` for a dot-path
-    // root while `blocking.rs`, eight lines away, patched around the same problem
-    // with a local canonicalize fallback. Two consumers of one string, two answers.
-    let root_basename = root.name();
-
-    let mut facts: Vec<FileFacts> = Vec::new();
+    let mut read: Vec<(String, Option<bool>, Option<String>)> = Vec::new();
     for fi in markdown_files {
         let abs = locate(&fi.path);
         if is_evicted(&abs) {
@@ -120,200 +102,23 @@ pub(crate) fn compute_home_overrides_with_evicted(
                 continue;
             }
         };
-
-        // ONE parser: same path the editor + build pipeline use.
-        let (home, translation_key): (Option<bool>, Option<String>) =
-            if crate::build::markdown::is_simplified_frontmatter(&content) {
-                let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-                (fm.home, fm.translation_key)
-            } else {
-                let fm = crate::build::markdown::parse_typed_frontmatter(&content);
-                (fm.home, fm.translation_key)
-            };
-
-        let parent = Path::new(&fi.path)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("")
-            .to_string();
-        let filename = Path::new(&fi.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        // Folder basename for self-named detection: the parent dir's basename,
-        // or the project root's basename for a root-level file. Mirrors how the
-        // pipeline derives `parent_name` in `build_page_map`.
-        let folder_basename = if parent.is_empty() {
-            root_basename
-        } else {
-            Path::new(&parent)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
+        let (home, translation_key) = {
+            let fm = moss_core::frontmatter::typed(&content);
+            (fm.home, fm.translation_key)
         };
-        let stem_lower = Path::new(&fi.path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let name_anchor =
-            moss_core::home::is_home_file(&stem_lower, &folder_basename.to_lowercase());
-
-        facts.push(FileFacts {
-            path: fi.path.clone(),
-            parent,
-            filename,
-            home,
-            translation_key,
-            name_anchor,
-        });
+        read.push((fi.path.clone(), home, translation_key));
     }
-
-    // A folder "has its own anchor" when some file in it is an anchor —
-    // either `home: true` (direct) or name-based (self-named / index-stem).
-    let mut folders_with_anchor: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for f in &facts {
-        if f.home == Some(true) || f.name_anchor {
-            folders_with_anchor.insert(f.parent.clone());
+    let claims: Vec<moss_core::page::page_map::HomeClaim<'_>> = read.iter()
+        .map(|(path, home, key)| moss_core::page::page_map::HomeClaim { path, home: *home, translation_key: key.as_deref() })
+        .collect();
+    let (overrides, notices) = moss_core::page::page_map::home_overrides(&claims, root.name());
+    for notice in notices {
+        if notice.warn {
+            log::warn!(target: "i18n", "{}", notice.text);
+        } else {
+            log::debug!(target: "i18n", "{}", notice.text);
         }
     }
-
-    // Collect per-folder candidates as (filename, path) so we can apply the
-    // shared deterministic election + multi-claim warning. A `reason` label
-    // makes the warning accurate for both the direct and inherited paths.
-    let mut by_folder: HashMap<String, Vec<(String, String)>> = HashMap::new();
-
-    // Rule 2: direct promotion — every `home: true` file.
-    for f in &facts {
-        if f.home == Some(true) {
-            by_folder
-                .entry(f.parent.clone())
-                .or_default()
-                .push((f.filename.clone(), f.path.clone()));
-        }
-    }
-
-    // Rules 3+4: translation groups → inherited promotion.
-    // Group files by translationKey value (skip files with no key).
-    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, f) in facts.iter().enumerate() {
-        if let Some(key) = &f.translation_key {
-            groups.entry(key.clone()).or_default().push(i);
-        }
-    }
-    for members in groups.values() {
-        // Does this group contain an anchor (rules 1: home:true OR name-based)?
-        let has_anchor = members
-            .iter()
-            .any(|&i| facts[i].home == Some(true) || facts[i].name_anchor);
-        if !has_anchor {
-            continue;
-        }
-        // Name an anchor for the inheritance diagnostic below (any one — the
-        // anchor's identity does not affect the result, only group membership).
-        let anchor_path = members
-            .iter()
-            .find(|&&i| facts[i].home == Some(true) || facts[i].name_anchor)
-            .map(|&i| facts[i].path.clone())
-            .unwrap_or_default();
-        // Inherited promotion: every member whose folder has NO anchor of its
-        // own becomes its folder's home. (Rule 5 precedence: skip folders that
-        // already have a direct/name anchor.) A member that is itself the
-        // anchor lives in a folder with an anchor, so it is skipped here — it is
-        // already handled by rule 2 (if home:true) or by name-detection.
-        for &i in members {
-            let f = &facts[i];
-            if folders_with_anchor.contains(&f.parent) {
-                continue;
-            }
-            // Diagnostic: this folder's home is elected purely by inheritance (no
-            // local marker/index/self-name). A shared arbitrary translationKey is
-            // a weaker intent signal than a name/marker, so make the "why is this
-            // a home?" answer discoverable.
-            // One line per inheriting folder, every build — on a large
-            // multilingual site that scales with the tree, so DEBUG. Turn on
-            // debug logging when the question is actually "why is this a home?".
-            log::debug!(
-                target: "i18n",
-                "`{}` inherits home-ness for `{}` via translation link to anchor `{}`",
-                f.path,
-                if f.parent.is_empty() { "/" } else { f.parent.as_str() },
-                anchor_path,
-            );
-            by_folder
-                .entry(f.parent.clone())
-                .or_default()
-                .push((f.filename.clone(), f.path.clone()));
-        }
-    }
-
-    let mut overrides = HashMap::new();
-    let mut warned_folders: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (parent, mut candidates) in by_folder {
-        // Dedup: a file could be added by both direct + inherited paths.
-        candidates.sort_by(|a, b| a.0.cmp(&b.0));
-        candidates.dedup_by(|a, b| a.1 == b.1);
-        if candidates.len() > 1 {
-            warned_folders.insert(parent.clone());
-            let display_folder = if parent.is_empty() { "/" } else { parent.as_str() };
-            let losers: Vec<&str> = candidates[1..].iter().map(|(_, p)| p.as_str()).collect();
-            log::warn!(
-                target: "i18n",
-                "{} files claim the home slot in `{}`; using `{}` (alphabetical first), ignoring: {}",
-                candidates.len(),
-                display_folder,
-                candidates[0].1,
-                losers.join(", "),
-            );
-        }
-        if let Some((_, path)) = candidates.into_iter().next() {
-            overrides.insert(parent, path);
-        }
-    }
-
-    // Broadened multi-claim diagnostic — NAME collisions. The warning above fires
-    // only for marker/inherited candidates collected in `by_folder`. A name-only
-    // collision (a self-named file + an `index`-stem, or marker + name) is resolved
-    // silently by `detect_home_file_in_folder` precedence downstream, so the demoted
-    // file becomes a regular page with no diagnostic (the source of stray `/index/`
-    // nav items). Surface it. Gate on ≥1 name anchor AND skip folders the loop
-    // above already warned, so pure marker/inherited collisions (and the rare
-    // double-marker that is also name-anchored) never double-fire here.
-    let mut name_candidates: HashMap<String, Vec<String>> = HashMap::new();
-    let mut folder_has_name_anchor: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for f in &facts {
-        if f.name_anchor || f.home == Some(true) {
-            name_candidates
-                .entry(f.parent.clone())
-                .or_default()
-                .push(f.path.clone());
-            if f.name_anchor {
-                folder_has_name_anchor.insert(f.parent.clone());
-            }
-        }
-    }
-    for (folder, mut cands) in name_candidates {
-        if !folder_has_name_anchor.contains(&folder) || warned_folders.contains(&folder) {
-            continue;
-        }
-        cands.sort();
-        cands.dedup();
-        if cands.len() >= 2 {
-            let display = if folder.is_empty() { "/" } else { folder.as_str() };
-            log::warn!(
-                target: "i18n",
-                "{} files claim the home slot in `{}` by name/marker: {} — moss elects by precedence (home:true › index › self-named); the rest become regular pages",
-                cands.len(),
-                display,
-                cands.join(", "),
-            );
-        }
-    }
-
     overrides
 }
 
@@ -330,53 +135,7 @@ pub(crate) fn compute_home_file_winners(
     root_folder_name: &str,
     home_overrides: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashSet<String> {
-    use std::collections::HashMap;
-
-    // Group filenames by parent directory
-    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-    for fi in markdown_files {
-        let parent = Path::new(&fi.path)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("")
-            .to_string();
-        let filename = Path::new(&fi.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        groups.entry(parent).or_default().push(filename);
-    }
-
-    let mut winners = std::collections::HashSet::new();
-    for (parent_dir, filenames) in &groups {
-        // home: true marker wins outright when set.
-        if let Some(override_path) = home_overrides.get(parent_dir) {
-            winners.insert(override_path.clone());
-            continue;
-        }
-
-        // Determine the folder name for self-named detection
-        let folder_name = if parent_dir.is_empty() {
-            root_folder_name.to_string()
-        } else {
-            Path::new(parent_dir)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string()
-        };
-        let refs: Vec<&str> = filenames.iter().map(|s| s.as_str()).collect();
-        if let Some(winner_filename) = moss_core::home::detect_home_file_in_folder(&refs, &folder_name) {
-            let winner_path = if parent_dir.is_empty() {
-                winner_filename.to_string()
-            } else {
-                format!("{}/{}", parent_dir, winner_filename)
-            };
-            winners.insert(winner_path);
-        }
-    }
-    winners
+    moss_core::page::page_map::home_file_winners(markdown_files.iter().map(|f| f.path.as_str()), root_folder_name, home_overrides)
 }
 
 /// The single mechanism for all file-tree → page-tree path mapping.
@@ -425,7 +184,7 @@ pub(crate) fn compute_home_file_winners(
 ///
 /// If you call this with a directory path (no filename), the returned last
 /// segment is NOT slugified. Don't use the raw return value as a URL prefix
-/// — wrap it in [`slugify_path_segments`] first. `build_page_map` pass 2
+/// — wrap it in [`moss_core::slug::slugify_path_segments`] first. `build_page_map` pass 2
 /// is the one such caller in moss today and applies that wrap. Any new
 /// directory-only call site must do the same; otherwise a Title-Case last
 /// segment will leak back into URLs whenever an unrelated folder in the
@@ -515,12 +274,7 @@ pub(crate) fn build_page_map_with_evicted(
         };
 
         // Parse frontmatter to get url override (ONE parser).
-        let frontmatter_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
-            let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-            fm.url
-        } else {
-            crate::build::markdown::parse_typed_frontmatter(&content).url
-        };
+        let frontmatter_url: Option<String> = moss_core::frontmatter::typed(&content).url;
 
         let (url_path, is_index, dir_override) = page_map_entry(
             file_path,
@@ -559,7 +313,7 @@ pub(crate) fn pages_before_dedup(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
     reserved: &std::collections::HashSet<String>,
-    site_lang: crate::i18n::Language,
+    site: &crate::i18n::detect::SiteLang,
     locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> Vec<crate::build::types::ParsedDocument> {
@@ -571,14 +325,14 @@ pub(crate) fn pages_before_dedup(
     let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
     let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
     let folder_langs =
-        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan);
+        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan, site.declared);
 
     let mut pages = Vec::new();
     for (path, url_path, is_index) in entries {
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("untitled");
         let slot_only = crate::build::footer::is_slot_only(&path, crate::build::footer::ShipFacts { partial: scan.is_partial(&path) });
         let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied(), slot_only);
-        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site_lang, folder);
+        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site.language(), folder);
         let page = crate::build::types::ParsedDocument {
             url_path,
             kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },
@@ -590,171 +344,6 @@ pub(crate) fn pages_before_dedup(
         crate::build::scan::slug::admit_unless_reserved_device_output(&mut pages, page);
     }
     pages
-}
-
-/// Whether the file's name makes it its folder's home (index-named or
-/// self-named), as the page map decides it.
-fn is_home_by_name(file_path: &str, root_folder_name: &str) -> bool {
-    let stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    let parent_name = match file_path.rsplit_once('/') {
-        Some((parent, _)) => parent.rsplit('/').next().unwrap_or(""),
-        None => root_folder_name,
-    };
-    moss_core::home::is_home_file(&stem, parent_name)
-}
-
-/// The folder homes the page map serves at `<folder>/index.html`: the
-/// election's winners that won by name or by the `home: true` marker. A
-/// folder whose winner is only its first page has no home.
-pub(crate) fn folder_homes<'a>(
-    winners: &'a std::collections::HashSet<String>,
-    overrides: &std::collections::HashMap<String, String>,
-    root_folder_name: &str,
-) -> Vec<&'a str> {
-    winners.iter().map(String::as_str)
-        .filter(|w| is_home_by_name(w, root_folder_name) || overrides.values().any(|o| o == w))
-        .collect()
-}
-
-/// Factored out so [`build_page_map_and_external_urls_cached_with_evicted`]
-/// can share it: that path gets `frontmatter_url` from a cache instead of a
-/// fresh read, but everything downstream of the extraction is identical.
-pub(super) fn page_map_entry(
-    file_path: &str,
-    frontmatter_url: Option<&str>,
-    root_folder_name: &str,
-    home_file_winners: &std::collections::HashSet<String>,
-    home_overrides: &std::collections::HashMap<String, String>,
-) -> (String, bool, Option<(String, String)>) {
-    let filename_match_is_home = is_home_by_name(file_path, root_folder_name);
-    let mut is_index = filename_match_is_home;
-
-    // Demote non-winner index files (same logic as in generate_blocking_content)
-    let is_home_translation = if filename_match_is_home && !home_file_winners.contains(file_path) {
-        // A language variant of the home keeps the winner's URL so slug
-        // deduplication can place it, rather than getting a directory URL.
-        is_index = false;
-        is_home_translation(file_path, home_file_winners)
-    } else {
-        false
-    };
-
-    // Promote home-override files (the `home: true` marker) — files
-    // that won the home slot via frontmatter, not filename. These need
-    // to go to `<folder>/index.html` so the folder home is the file's
-    // URL, not a synthesized empty page.
-    let is_home_override = home_overrides.values().any(|p| p == file_path);
-    if !filename_match_is_home && is_home_override {
-        is_index = true;
-    }
-
-    // Derive clean_stem: strip extension, take last segment
-    let filename_stem = Path::new(file_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("untitled");
-    // Pre-scan only needs the clean stem (strips any language suffix).
-    // The doc's resolved language is computed later in the markdown
-    // pipeline where the full priority chain matters.
-    let clean_stem = crate::i18n::clean_stem_only(filename_stem);
-
-    // For language-suffixed home translations, compute the URL as if still
-    // an index file so it collides with the winner and gets deduplicated.
-    let url_path = crate::build::markdown::compute_url_path(
-        file_path,
-        is_index || is_home_translation,
-        frontmatter_url,
-        &clean_stem,
-    );
-
-    // Collect url override for index files (for cascading to children)
-    let dir_override = if is_index {
-        frontmatter_url.and_then(|url_override| {
-            let dir = Path::new(file_path)
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("");
-            if dir.is_empty() {
-                None
-            } else {
-                Some((dir.to_string(), moss_core::slug::slugify_url_override(url_override)))
-            }
-        })
-    } else {
-        None
-    };
-
-    (url_path, is_index, dir_override)
-}
-
-/// Pass 2 of [`build_page_map_with_evicted`]: rewrite every entry's
-/// `url_path` prefix for cascading `dir_overrides`.
-///
-/// For non-index files: resolve source_dir through overrides, rewrite url_path prefix.
-/// For index files: compute_url_path already replaced the OWN segment, but
-///   ancestor segments still need rewriting (e.g. 文字/travel/index.html → writings/travel/index.html).
-pub(super) fn apply_cascading_dir_overrides(
-    entries: &mut [(String, String, bool)],
-    dir_overrides: &std::collections::HashMap<String, String>,
-) {
-    if dir_overrides.is_empty() {
-        return;
-    }
-    for (file_path, url_path, is_index) in entries.iter_mut() {
-        let source_dir = Path::new(file_path.as_str())
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("");
-        if source_dir.is_empty() {
-            continue;
-        }
-
-        // Compare and rewrite using fully-slugified directory paths.
-        //
-        // resolve_path_with_overrides preserves the LAST segment verbatim
-        // because most callers pass file paths whose last segment is a
-        // filename. Pass 2 always passes directory-only paths, so we
-        // re-slugify the result to drop any case in the trailing segment
-        // (e.g. "my-section/Sub Section" → "my-section/sub-section").
-        //
-        // Comparing slug-form vs slug-form means we only enter the
-        // strip-and-replace branch when an override actually changed the
-        // path — not when slugification alone would. Without this, a
-        // sibling Title-Case folder with no override would corrupt its
-        // children's url_paths whenever ANY override exists in the site.
-        if *is_index {
-            let grandparent = Path::new(source_dir)
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("");
-            if grandparent.is_empty() {
-                continue;
-            }
-            let new_grandparent_raw = resolve_path_with_overrides(grandparent, dir_overrides);
-            let new_grandparent = slugify_path_segments(&new_grandparent_raw);
-            let slugified_grandparent = slugify_path_segments(grandparent);
-            if new_grandparent != slugified_grandparent {
-                if let Some(rest) = url_path.strip_prefix(slugified_grandparent.as_str()) {
-                    let rest = rest.trim_start_matches('/');
-                    *url_path = format!("{}/{}", new_grandparent, rest);
-                }
-            }
-        } else {
-            let new_parent_raw = resolve_path_with_overrides(source_dir, dir_overrides);
-            let new_parent = slugify_path_segments(&new_parent_raw);
-            let slugified_source = slugify_path_segments(source_dir);
-            if new_parent != slugified_source {
-                if let Some(rest) = url_path.strip_prefix(slugified_source.as_str()) {
-                    let rest = rest.trim_start_matches('/');
-                    *url_path = if new_parent.is_empty() {
-                        rest.to_string()
-                    } else {
-                        format!("{}/{}", new_parent, rest)
-                    };
-                }
-            }
-        }
-    }
 }
 
 /// Pre-scans every markdown file's frontmatter for an `external_url:` field
@@ -803,12 +392,7 @@ pub(crate) fn build_external_url_map_with_evicted(
         };
 
         // ONE parser: same path the editor + build pipeline use.
-        let external_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
-            let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-            fm.external_url
-        } else {
-            crate::build::markdown::parse_typed_frontmatter(&content).external_url
-        };
+        let external_url: Option<String> = moss_core::frontmatter::typed(&content).external_url;
 
         if let Some(url) = external_url {
             // http(s) only — same safety guard as the card-href substitution
@@ -825,63 +409,13 @@ pub(crate) fn build_external_url_map_with_evicted(
     out
 }
 
-/// Returns `true` when `url` is an absolute `http(s):` URL accepted as a valid
-/// `external_url` value.  Any other non-empty string (relative path, `ftp://`,
-/// `javascript:`, `data:`, …) is considered invalid and should trigger a
-/// warning — see `warn_invalid_external_url`.
-///
-/// Pure predicate with no side effects; kept separate so it can be tested
-/// independently of the logger.
-pub(crate) fn is_valid_external_url(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
-}
+pub(crate) use moss_core::page::nav::{is_valid_external_url, is_valid_nav_target};
 
-/// Returns `true` when `url` can be a nav bar entry's target: an absolute
-/// http(s) URL, `mailto:`, `tel:`, an in-page `#anchor`, or a site path
-/// (`/path`, `/path#anchor`). A wider set than [`is_valid_external_url`] on
-/// purpose — a nav item may point at an address or a section, but a card,
-/// canonical link or sitemap entry may not. `javascript:`, `data:` and
-/// protocol-relative `//host` stay out.
-pub(crate) fn is_valid_nav_target(url: &str) -> bool {
-    is_valid_external_url(url)
-        || url.starts_with("mailto:")
-        || url.starts_with("tel:")
-        || url.starts_with('#')
-        || (url.starts_with('/') && !url.starts_with("//"))
-}
-
-/// A page's `external_url:` as its nav bar entry's target, or `None` when
-/// the page has none (or it is not a [`is_valid_nav_target`]), in which case
-/// the entry links to the page itself. Silent: the scan already warned.
+/// [`moss_core::page::nav::nav_link`] over the raw frontmatter. Silent: the scan already warned.
 pub fn nav_external_href(
     raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Option<&str> {
-    raw_frontmatter
-        .get("external_url")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|u| is_valid_nav_target(u))
-}
-
-/// Where a listing row or card for `doc` links instead of its local address: a
-/// page-less entry's [`pageless_row_href`], else a page's [`external_url`].
-pub fn outlet_href(doc: &crate::build::types::ParsedDocument) -> Option<String> {
-    if doc.is_pageless_entry() {
-        pageless_row_href(&doc.raw_frontmatter)
-    } else {
-        external_url(&doc.raw_frontmatter)
-    }
-}
-
-/// Where a page-less listing row links: an http(s) outlet or a site path to a
-/// file or folder the site serves (a PDF, a hand-made HTML folder), the same
-/// targets a page-less nav entry takes. `None` draws the row unlinked.
-pub fn pageless_row_href(
-    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> Option<String> {
-    nav_external_href(raw_frontmatter)
-        .filter(|u| is_valid_external_url(u) || (u.starts_with('/') && !u.starts_with("//")))
-        .map(str::to_string)
+    moss_core::page::nav::nav_link(raw_frontmatter.get("external_url").and_then(|v| v.as_str()))
 }
 
 /// Emits a `log::warn!` when `raw_url` is set but is not a value any
@@ -922,22 +456,6 @@ pub fn external_url(
         return None;
     }
     Some(raw.to_string())
-}
-
-/// Read `publisher:` from a doc's raw frontmatter as the card kicker source.
-/// Returns the publisher string when it's a non-empty YAML string, `None`
-/// otherwise (missing, empty, or a non-string YAML value like a number/list).
-///
-/// Centralized so the three child-summary/grid-card emitters share one
-/// extractor — matches the `external_url` pattern above.
-pub fn publisher(
-    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> Option<String> {
-    raw_frontmatter
-        .get("publisher")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
 }
 
 #[cfg(test)]

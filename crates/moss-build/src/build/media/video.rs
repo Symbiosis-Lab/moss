@@ -817,6 +817,9 @@ enum ItemStep {
     /// The user cancelled. Release the remaining budget and publish the count
     /// reached so far.
     Cancelled,
+    /// Its encodes are in the cloud, their download asked for: the video
+    /// comes round again after every local one.
+    Deferred,
 }
 
 impl ItemStep {
@@ -1144,7 +1147,6 @@ pub(crate) fn run_video_conversion(
                     (crate::infra::app_advisory::t("ffmpeg_install"), Action::None)
                 };
             advisories.push(Advisory {
-                lifetime: Default::default(),
                 scope: Scope::Environment,
                 severity: Severity::NeedsAction,
                 item: None,
@@ -1185,8 +1187,13 @@ pub(crate) fn run_video_conversion(
     let scratch = crate::build::io_utils::ScratchDir::new(&vid_paths.cache_tmp(), &format!("video-{epoch}"));
     let temp_dir = scratch.path().to_path_buf();
 
-    for (index, item) in ctx.video_items.iter().enumerate() {
-        let current = (index + 1) as u32;
+    // Local videos first: one whose encodes the cloud still holds waits for
+    // its download after every other video is done.
+    let work = crate::build::cache::LocalFirst::new(ctx.video_items.len());
+    let mut finished = 0u32;
+    while let Some(ticket) = work.take() {
+        let item = &ctx.video_items[ticket.index];
+        let current = finished + 1;
         let filename = Path::new(&item)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -1300,6 +1307,16 @@ pub(crate) fn run_video_conversion(
                 }
             };
 
+            // Encodes another machine made and the cloud still holds are
+            // downloaded, not made again: an encode is not byte-identical, so a
+            // new one would publish every file of the video again. Asked for
+            // now, waited for after every local video, before the cores, so a
+            // download holds none.
+            if ticket.defer_if_cloud_held(&transforms, &source_oid, "video/") {
+                break 'item ItemStep::Deferred;
+            }
+            ticket.fetch(&transforms, &source_oid, "video/", &superseded_or_cancelled);
+
             // The video's share of the process's encode cores, across dispatch
             // epochs and folders. LOCK ORDER (global, never reversed): cloud
             // gate -> cores -> singleflight -> ffmpeg.
@@ -1331,7 +1348,7 @@ pub(crate) fn run_video_conversion(
                     // Fires in both modes; a headless build's reporter discards.
                     let reporter = services.reporter.as_ref();
                     let progress_callback = |fraction: f64| {
-                        let overall_fraction = (index as f64 + fraction) / total as f64;
+                        let overall_fraction = (finished as f64 + fraction) / total as f64;
                         reporter.report(&PipelineEvent::VideoProgress {
                             filename: filename.clone(),
                             current_video: current,
@@ -1480,7 +1497,9 @@ pub(crate) fn run_video_conversion(
         };
 
         match step {
+            ItemStep::Deferred => {}
             ItemStep::Handled { delivered, advisories: item_advisories, encoded } => {
+                finished += 1;
                 let delivered_any = !delivered.is_empty();
                 end.delivered += usize::from(delivered_any);
                 // A detached run registers nothing itself (its coordinator is
@@ -1506,7 +1525,7 @@ pub(crate) fn run_video_conversion(
                         .videos_converted
                         .store(converted_count, std::sync::atomic::Ordering::Relaxed);
                 }
-                end.abandoned = total as usize - index;
+                end.abandoned = (total - finished) as usize;
                 return end;
             }
         }
@@ -1524,6 +1543,7 @@ pub(crate) fn run_video_conversion(
     }
 
     log::info!("[epoch {}] Video conversion complete ({} videos, {} converted)", epoch, total, converted_count);
+    work.report("videos", converted_count as usize);
     // Fold in whatever `dispatch_video_conversions` carried forward for
     // videos it skipped this round (see `BackgroundContext::carried_
     // advisories`) — the terminal tick `finish_run` fires below must speak
@@ -4904,6 +4924,65 @@ pub(crate) mod tests {
         assert_eq!(second.mp4_oid.as_deref(), Some(original_mp4_oid.as_str()));
         assert_eq!(second.thumb_oid.as_deref(), Some(repaired_thumb_oid.as_str()));
         assert!(crate::build::media::decode::sniff_decode(&staged_thumb).is_ok());
+    }
+
+    /// A video another machine encoded, its MP4 still in the cloud here, is
+    /// downloaded rather than encoded again, so the published file keeps its
+    /// bytes, and a local video listed after it is not kept waiting for it.
+    #[test]
+    fn a_cloud_held_video_encode_is_fetched_after_the_local_ones_not_made_again() {
+        use crate::build::cache::{BlobValidation, ObjectStore, RecordMode, TransformCache};
+        use crate::build::ports::reporter::BuildReporter;
+        #[derive(Default)]
+        struct Ready(std::sync::Mutex<Vec<String>>);
+        impl BuildReporter for Ready {
+            fn report(&self, event: &PipelineEvent) {
+                if let PipelineEvent::AssetReady { path, .. } = event {
+                    self.0.lock().unwrap().push(path.clone());
+                }
+            }
+        }
+        let Some(bin) = crate::build::media::ffmpeg::real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        };
+        let tmp = portable_tmpdir();
+        let (vault, staging, moss_dir) = (tmp.path().join("vault"), tmp.path().join("stage"), tmp.path().join(".moss"));
+        std::fs::create_dir_all(&staging).unwrap();
+        let paths = MossPaths::from_moss_dir(moss_dir.clone());
+        let transforms = TransformCache::for_site(&paths);
+        let (held, local) = ("videos/held.mov", "videos/local.mov");
+        let mut held_mp4 = std::path::PathBuf::new();
+        for (item, mp4) in [(held, b"published mp4".as_slice()), (local, b"local mp4".as_slice())] {
+            seed_cached_video_entries(&vault, &moss_dir, item, mp4, b"published thumb", Some(b"published poster"));
+            let mut record = transforms.get_with(&ObjectStore::hash_file(&vault.join(item)).unwrap(), RecordMode::Request).unwrap();
+            for entry in record.transforms.values_mut() {
+                entry.validation = Some(BlobValidation { version: VALIDATOR_VERSION, size: entry.size });
+            }
+            transforms.put(&record, RecordMode::Request).unwrap();
+            if item == held {
+                held_mp4 = ObjectStore::for_site(&paths).blob_path(&record.transforms["video/mp4"].oid);
+            }
+        }
+        let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&held_mp4);
+
+        let ctx = BackgroundContext {
+            video_items: vec![held.to_string(), local.to_string()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir,
+            ffmpeg_bin_path: Some(bin),
+            ..BackgroundContext::for_test()
+        };
+        let ready = std::sync::Arc::new(Ready::default());
+        let services = BuildServices { reporter: ready.clone(), ..BuildServices::headless() };
+        let end = run_video_conversion(&services, &ctx, 0, None);
+
+        assert_eq!(std::fs::read(staging.join("videos/held.mp4")).unwrap(), b"published mp4", "{end:?}");
+        assert_eq!(crate::build::icloud::pretend::requests_for(&held_mp4), 1);
+        let ready = ready.0.lock().unwrap();
+        let at = |url: &str| ready.iter().position(|p| p == url).unwrap_or_else(|| panic!("{url} never ready: {ready:?}"));
+        assert!(at("videos/local.mp4") < at("videos/held.mp4"), "the local video waited for the download: {ready:?}");
     }
 
     /// A video cached before hero posters existed has a valid MP4 and thumbnail

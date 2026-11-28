@@ -42,6 +42,15 @@ fn sealed_with_one_page(stage: &std::path::Path, page_html: &[u8]) -> crate::bui
     pending.seal()
 }
 
+/// The links the seal's shipped-reference scan takes from `sealed`'s pages.
+fn links_of(stage: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> crate::build::media::orphan_prune::PageLinks {
+    let mut scan = crate::build::media::orphan_prune::Rescan::shipped(stage, None);
+    for key in sealed.files().keys().filter(|k| k.ends_with(".html")) {
+        scan.read_file(&stage.join(key), Some(key)).unwrap();
+    }
+    scan.finish().page_links
+}
+
 const VIDEO_PAGE: &[u8] =
     br#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#;
 
@@ -57,7 +66,7 @@ fn a_video_and_poster_still_pending_at_seal_time_gate_publish() {
     let assets = std::sync::Arc::new(AssetRegistry::new());
     assets.set_pending("videos/clip.mp4".into(), None, None);
 
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert_eq!(unfulfilled.len(), 2, "both the mp4 and its derived poster key must be caught");
 
     let recorded = crate::system::build_records::records()
@@ -97,7 +106,7 @@ fn a_permanently_failed_video_does_not_gate_publish() {
         crate::deploy::refuse_publish(&folder).is_ok(),
         "no verdict recorded yet must not itself refuse"
     );
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert_eq!(unfulfilled.len(), 2, "a still-Pending video must gate publish once");
     assert!(
         crate::deploy::refuse_publish(&folder).is_err(),
@@ -133,7 +142,7 @@ fn a_permanently_failed_video_does_not_gate_publish() {
         "a permanently failed encode must stop being a pending promise"
     );
 
-    let unfulfilled_again = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let unfulfilled_again = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert!(
         unfulfilled_again.is_empty(),
         "a failed encode's dead link must not be this build's promise"
@@ -153,7 +162,7 @@ fn no_registry_at_all_is_advisory_only() {
     let folder = format!("/promise-gate-no-registry-{}", uuid::Uuid::new_v4());
     let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
 
-    let unfulfilled = record_promise_gate(tmp.path(), &sealed, None, &folder);
+    let unfulfilled = record_promise_gate(tmp.path(), &sealed, None, &folder, &links_of(tmp.path(), &sealed));
     assert!(unfulfilled.is_empty());
     assert!(crate::deploy::refuse_publish(&folder).is_ok());
 }
@@ -173,7 +182,7 @@ fn a_promise_whose_source_is_still_in_the_cloud_names_the_file() {
     assets.set_source_passthrough("videos/clip.mp4".into(), source);
     assets.set_pending("videos/clip.mp4".into(), None, None);
 
-    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     let err = crate::deploy::refuse_publish(&folder)
         .expect_err("a promise still in the cloud must refuse the publish");
     assert!(err.contains("clip.mov"), "{err}");
@@ -193,7 +202,7 @@ fn a_follow_up_rebuild_clears_the_refusal() {
     let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
     let assets = std::sync::Arc::new(AssetRegistry::new());
     assets.set_pending("videos/clip.mp4".into(), None, None);
-    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder, &links_of(tmp.path(), &sealed));
     assert!(crate::deploy::refuse_publish(&folder).is_err());
 
     // Second seal: the follow-up rebuild's own registry sees the encode
@@ -212,10 +221,63 @@ fn a_follow_up_rebuild_clears_the_refusal() {
     );
     let sealed2 = pending.seal();
     let empty_assets = std::sync::Arc::new(AssetRegistry::new());
-    record_promise_gate(tmp.path(), &sealed2, Some(&empty_assets), &folder);
+    record_promise_gate(tmp.path(), &sealed2, Some(&empty_assets), &folder, &links_of(tmp.path(), &sealed2));
 
     assert!(
         crate::deploy::refuse_publish(&folder).is_ok(),
         "the follow-up rebuild's clean seal must clear the earlier refusal"
     );
+}
+
+/// Seals one page that links `/videos/clip.mp4` through the real
+/// `advertise_sealed`, with that video still pending when `promised`, and
+/// returns whether the adopted manifest kept the render's evidence.
+async fn seal_keeps_evidence(promised: bool) -> bool {
+    let tmp = stage_dir();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    std::fs::create_dir_all(mp.staging_dir()).unwrap();
+    std::fs::write(mp.staging_dir().join("index.html"), VIDEO_PAGE).unwrap();
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(tmp.path()));
+    pending.register(&ServedPath::from_source("index.html").unwrap(), VIDEO_PAGE, HashBucket::Files);
+    pending.set_build_inputs(Some(crate::build::inputs::BuildInputs::default()), None, Default::default());
+    let sealed = pending.seal();
+
+    let assets = std::sync::Arc::new(AssetRegistry::new());
+    if promised {
+        assets.set_pending("videos/clip.mp4".into(), None, None);
+    }
+    let mut host = crate::build::ports::host::test_host_ports();
+    let adopted = crate::deploy::one_shot::capture_seal(&mut host);
+    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
+    let folder = mp.project_root().to_string_lossy().to_string();
+    let tail = advertise_sealed(
+        &ports,
+        &mp,
+        &mp.hashes(),
+        &mp.staging_dir(),
+        sealed,
+        Some(assets),
+        std::sync::Arc::new(|_: &str| false),
+        Some(crate::system::folder_session::FolderSession::new(mp.project_root().to_path_buf())),
+        crate::build::ship::next_promotion_epoch(),
+        1,
+        Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
+        &folder,
+        SealGuards::default(),
+        Some(crate::build::inputs::SealEvidence::default()),
+    )
+    .await
+    .expect("the caller hand-off returns the seal");
+    crate::build::seal_phase::run_now(tail).await;
+    let adopted = adopted.lock().unwrap().take().expect("the tail adopts its manifest");
+    adopted.site_hashes_view().build_inputs.as_ref().is_some_and(|inputs| inputs.evidence.is_some())
+}
+
+/// A seal whose page links an asset it promised and did not deliver keeps no
+/// evidence, so a deploy with nothing changed renders again instead of
+/// handing over a generation with a dead link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_with_an_unfulfilled_promise_keeps_no_evidence() {
+    assert!(seal_keeps_evidence(false).await, "fixture: the same seal without the promise keeps its evidence");
+    assert!(!seal_keeps_evidence(true).await);
 }

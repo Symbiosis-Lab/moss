@@ -127,6 +127,21 @@ pub struct DeployFlags {
     /// `--copies-of=<file>`: send only this page's copies this run; with
     /// `--retry-copies`, a copy handed to the author is handed over again.
     pub copies_of: Option<String>,
+    /// `--to <server>`: publish this folder to your own server from now on,
+    /// `deploy@example.com:/var/www/html` or `sftp://deploy@example.com:2222/var/www/html`.
+    pub to: Option<String>,
+    /// `--check`: say whether moss can publish to the folder's server, step
+    /// by step, and publish nothing.
+    pub check: bool,
+    /// `--trust <fingerprint>`, with `--check`: trust the server's host key,
+    /// as the first check showed it.
+    pub trust: Option<String>,
+    /// `--connect`: sign in once with your own ssh key or agent and add
+    /// moss's key for this folder to the server, then check as `--check`.
+    pub connect: bool,
+    /// `--take-over`: publish into a server folder another site published to.
+    /// Its files stay; only this site's are ever removed after.
+    pub take_over: bool,
 }
 
 /// A parsed `moss deploy` command line.
@@ -167,6 +182,16 @@ impl DeployArgs {
                 "--accept-removals" => flags.accept_removals = true,
                 "--accept-stale-content" => flags.accept_stale_content = true,
                 "--dry-run" => flags.dry_run = true,
+                "--check" => flags.check = true,
+                "--connect" => flags.connect = true,
+                "--take-over" => flags.take_over = true,
+                a if a.starts_with("--to=") => flags.to = a.strip_prefix("--to=").map(str::to_string),
+                a if a.starts_with("--trust=") => flags.trust = a.strip_prefix("--trust=").map(str::to_string),
+                "--to" | "--trust" => match args.next() {
+                    Some(value) if arg == "--to" => flags.to = Some(value.clone()),
+                    Some(value) => flags.trust = Some(value.clone()),
+                    None => return Err(format!("error: {arg} needs a value\n{}", usage())),
+                },
                 "--json" => flags.json = true,
                 a if a.starts_with("--retry-copies=") => {
                     flags.retry_copies.extend(a["--retry-copies=".len()..].split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_string))
@@ -186,8 +211,23 @@ impl DeployArgs {
         if let Some(address) = &flags.email {
             crate::identity::verify_email::validate_email(address)?;
         }
-        if flags.json && !flags.dry_run {
-            return Err("error: --json goes with --dry-run; a deploy itself prints the published address".to_string());
+        if flags.connect && (flags.check || flags.trust.is_some() || flags.take_over || flags.dry_run) {
+            return Err("error: --connect runs the check itself; it goes alone, or with --to".into());
+        }
+        if flags.json && !flags.dry_run && !flags.check && !flags.connect {
+            return Err("error: --json goes with --dry-run, --check or --connect; a deploy itself prints the published address".to_string());
+        }
+        if flags.dry_run && flags.to.is_some() {
+            return Err("error: --dry-run doesn't cover your own server yet; --check says whether moss can publish there".into());
+        }
+        if flags.to.is_some() && flags.prebuilt.is_some() {
+            return Err("error: --to publishes moss's own build; --prebuilt uploads another tool's, so pick one".into());
+        }
+        if flags.trust.is_some() && !flags.check {
+            return Err("error: --trust goes with --check".into());
+        }
+        if flags.check && flags.take_over {
+            return Err("error: --check publishes nothing, so there is nothing to --take-over".into());
         }
         if flags.dry_run && flags.accept_stale_content {
             return Err("error: --dry-run cannot accept stale content; drop --accept-stale-content to inspect the refusal".into());
@@ -295,6 +335,16 @@ pub fn publish(
         Err(e) => return Err(format!("failed to start runtime: {}", e)),
     };
 
+    // `--to` chooses the route, so it is saved before anything reads one.
+    let direct = DeployRoute::Direct { id: crate::config::deployment::SERVER_TARGET_ID.into() };
+    let route = match &flags.to {
+        Some(to) => {
+            let server = crate::deploy::direct::server::Server::parse(to)?;
+            crate::deploy::direct::server::save_server(folder, &server)?;
+            &direct
+        }
+        None => route,
+    };
     let sink = printing();
     runtime.block_on(crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
     let report = dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink).await;
@@ -302,7 +352,15 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print).await;
+        let site = folder.to_string_lossy();
+        let (_sent, pictures, visits) = tokio::join!(
+            crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print),
+            crate::deploy::remote_pictures::check_published(folder, url),
+            crate::plugins::manager::analytics::read_after_publish(&site),
+        );
+        for line in pictures.lines().iter().map(String::as_str).chain(visits.as_deref()) {
+            eprintln!("{line}");
+        }
         if let Some(page) = flags.copies_of.as_deref().filter(|p| !crate::syndication::send::is_a_page(folder, p)) {
             eprintln!("--copies-of={page} names no page of this site; no copies sent");
         }
@@ -324,8 +382,14 @@ async fn dispatch(
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
     crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
-    if let DeployRoute::Direct { id } = route {
-        return Err(unavailable(id));
+    if matches!(route, DeployRoute::Direct { .. }) {
+        if flags.dry_run {
+            return Err("error: --dry-run doesn't cover your own server yet; --check says whether moss can publish there".into());
+        }
+        return server_route(folder, host_ports, plugins, flags, sink).await;
+    }
+    if flags.check || flags.connect || flags.take_over {
+        return Err("error: --check, --connect and --take-over are for a folder that publishes to your own server; name it with --to".into());
     }
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
@@ -426,14 +490,53 @@ async fn send(
             })
             .map_err(Into::into)
         }
-        DeployRoute::Direct { id } => Err(unavailable(id).into()),
+        DeployRoute::Direct { .. } => unreachable!("answered by server_route above"),
     }
 }
 
-/// Why a built-in target this version has no destination for is refused.
-/// Known at once, so asked before the build and before a dry run.
-fn unavailable(id: &str) -> String {
-    format!("this version of moss cannot publish to [hooks] deploy = \"{id}\" yet")
+/// Your own server: `--check` says whether moss can publish there; otherwise
+/// build and publish.
+async fn server_route(
+    folder: &std::path::Path,
+    host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
+    plugins: crate::build::PluginMode,
+    flags: &DeployFlags,
+    sink: &Arc<dyn DeploySink>,
+) -> Result<DeployReport, String> {
+    use crate::deploy::direct::{check, connect, server};
+    let keys = server::Keys::on_this_computer()?;
+    if flags.connect {
+        return Ok(DeployReport::Checked(connect::connect(folder, &keys, None).await?));
+    }
+    if flags.check {
+        return Ok(DeployReport::Checked(check::check(folder, &keys, flags.trust.as_deref()).await?));
+    }
+    let overrides = crate::deploy::push::PublishOverrides {
+        accept_removals: flags.accept_removals,
+        accept_stale_content: flags.accept_stale_content,
+        ..Default::default()
+    };
+    let (landed, published) = check::build_and_publish(folder, host_ports, plugins, overrides, flags.take_over, &keys, sink).await?;
+    Ok(DeployReport::Push(PushResult::Success { url: landed.url, files_uploaded: published.uploaded, files_removed: published.removed }))
+}
+
+/// A check as the terminal shows it: the key line to add first (a refused
+/// sign-in says "the line above"), the steps, then how to trust a new key.
+fn check_lines(checked: &crate::deploy::direct::check::Checked, folder: &str) -> String {
+    let mut lines: Vec<String> = checked.authorized_key.iter().cloned().collect();
+    lines.extend(checked.steps.iter().map(|s| format!("{} {}", if s.passed { "✓" } else { "✗" }, s.text)));
+    if let Some(fingerprint) = &checked.trust {
+        lines.push(format!("To trust it: moss deploy {folder} --check --trust {fingerprint}"));
+    }
+    use crate::deploy::direct::sftp::Refusal;
+    match checked.steps.last().and_then(|s| s.refusal.as_ref()) {
+        Some(Refusal::KeyRefused { .. }) => lines.push(format!("To add it with your own ssh key: moss deploy {folder} --connect")),
+        Some(Refusal::NeedsPassword { .. } | Refusal::PasswordRefused { .. } | Refusal::KeysOnly { .. }) => {
+            lines.push("Add the line above to ~/.ssh/authorized_keys on the server.".into())
+        }
+        _ => {}
+    }
+    lines.join("\n")
 }
 
 /// Turn a publish outcome into what the terminal sees and the exit code.
@@ -467,6 +570,10 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             // The report is the command's product, so it is stdout.
             print!("{}", dry.render());
             if dry.refusal.is_some() { 1 } else { 0 }
+        }
+        Ok(DeployReport::Checked(checked)) => {
+            eprintln!("{}", check_lines(&checked, folder_display));
+            if checked.passed() { 0 } else { 1 }
         }
         Ok(DeployReport::Plugin { url, message }) => {
             println!("{}", url);
@@ -540,6 +647,9 @@ fn json_report(result: &Result<DeployReport, String>) -> (String, i32) {
     match result {
         Ok(DeployReport::DryRun(dry)) => {
             (serde_json::to_string_pretty(&dry.to_json()).expect("a dry run serializes"), if dry.refusal.is_some() { 1 } else { 0 })
+        }
+        Ok(DeployReport::Checked(checked)) => {
+            (serde_json::to_string_pretty(checked).expect("a check serializes"), if checked.passed() { 0 } else { 1 })
         }
         Ok(_) => (super::list::json_error("--json describes a dry run, and this was a deploy"), 1),
         Err(e) => (super::list::json_error(e), 1),
@@ -684,6 +794,14 @@ mod removal_flag_tests {
         assert!(!parse(&["site"]).unwrap().flags.accept_stale_content);
         assert!(parse(&["site", "--accept-stale-content"]).unwrap().flags.accept_stale_content);
         assert!(parse(&["site", "--dry-run", "--accept-stale-content"]).is_err());
+    }
+
+    #[test]
+    fn your_own_server_flags_refuse_the_combinations_that_cannot_mean_anything() {
+        assert!(parse(&["site", "--to", "d@h:/w", "--prebuilt=out"]).unwrap_err().contains("pick one"));
+        assert!(parse(&["site", "--to", "d@h:/w", "--dry-run"]).unwrap_err().contains("--dry-run"), "refused before --to is saved");
+        assert!(parse(&["site", "--trust", "SHA256:x"]).unwrap_err().contains("goes with --check"));
+        assert!(parse(&["site", "--check", "--take-over"]).is_err());
     }
 
     #[test]
@@ -953,6 +1071,53 @@ mod dry_run_tests {
         assert_eq!(report_code(report), 0);
         assert_eq!(fx.requests(), [GENERATION], "a dry run asks one thing and sends nothing");
         assert!(fx.record_bytes().is_empty(), "nothing published, so no record");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_marks_a_picture_from_another_site_that_is_gone_and_refuses_nothing() {
+        let mut host = mockito::Server::new_async().await;
+        let _gone = host.mock("HEAD", "/gone.jpg").with_status(404).create_async().await;
+        let _gone_get = host.mock("GET", "/gone.jpg").with_status(404).create_async().await;
+        let _here = host.mock("HEAD", "/here.jpg").with_status(200).create_async().await;
+        let fx = Fixture::new(false).await;
+        let page = format!("---\ntitle: Home\n---\n\n![a]({0}/here.jpg)\n\n![b]({0}/gone.jpg)\n", host.url());
+        std::fs::write(fx.dir.path().join("index.md"), page).unwrap();
+
+        let dry = dry_run_against(&fx).await;
+
+        assert!(dry.refusal.is_none(), "{dry:?}");
+        let gone = &dry.to_json()["remote_pictures"]["gone"];
+        assert_eq!(gone.as_array().map(Vec::len), Some(1), "{gone}");
+        assert_eq!((gone[0]["source_path"].as_str(), gone[0]["reference"].as_str(), gone[0]["status"].as_u64()), (Some("index.md"), Some(format!("{}/gone.jpg", host.url()).as_str()), Some(404)));
+        assert!(dry.render().contains(&format!("index.md:7  {}/gone.jpg  no longer loads (404)", host.url())), "{}", dry.render());
+    }
+
+    /// A host that guards against hotlinking serves the picture to the page's
+    /// own published address, which the publish record gives.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn after_a_publish_each_picture_is_asked_for_from_its_page_address() {
+        let mut host = mockito::Server::new_async().await;
+        let _for_the_page = host.mock("HEAD", "/guarded.jpg").match_header("referer", "https://site.example/posts/cat/").with_status(200).create_async().await;
+        let _for_others = host.mock("GET", "/guarded.jpg").with_status(404).create_async().await;
+        let fx = Fixture::new(false).await;
+        std::fs::create_dir_all(fx.dir.path().join("posts")).unwrap();
+        std::fs::write(fx.dir.path().join("posts/cat.md"), format!("---\ntitle: Cat\n---\n\n![a]({}/guarded.jpg)\n", host.url())).unwrap();
+        dry_run_against(&fx).await;
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(fx.dir.path()),
+            &PublishedSnapshot {
+                generation_id: "ours".into(),
+                target: "moss:dry-test".into(),
+                published_at: "2026-09-20T09:12:30+00:00".into(),
+                source_to_output: [("posts/cat.md".to_string(), "posts/cat/index.html".to_string())].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let report = crate::deploy::remote_pictures::check_published(fx.dir.path(), "https://site.example").await;
+
+        assert_eq!(report.gone, [], "{report:?}");
     }
 
     async fn dry_run_with(fx: &Fixture, flags: DeployFlags) -> crate::deploy::dry_run::DryRun {
@@ -1516,6 +1681,30 @@ mod profile_tests {
         assert_eq!(row["counts"]["manifest_files"], 1);
         assert_eq!(row["counts"]["body_requests"], 0);
         assert!(!text.contains("private-page"));
+    }
+
+    /// Flags are judged against the route the folder resolved to, before
+    /// anything is built or sent.
+    #[tokio::test]
+    async fn a_flag_for_another_route_is_refused_before_anything_is_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |route: DeployRoute, flags: DeployFlags| {
+            let folder = dir.path().to_path_buf();
+            async move {
+                dispatch(&folder, &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags,
+                    &crate::deploy::progress::silent()).await.unwrap_err()
+            }
+        };
+        let others = || [DeployRoute::Hosted, DeployRoute::Plugin { id: "fixture".into() }, DeployRoute::Prebuilt { dir: dir.path().into() }];
+        for route in others() {
+            assert!(run(route.clone(), DeployFlags { check: true, ..Default::default() }).await.contains("your own server"));
+        }
+        for route in others() {
+            assert!(run(route.clone(), DeployFlags { take_over: true, ..Default::default() }).await.contains("your own server"));
+        }
+        let server = DeployRoute::Direct { id: crate::config::deployment::SERVER_TARGET_ID.into() };
+        assert!(run(server, DeployFlags { dry_run: true, ..Default::default() }).await.contains("--dry-run"));
+        assert!(crate::moss_paths::MossPaths::new(dir.path()).current_generation_id().is_err(), "nothing was built");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

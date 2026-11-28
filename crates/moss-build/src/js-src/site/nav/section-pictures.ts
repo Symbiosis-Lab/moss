@@ -39,6 +39,10 @@ export function thumbnailUrl(img: HTMLImageElement): string | null {
 
 const level = (heading: Element): number => Number(heading.tagName[1]);
 
+/** A heading inside a grid cell titles that cell (a figure, a card), not a
+ *  section of the page: it neither starts a section nor ends one. */
+export const inGridCell = (heading: Element): boolean => heading.closest(".moss-grid-card") !== null;
+
 /** A section's thumbnail: its file, and where its crop is centred. */
 export interface SectionPicture {
   src: string;
@@ -48,7 +52,7 @@ export interface SectionPicture {
 /** For each section heading, the thumbnail of its first image, or null. */
 export function sectionPictures(headings: HTMLElement[]): Array<SectionPicture | null> {
   const main = headings[0]?.closest("main") ?? document.body;
-  const all = [...main.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
+  const all = [...main.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")].filter((h) => !inGridCell(h));
   const images = [...main.querySelectorAll<HTMLImageElement>("img")];
   return headings.map((heading) => {
     const end = all.find(

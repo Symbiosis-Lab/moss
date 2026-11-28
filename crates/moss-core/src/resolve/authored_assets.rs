@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use pulldown_cmark::{Event, LinkType, Parser, Tag};
+use pulldown_cmark::{Event, LinkType, Tag};
 
 use crate::resolve::md_extract::{extract_md_references, RawRef, RefSyntax};
 use crate::resolve::reference::{classify_reference_verdict, ReferenceContext, ResolvedReference};
@@ -104,37 +104,84 @@ pub struct RawMediaTag {
 /// code, inside a comment, or in the content of a `<script>`, `<style>` or
 /// `<textarea>` is text, not media, and is left out.
 pub fn raw_media_tags(source: &str) -> Vec<RawMediaTag> {
-    use std::sync::LazyLock;
-    // The class after the name keeps `<imgur>` and `<videos>` out.
-    static TAG: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r"(?i)<(img|video|audio)[\s/>]").ok());
-    static SRC: LazyLock<Option<regex::Regex>> =
-        LazyLock::new(|| regex::Regex::new(r#"(?i)\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).ok());
-    // An element left open holds text to the end, as in a browser.
-    static TEXT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
-        regex::Regex::new(r"(?is)<script\b.*?(?:</script\s*>|\z)|<style\b.*?(?:</style\s*>|\z)|<textarea\b.*?(?:</textarea\s*>|\z)").ok()
-    });
-    let (Some(tag_re), Some(src_re), Some(text_re)) = (TAG.as_ref(), SRC.as_ref(), TEXT.as_ref()) else {
-        return Vec::new();
-    };
     // The mask keeps every offset.
     let live = crate::inert_regions::mask_inert(source);
-    let text: Vec<_> = text_re.find_iter(&live).map(|m| m.range()).collect();
-    tag_re
-        .captures_iter(&live)
-        .filter_map(|cap| {
-            let (whole, name) = (cap.get(0)?, cap.get(1)?);
-            if text.iter().any(|span| span.contains(&whole.start())) {
-                return None;
+    let text = raw_text_elements(&live);
+    let mut tags = Vec::new();
+    for (at, _) in live.match_indices('<') {
+        let Some(name) = ["img", "video", "audio"].into_iter().find(|name| ascii_word_at(&live, at + 1, name)) else {
+            continue;
+        };
+        let attrs = live.get(at + 1 + name.len()..).unwrap_or_default();
+        // The class after the name keeps `<imgur>` and `<videos>` out.
+        let ends_name = attrs.chars().next().is_some_and(|c| c.is_whitespace() || matches!(c, '/' | '>'));
+        if !ends_name || text.iter().any(|span| span.contains(&at)) {
+            continue;
+        }
+        let attrs = attrs.split_once('>').map_or(attrs, |(inside, _)| inside);
+        let offset = at + 1 + name.len();
+        let src = src_value(attrs).map(|value| offset + value.start..offset + value.end);
+        tags.push(RawMediaTag { tag: name.to_string(), byte_offset: at, src });
+    }
+    tags
+}
+
+/// Each `<script>`, `<style>` and `<textarea>` element in `live`, to its
+/// closing tag or, left open, to the end, as in a browser: its content is text.
+fn raw_text_elements(live: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut from = 0;
+    while let Some(at) = live.get(from..).and_then(|rest| rest.find('<')).map(|i| from + i) {
+        let name = ["script", "style", "textarea"].into_iter().find(|name| {
+            ascii_word_at(live, at + 1, name)
+                && !live.get(at + 1 + name.len()..).and_then(|rest| rest.chars().next()).is_some_and(|c| c.is_alphanumeric() || c == '_')
+        });
+        let Some(name) = name else {
+            from = at + 1;
+            continue;
+        };
+        let end = closing_tag_end(live, at + 1 + name.len(), name).unwrap_or(live.len());
+        spans.push(at..end);
+        from = end;
+    }
+    spans
+}
+
+/// The end of the first `</name>` at or after `from`, allowing space before the `>`.
+fn closing_tag_end(live: &str, from: usize, name: &str) -> Option<usize> {
+    live.get(from..)?.match_indices("</").find_map(|(i, _)| {
+        let after_name = from + i + 2 + name.len();
+        if !ascii_word_at(live, from + i + 2, name) {
+            return None;
+        }
+        let rest = live.get(after_name..)?;
+        let gap = rest.len() - rest.trim_start().len();
+        rest.get(gap..)?.starts_with('>').then_some(after_name + gap + 1)
+    })
+}
+
+/// The value of the first `src` attribute in `attrs`, quoted or bare, as a range into it.
+fn src_value(attrs: &str) -> Option<std::ops::Range<usize>> {
+    attrs.char_indices().filter(|(_, c)| c.is_whitespace()).find_map(|(i, c)| {
+        let name = i + c.len_utf8();
+        if !ascii_word_at(attrs, name, "src") {
+            return None;
+        }
+        let value = attrs.get(name + 3..)?.trim_start().strip_prefix('=')?.trim_start();
+        let at = attrs.len() - value.len();
+        match value.chars().next()? {
+            quote @ ('"' | '\'') => value.get(1..)?.find(quote).map(|len| at + 1..at + 1 + len),
+            _ => {
+                let len = value.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '>')).unwrap_or(value.len());
+                (len > 0).then_some(at..at + len)
             }
-            let attrs = live.get(name.end()..)?;
-            let attrs = attrs.split_once('>').map_or(attrs, |(inside, _)| inside);
-            let src = src_re
-                .captures(attrs)
-                .and_then(|c| c.get(1).or(c.get(2)).or(c.get(3)))
-                .map(|m| name.end() + m.start()..name.end() + m.end());
-            Some(RawMediaTag { tag: name.as_str().to_ascii_lowercase(), byte_offset: whole.start(), src })
-        })
-        .collect()
+        }
+    })
+}
+
+/// Whether `word` (ASCII) starts at byte `at` of `s`, in any case.
+fn ascii_word_at(s: &str, at: usize, word: &str) -> bool {
+    s.get(at..at + word.len()).is_some_and(|found| found.eq_ignore_ascii_case(word))
 }
 
 fn definition_is_image(raw: &RawRef, image_definitions: &HashSet<std::ops::Range<usize>>) -> bool {
@@ -161,7 +208,7 @@ struct ParsedSpans {
 
 fn parsed_spans(source: &str, parse_config: &crate::ast::parser::ParseConfig) -> ParsedSpans {
     let mut parser =
-        Parser::new_ext(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
+        crate::ast::pulldown(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
     let mut spans = ParsedSpans { image_definitions: HashSet::new(), literal_html: Vec::new() };
     while let Some((event, range)) = parser.next() {
         // allow:math-events-ignored — only the source span of an HTML block and

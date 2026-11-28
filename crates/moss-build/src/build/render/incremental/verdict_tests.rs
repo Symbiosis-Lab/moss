@@ -79,6 +79,7 @@ struct Harness {
     project: ProjectStructure,
     overrides: std::collections::HashMap<String, String>,
     skip: bool,
+    defer: bool,
     globals_salt: bool,
     render_id: Option<String>,
     sealed_render_id: Option<String>,
@@ -99,6 +100,7 @@ impl Harness {
             project: project(),
             overrides: std::collections::HashMap::new(),
             skip: true,
+            defer: false,
             globals_salt: false,
             build_day: chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
             render_id: None,
@@ -116,7 +118,7 @@ impl Harness {
         compute(
             documents,
             &VerdictInputs {
-                policy: IncrementalPolicy { skip_unchanged_renders: self.skip },
+                policy: IncrementalPolicy { skip_unchanged_renders: self.skip, defer_image_placeholders: self.defer },
                 project: &project,
                 cache_path: &self.cache,
                 output_dir: &self.output,
@@ -130,7 +132,7 @@ impl Harness {
                 sealed_render_id: self.sealed_render_id.as_deref(),
                 staged_render_id: self.staged_render_id.as_deref(),
                 graph: None,
-                site_assets: &crate::build::types::SiteAssets::of(documents, None, Default::default()),
+                site_assets: &crate::build::types::SiteAssets::of(documents, None, chrono::NaiveDateTime::default(), Default::default()),
             },
         )
     }
@@ -806,7 +808,7 @@ fn a_term_card_move_narrows_to_its_page_and_its_listing_host() {
     h.run(&docs);
 
     let mut edited = docs.clone();
-    edited[1].term_card = Some(crate::build::types::TermCard { count: 2, ..Default::default() });
+    edited[1].term_card = Some(crate::build::types::TermCardFacts { count: 2, ..Default::default() });
     let verdict = h.run(&edited);
     assert_incremental(&verdict);
     assert!(!verdict.may_skip("writings/index.md"));
@@ -925,7 +927,7 @@ fn a_folder_indexs_label_edit_widens_to_its_breadcrumb_descendants_only() {
 
 /// The site-wide (not per-language) shape of the breadcrumb-ENABLE toggle:
 /// flipping the homepage's `breadcrumb:` flag reaches every page's trail,
-/// regardless of language, because `compute_breadcrumb_segments` always
+/// regardless of language, because `breadcrumb_segments` always
 /// reads the literal root `index.html` for this — see
 /// `dependents::home_breadcrumb_globals`'s doc comment.
 #[test]
@@ -1025,6 +1027,50 @@ fn an_image_gaining_its_placeholder_renders_only_the_pages_that_show_it() {
     for carried in ["index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
         assert!(verdict.may_skip(carried), "{carried} does not show the image");
     }
+}
+
+/// A save made while the images are still with a worker leaves the pages that
+/// only show a moved placeholder to the settled build, and records the
+/// placeholder they still show: any later build, settled or not, renders them.
+#[test]
+fn a_save_left_to_the_settled_build_leaves_its_placeholder_pages_to_the_next_build() {
+    let mut h = Harness::new();
+    let cover = |color: Option<&str>| crate::types::content::MediaMetadata {
+        path: "writings/alpha/cover.png".into(),
+        file_type: "png".into(),
+        dimensions: Some((1200, 800)),
+        dominant_color: color.map(str::to_string),
+        lqip_data_uri: color.map(|_| "data:image/jpeg;base64,AAAA".to_string()),
+        ..Default::default()
+    };
+    let docs = vault();
+    for d in &docs {
+        let page = h.output.join(&d.url_path);
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let body = if d.url_path == "writings/index.html" {
+            r#"<div class="moss-grid-card"><img src="/writings/alpha/cover.png" width="1200" height="800"></div>"#
+        } else {
+            "<p>no images</p>"
+        };
+        std::fs::write(page, body).unwrap();
+    }
+    h.project.image_files = vec![cover(None)];
+    h.run(&docs);
+
+    h.project.image_files = vec![cover(Some("#336699"))];
+    h.defer = true;
+    let save = h.run(&docs);
+    assert!(save.defers_to_settle());
+    assert!(save.may_skip("writings/index.md"), "the listing waits for the settled build");
+
+    h.defer = false;
+    let next = h.run(&docs);
+    assert!(!next.defers_to_settle());
+    assert!(!next.may_skip("writings/index.md"), "the listing still shows the old placeholder");
+    for carried in ["index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
+        assert!(next.may_skip(carried), "{carried} does not show the image");
+    }
+    assert!(h.run(&docs).may_skip("writings/index.md"), "rendered once, it is carried");
 }
 
 /// The not-found page is rendered every build, never carried: its `/404.html`

@@ -7,7 +7,7 @@
 //!
 //! 1. **Content folder** (target_doc found in `all_docs` for `{folder}/index.html`).
 //!    Render a sorted listing of the folder's markdown children using
-//!    `child_summary::render_with_sort` — same pipeline as folder index pages.
+//!    `moss_core::render::cards::summary::render_with_sort` — same pipeline as folder index pages.
 //!    The marker pass runs over `doc.html_content` AFTER `populate_direct_children_sorts`,
 //!    so the target folder's `direct_children_sort` is available for inheritance. The
 //!    per-embed `sort=axis` override (when present in the marker) is merged in by
@@ -55,9 +55,8 @@ use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
 use moss_core::PageKind;
 
-use crate::build::components::{self, ArticleListItemProps};
+use crate::build::components;
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::date as date_formatters;
 use crate::build::media::cover::html_escape;
 use crate::i18n::Language;
 use crate::{build::types::ParsedDocument, types::content::ProjectStructure};
@@ -89,6 +88,8 @@ struct ParsedMarker<'a> {
     pictures: Option<usize>,
     /// `motion:marquee`: the strip slides sideways (`FolderEmbedParams::marquee`).
     marquee: bool,
+    /// `repeat:none` (`FolderEmbedParams::skip_repeats`).
+    skip_repeats: bool,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -102,8 +103,6 @@ struct ParsedMarker<'a> {
     /// both flow through `FolderEmbedParams::more` (moss-core) into this one
     /// marker field, so the render side doesn't need to know which named it.
     more: Option<String>,
-    /// `children_count:` — what the listing's folder cards say they count.
-    count: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// The listing's own width / float / size, read off the embed pothole.
     placement: moss_core::media::Placement,
     /// Caption for the listing, rendered on the figure that wraps it.
@@ -165,11 +164,11 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "group" => out.group = Some(v.trim().to_string()),
                 "size" => out.size = Some(v.trim().to_string()),
                 "more" => out.more = Some(marker_decode(v.trim())),
-                "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
                 "when" => out.when = Some(v.trim()),
                 "pictures" => out.pictures = folder_list::picture_count(v).ok(),
                 "motion" => out.marquee = v.trim() == "marquee",
+                "repeat" => out.skip_repeats = v.trim() == "none",
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -249,140 +248,44 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
 
 /// Auto-detect children rendering style and grouping.
 ///
-/// Checks whether children have "rich" metadata (covers or descriptions)
-/// and whether any child carries a date to pick the best defaults.
-/// Author-provided overrides (frontmatter or cascade) take priority
-/// over auto-detection; the returned `Resolved<String>` carries the
-/// origin so downstream renderers can branch on `is_explicit()`. The
-/// axis-driven group override (auto-detected `year` suppressed under a
-/// non-Date axis) lives in `effective_group_for_axis` below.
+/// The style and group a listing of `docs` draws: the author's override when
+/// set, else detected from whether its children are rich and dated.
 pub(crate) fn resolve_children_config(
     docs: &[&ParsedDocument],
     style_override: Option<&moss_core::Resolved<String>>,
     group_override: Option<&moss_core::Resolved<String>>,
     math: bool,
 ) -> (moss_core::Resolved<String>, moss_core::Resolved<String>) {
-    let style = match style_override {
-        Some(r) => r.clone(),
-        None => {
-            // Bulk, not exceptions: one claimed term must not turn 55 bare labels
-            // into empty archive rows. Mostly-rich is an archive at any size, and
-            // so is a rich page beside at most 3 bare ones; what summary cannot
-            // survive is a screenful of them. Boundary pinned by
-            // bulk_style_tests.
-            let rich = docs.iter().filter(|d| d.cover.is_some()
-                || crate::build::page::meta::resolve_page_description(
-                    crate::build::components::child_list::explicit_card_text(d).as_deref(), &d.content, math).is_some()).count();
-            let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
-            let any_has_date = docs.iter().any(|d| d.date.is_some() || d.event.is_some());
-            // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
-            // those out one per row.
-            let auto_value = match (has_rich, any_has_date) {
-                (false, false) => "grid".to_string(),
-                (true, _) => "summary".to_string(),
-                (false, true) => "list".to_string(),
-            };
-            moss_core::Resolved::auto(auto_value)
-        }
-    };
-    let group = match group_override {
-        Some(r) => r.clone(),
-        None => {
-            // Any dated child under a non-summary style auto-groups by year
-            // (matching the schema default "year (default for list)" and the
-            // contract). A single dated post gets a year heading too; a
-            // dateless listing stays flat. Auto-detected `year` is still
-            // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead" | "stream") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
-                "year".to_string()
-            } else {
-                "none".to_string()
-            };
-            moss_core::Resolved::auto(auto_value)
-        }
-    };
-    (style, group)
+    moss_core::page::listing::listing_config(docs, style_override, group_override, |d| is_rich_child(d, math))
 }
 
-/// Decide the effective `children_group` for rendering, honoring author
-/// intent across non-Date sort axes. Explicit (frontmatter or cascade)
-/// values always survive; auto-detected values are overridden to "none"
-/// when the axis isn't Date (alphabetical/weight sorting doesn't pair
-/// well with auto-year-grouping).
-///
-/// Consumes the `Resolved<String>` directly so callers don't need to
-/// destructure-then-recheck (`value.clone()` + separate `is_explicit()`).
-pub(crate) fn effective_group_for_axis(
-    group_resolved: &moss_core::Resolved<String>,
-    axis: moss_core::sort::SortAxis,
-) -> String {
-    let axis_suppresses_auto_year = !axis.shows_date();
-    if axis_suppresses_auto_year && !group_resolved.is_explicit() {
-        "none".to_string()
-    } else {
-        group_resolved.value.clone()
-    }
+/// The excerpt a listing card shows for `d`, and whether `d` is rich.
+pub(crate) fn excerpt_and_rich(d: &ParsedDocument, math: bool) -> (Option<String>, bool) {
+    let text = crate::build::components::child_list::explicit_card_text(d);
+    moss_core::render::cards::listing::excerpt_and_rich(d.cover.is_some(), text.as_deref(), &d.content, math)
 }
 
-/// Compute the latest article date within a folder.
-///
-/// Finds all documents whose url_path is under the folder's prefix and returns
-/// the maximum date string (ISO comparison works for chronological ordering).
-pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
-    folder_doc: &ParsedDocument,
-    all_docs: &[D],
-    root_path: &str,
-) -> Option<String> {
-    let folder_prefix = folder_doc.url_path.trim_end_matches("index.html");
-    all_docs
-        .iter()
-        .map(|d| d.borrow())
-        .filter(|d| {
-            d.url_path != folder_doc.url_path
-                // Direct children only: at most one path segment of remainder
-                && d.url_path.strip_prefix(folder_prefix).is_some_and(|rem| {
-                    !rem.trim_end_matches("/index.html")
-                        .trim_end_matches('/')
-                        .contains('/')
-                })
-        })
-        .filter_map(|d| {
-            // For sub-folders, recurse to get their latest child date
-            let is_subfolder = d.kind == PageKind::Folder && {
-                let prefix = d.url_path.trim_end_matches("index.html");
-                all_docs.iter().map(|o| o.borrow()).any(|other| {
-                    other.url_path != d.url_path && other.url_path.starts_with(prefix)
-                })
-            };
-            if is_subfolder {
-                folder_latest_date(d, all_docs, root_path)
-            } else {
-                // Leaf article: use extract_date_from_doc for filesystem fallback
-                let (_display, raw, _explicit) =
-                    crate::build::components::date::extract_date_from_doc(d, root_path);
-                raw
-            }
-        })
-        .max()
+pub(crate) fn is_rich_child(d: &ParsedDocument, math: bool) -> bool {
+    excerpt_and_rich(d, math).1
 }
 
-/// Generates a unified children listing for folder index pages and folder embeds.
-///
-/// Builds `ChildItemProps` for each document, separates folders from articles,
-/// sorts each group by date descending, and renders using the specified style.
+
+/// The listing of `folder_docs` on a folder home or in a folder embed: each
+/// document's card, drawn by moss-core's listing renderer, or by the build's
+/// own `stream`, which draws each page whole.
 ///
 /// # Arguments
 /// * `folder_docs` - Direct children documents to render
 /// * `all_folder_docs` - All documents in the folder (for computing child counts)
 /// * `project` - Project structure for date extraction
 /// * `style` - "list", "summary", "lead" (summary whose first item leads), "grid" (collection cards), or "stream" (each page drawn whole)
-/// * `group` - "year" or "none"
+/// * `group` - "year", "upcoming" or "none"
 /// * `lang` - Language for UI strings
-/// * `skip_resort` - If true, skip the internal date-desc resort and render docs
-///   in the order they arrive. Set true by callers for non-Date axes (Title /
-///   Weight / explicit order) — the caller has already sorted via
-///   `sort_by_resolved`, and the date resort would scramble that order.
+/// * `pre_ordered` - The docs arrive in an order a date sort must not undo
+///   (upcoming events soonest first). A `sort` that is not by date keeps the
+///   arrival order on its own.
 /// * `typesetting` - Typesetting mode ("vertical" or "horizontal"); used for CJK numeral formatting
+/// * `sort` - The folder's resolved sort: its axis fills the card's meta slot, and a typed list is drawn as typed. `None` lists by date.
 /// * `rows` - what the listing says about how its rows are drawn ([`ListingRowOptions`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_children(
@@ -392,280 +295,61 @@ pub(crate) fn generate_children(
     style: &str,
     group: &str,
     lang: Language,
-    skip_resort: bool,
+    pre_ordered: bool,
     dir_overrides: &std::collections::HashMap<String, String>,
     typesetting: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    parent_sort_axis: Option<moss_core::sort::SortAxis>,
+    sort: Option<&ResolvedSort>,
     math: bool,
     rows: &ListingRowOptions<'_>,
     now: chrono::NaiveDateTime,
 ) -> String {
-    if folder_docs.is_empty() {
-        return String::new();
-    }
-    // `lead` is `summary` markup plus a hook on the container, so every
-    // summary branch below serves it unchanged.
-    let lead = style == "lead";
-    let style = if lead { "summary" } else { style };
-
-    // Build ChildItemProps for each doc. The shared reading lives beside the
-    // struct; the one thing the row shapes want on top is the auto-extracted
-    // excerpt fallback for `description`, which the hand-picked card paths
-    // deliberately do not take.
+    use moss_core::render::cards::listing;
+    let cards = components::child_list::BuildCards::new(dir_overrides, typesetting, now);
     let items: Vec<ChildItemProps> = folder_docs
         .iter()
         .map(|doc| {
-            let mut props = components::child_list::props_for_document(
-                doc,
-                all_folder_docs,
-                &project.root_path,
-                dir_overrides,
-                typesetting,
-                now,
-                rows.pictures.filter(|_| style == "summary"),
-            );
-            // The grid card is one of those paths: its description comes from
-            // `props_for_document` (frontmatter, then the first byline row) and
-            // never from the body excerpt, like the `:::grid` card it shares a
-            // renderer with.
+            let mut props = listing::row_props(*doc, all_folder_docs, &cards, style, rows.pictures, &doc.content, math);
             props.marquee = rows.marquee;
             props.count_setting = props.count_setting.take().or_else(|| rows.count.cloned());
-            props.lang = rows.listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
-            if style != "grid" {
-                props.description = crate::build::page::meta::resolve_page_description(
-                    crate::build::components::child_list::explicit_card_text(doc).as_deref(),
-                    &doc.content,
-                    math,
-                );
-            }
+            props.lang = rows.listing_tag.and_then(|tag| components::child_list::row_lang(doc, tag, lang));
             props
         })
         .collect();
 
-    // Lift `media_lookup_ref` out of the grid-only branch so the
-    // summary-style child_summary::render_with_sort calls below can route
-    // their cover images through the synthesizer too.
-    //
-    // Same fallback as the grid branch had: prefer the caller-provided
-    // lookup, else construct one from project scan data. The owned
-    // fallback lives at this scope's lifetime so all subsequent branches
-    // can borrow it.
+    // The caller's lookup carries the media registry; the fallback is built
+    // from the scan with `dir_overrides`, so a cover under an overridden
+    // folder is indexed at its output URL and keeps its real size.
     let owned_lookup;
     let media_lookup_ref: &crate::build::media::dimensions::MediaDimensionLookup = match media_lookup {
         Some(l) => l,
         None => {
-            // BUG 6: the lookup carries `dir_overrides` so `build_asset_snapshot`
-            // (invoked downstream via `render_cover_html`) can index cover dims
-            // under the OVERRIDE-slug output-URL key. Without it, a card/folder
-            // cover under an overridden dir misses the probe → 800x600 fallback.
             owned_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
                 &project.image_files,
                 &project.video_files,
                 dir_overrides,
-                // Fallback only; the caller normally passes a registry-ful one.
                 None,
                 &Default::default(),
             );
             &owned_lookup
         }
     };
-
-    // Parent's resolved sort axis drives the card's meta slot
-    // (see child_summary::render_with_sort). Date is the historical
-    // fallback when the caller hasn't populated `direct_children_sort` —
-    // matches the same fallback used in render/html.rs callsites and
-    // preserves legacy test behavior.
-    let parent_axis = parent_sort_axis.unwrap_or(moss_core::sort::SortAxis::Date);
-
-    // Unless the caller already ordered them (a non-Date axis or an explicit
-    // order), every style lists by date through the same comparator as the
-    // folder's series chain. It re-sorts here because a card's date can come
-    // from somewhere the chain doesn't look: a folder's newest article, a
-    // date in the filename, or the file's creation time.
-    let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
-    if !skip_resort {
-        let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
-        // Dated pages first, undated after (`cmp_date_axis`). Subfolders lead
-        // the page regardless: they are partitioned out below.
-        sorted.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
-    }
-
+    let pictures = crate::build::media::cover::BuildPictures { root: Some(Path::new(&project.root_path)), lookup: Some(media_lookup_ref) };
     let upcoming = upcoming::urls(group, folder_docs, now);
-    if group == "upcoming" {
-        sorted = upcoming::order(sorted, &upcoming, skip_resort);
-    }
-
+    let ask = listing::RowsAsk {
+        style,
+        group,
+        pre_ordered,
+        sort,
+        upcoming: &upcoming,
+        is_embed: rows.is_embed,
+        placement: &rows.placement,
+        lazy_cards: rows.lazy_cards,
+    };
     if style == "stream" {
-        return stream::render(&sorted, folder_docs, typesetting, rows, true);
+        return stream::render(&listing::arrange(&items, &ask).flat(), folder_docs, typesetting, rows, true);
     }
-
-    // Grid style: render as collection cards.
-    // Bypasses folder/article separation and year grouping — card grids are flat.
-    if style == "grid" {
-        use crate::build::components::grid_card::render_list_with_typesetting;
-
-        return render_list_with_typesetting(
-            &sorted,
-            Some(std::path::Path::new(&project.root_path)),
-            lang,
-            typesetting,
-            Some(media_lookup_ref),
-            parent_axis,
-            rows.is_embed,
-            &rows.placement,
-            rows.lazy_cards,
-        );
-    }
-
-    // Render
-    let mut html = String::new();
-
-    // Partition once: folders render above articles. That is a layout
-    // decision independent of which axis sorted the children, with one
-    // exception — a folder whose own home page has a date, on a date-sorted
-    // (either direction), non-year-grouped listing, sorts by that date like
-    // any page instead of being hoisted above one that came before it; a
-    // chronology (a sequence of lectures, say) would otherwise read out of
-    // order the moment one of its entries was a folder. Year-grouped
-    // listings keep every folder above the year sections regardless — a
-    // dated folder landing inside a year bucket is a shape this fix doesn't
-    // reach, since bucketing assumes a leaf (`ArticleListItemProps` has no
-    // count slot to carry it with).
-    //
-    // Previously this filter was written out three times, once per branch,
-    // and skipped entirely for a plain skip_resort (Weight/Title/explicit
-    // order) listing — so a manually-ordered folder lost its folder/article
-    // split, which is what a `children_style: summary` folder of writings,
-    // ordered by `weight:` and holding a subfolder or two, hit.
-    let interleave_dated_folders = group != "year" && parent_axis.shows_date();
-    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
-        .into_iter()
-        .partition(|i| i.is_folder() && !(interleave_dated_folders && i.date_display.is_some()));
-
-    // Folders always render flat, regardless of group setting.
-    for folder in &folders {
-        if style == "summary" {
-            html.push_str(&components::child_summary::render_with_sort(folder, lang, typesetting, Some(media_lookup_ref), parent_axis));
-        } else {
-            html.push_str(&components::child_list::render_child(folder, lang, typesetting));
-        }
-        html.push('\n');
-    }
-
-    // Subtle divider between folders and articles (summary style only)
-    if !folders.is_empty() && !articles.is_empty() && style == "summary" {
-        html.push_str("<hr class=\"moss-child-section-divider\" />\n");
-    }
-
-    // Articles: year-grouped if group == "year", otherwise flat in
-    // partition order (already caller order or date-desc, set above).
-    if group == "upcoming" {
-        html.push_str(&upcoming::sections(&articles, &upcoming, |article| {
-            if style == "summary" {
-                components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis)
-            } else {
-                components::child_list::render_child(article, lang, typesetting)
-            }
-        }));
-    } else if group == "year" && !articles.is_empty() {
-        if style == "summary" {
-            // Summary style: group articles by year, render summary cards
-            // within year sections. `bucket_articles_by_year` is find-or-
-            // append (stable) rather than assuming pre-sorted, contiguous
-            // input — needed now that a non-Date axis (skip_resort) reaches
-            // this branch too, not just the Date-sorted case that used to
-            // be the only caller.
-            let sections: Vec<String> = bucket_articles_by_year(&articles)
-                .into_iter()
-                .map(|(year, arts)| {
-                    let heading = year
-                        .map(|y| format!("<h2>{}</h2>\n", date_formatters::format_year_heading(y, lang, typesetting)))
-                        .unwrap_or_default();
-                    let items_html = arts
-                        .iter()
-                        .map(|a| components::child_summary::render_with_sort(a, lang, typesetting, Some(media_lookup_ref), parent_axis))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!(
-                        "<section class=\"moss-cards-minimal-year-group moss-cards-minimal-year-group--summary\">\n{}{}\n</section>",
-                        heading, items_html
-                    )
-                })
-                .collect();
-            html.push_str(&sections.join("\n"));
-        } else if skip_resort {
-            // Non-Date axis (Weight/Title/explicit order): items are NOT
-            // date-sorted, so buckets must be stable (find-or-append,
-            // first-appearance order), not `render_year_grouped_list`'s own
-            // date resort — this is what the flattened home infers when its
-            // section-leaf articles carry `weight:`, and the author opted
-            // into year sections that must survive even though the caller
-            // pre-sorted by weight, not date. Markup mirrors year_group.rs
-            // (`moss-cards-minimal-year-group minimal`) so the minimal-item
-            // CSS keyed off data-layout="minimal" applies; items use
-            // child_list::render (the `title`-classed span), not render_child.
-            let sections: Vec<String> = bucket_articles_by_year(&articles)
-                .into_iter()
-                .map(|(year, arts)| render_minimal_year_section(year, &arts, lang, typesetting))
-                .collect();
-            html.push_str(&sections.join("\n"));
-        } else {
-            // Date axis: `render_year_grouped_list` re-sorts (url-path
-            // tiebreak on equal dates, as the series chain) and buckets in
-            // one pass.
-            let article_props: Vec<ArticleListItemProps> = articles
-                .iter()
-                .map(|item| ArticleListItemProps {
-                    date_display: item.date_display.clone().unwrap_or_default(),
-                    date_raw: item.date_raw.clone(),
-                    url: item.url.clone(),
-                    title: item.title.clone(),
-                    url_path: item.url_path.clone(),
-                    weight: item.weight,
-                    place: item.place.clone(),
-                    when_html: item.when_html.clone(),
-                    when: item.when,
-                    credits: item.credits.clone(),
-                    subtitle: item.subtitle.clone(),
-                    source_file: item.source_file.clone(),
-                    lang: item.lang.clone(),
-                })
-                .collect();
-            let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
-            html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting, ascending));
-        }
-    } else {
-        for article in &articles {
-            if style == "summary" {
-                html.push_str(&components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis));
-            } else {
-                html.push_str(&components::child_list::render_child(article, lang, typesetting));
-            }
-            html.push('\n');
-        }
-    }
-
-    // The wrapper class is always plain `.moss-cards`. The earlier
-    // `moss-summary-layout` co-class for `style == "summary"` is dropped:
-    // the default CSS doesn't style it (summary styling rides on
-    // `.moss-cards[data-layout="list"]` and `.moss-card-description`
-    // visibility, both of which are still emitted), and its presence
-    // breaks themes that inherited the pre-v1 vocabulary (one site theme's
-    // `.moss/theme/style.css` hid anything tagged with the class, erasing the
-    // entire listing).
-    //
-    // `list` is the compact date+title index: one-line `[date] [title]` rows
-    // (year-grouped when dated) styled by the item CSS keyed off
-    // `.moss-cards[data-layout="minimal"]` (site.css:1580-1591) — title
-    // color/hover/underline. So `list` (and any legacy non-summary value like
-    // the retired "minimal") ALWAYS emits data-layout="minimal", whether or not
-    // the listing is year-grouped. Summary keeps data-layout="list"; its cards
-    // render through `child_summary` and don't depend on the minimal item CSS.
-    // (Grid returns earlier with its own data-layout="grid".)
-    let data_layout = if style != "summary" { "minimal" } else { "list" };
-    let holds = components::ListHolds::of(items.iter().map(|i| i.is_collection()));
-    components::cards_container(data_layout, lead, rows.is_embed, &rows.placement, parent_axis, holds, html.trim())
+    listing::rows_html(&items, &ask, &pictures, lang, typesetting)
 }
 
 /// How a listing draws its rows, as its embed or its folder's frontmatter set it.
@@ -692,85 +376,6 @@ pub(crate) struct ListingRowOptions<'a> {
     /// The id prefixes already taken on that page, shared by every listing on
     /// it so a page drawn whole twice keeps its ids apart.
     pub id_scopes: Option<&'a std::cell::RefCell<inline_body::IdScopes>>,
-}
-
-/// Bucket articles by year using find-or-append: one section per year, in
-/// FIRST-APPEARANCE order, no resort. Needed wherever the input is not
-/// (and must not be) date-sorted — a non-Date axis (Weight/Title/explicit
-/// order) with `children_group: year` still owes its author year sections,
-/// but re-sorting by date (as `components::render_year_grouped_list` does)
-/// would silently discard the very order they asked for.
-///
-/// The single undated bucket, if any, is moved to the end regardless of
-/// when it first appeared — matching `year_group.rs`'s "None-dated items
-/// sort last" rule, so the two bucketing implementations agree on where an
-/// undated run lands even though one resorts and the other doesn't.
-///
-/// Also correct for already date-sorted input (the summary-style caller):
-/// sorted-descending input naturally yields contiguous year runs, so
-/// find-or-append never needs to reopen a bucket it already closed.
-fn bucket_articles_by_year<'a>(
-    articles: &[&'a ChildItemProps],
-) -> Vec<(Option<i32>, Vec<&'a ChildItemProps>)> {
-    let mut buckets: Vec<(Option<i32>, Vec<&ChildItemProps>)> = Vec::new();
-    for article in articles {
-        let year = article.date_raw.as_ref().and_then(|d| date_formatters::extract_year(d));
-        match buckets.iter_mut().find(|(y, _)| *y == year) {
-            Some((_, bucket)) => bucket.push(*article),
-            None => buckets.push((year, vec![*article])),
-        }
-    }
-    if let Some(idx) = buckets.iter().position(|(y, _)| y.is_none()) {
-        let undated = buckets.remove(idx);
-        buckets.push(undated);
-    }
-    buckets
-}
-
-/// Render one `list`/`minimal`-style year section: the compact date+title
-/// rows, matching `year_group.rs`'s markup (`moss-cards-minimal-year-group
-/// minimal`) so the minimal-item CSS keyed off `data-layout="minimal"`
-/// applies. Items use `child_list::render` (the `title`-classed span), not
-/// `render_child`.
-fn render_minimal_year_section(
-    year: Option<i32>,
-    arts: &[&ChildItemProps],
-    lang: Language,
-    typesetting: Option<&str>,
-) -> String {
-    let items_html = arts
-        .iter()
-        .map(|a| {
-            let props = ArticleListItemProps {
-                date_display: a.date_display.clone().unwrap_or_default(),
-                date_raw: a.date_raw.clone(),
-                url: a.url.clone(),
-                title: a.title.clone(),
-                url_path: a.url_path.clone(),
-                weight: a.weight,
-                place: a.place.clone(),
-                when_html: a.when_html.clone(),
-                when: a.when,
-                credits: a.credits.clone(),
-                subtitle: a.subtitle.clone(),
-                source_file: a.source_file.clone(),
-                lang: a.lang.clone(),
-            };
-            components::child_list::render(&props, true, false, lang, typesetting)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    match year {
-        Some(y) => format!(
-            "<section class=\"moss-cards-minimal-year-group minimal\">\n<h2>{}</h2>\n{}\n</section>",
-            date_formatters::format_year_heading(y, lang, typesetting), items_html
-        ),
-        // Undated bucket: headingless trailing section (mirrors year_group.rs).
-        None => format!(
-            "<section class=\"moss-cards-minimal-year-group minimal\">\n{}\n</section>",
-            items_html
-        ),
-    }
 }
 
 /// Where a page's own listing goes when the body asks for it with `![[./]]`.
@@ -1247,16 +852,9 @@ fn is_index_source(from_path: &str, all_docs: &[ParsedDocument]) -> bool {
     moss_core::home::is_home_file(&stem_lower, &parent_name)
 }
 
-/// Select the child documents a listing resolves to — the SINGLE source of
-/// truth for "which docs does this listing contain", keyed on an
-/// ALREADY-SLUGIFIED folder id (`""` for the site root).
-///
-/// Three consumers: `render_one` (the marker path), the synthetic
-/// folder-index loop in `render/blocking.rs`, and the listing-group digest in
-/// `render/incremental/listing.rs`. The blocking loop used to
-/// carry an inlined second copy — so "one selector, therefore no drift" was
-/// false, and the rule that the digest honours every rule the renderer
-/// honours, structurally, could not hold.
+/// The documents a listing of the slugged folder (`""` for the root) shows:
+/// core's selector, which the renderer, the folder-index loop and the
+/// listing-group digest all ask, so they cannot disagree.
 pub(crate) fn select_children_by_slug<'a>(
     folder_id_slug: &str,
     is_flatten: bool,
@@ -1266,148 +864,18 @@ pub(crate) fn select_children_by_slug<'a>(
     all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
 ) -> Vec<&'a ParsedDocument> {
-    let target_url = if folder_id_slug.is_empty() {
-        "index.html".to_string()
-    } else {
-        format!("{}/index.html", folder_id_slug)
+    let scope = moss_core::page::listing::ListingScope {
+        folder: folder_id_slug,
+        flatten: is_flatten,
+        default_tree_only: scope_default_tree,
+        exclude_nav,
+        edition,
     };
-    // A page of the site language's own tree is in the default edition, and
-    // sits under that tree's folder, so only another edition's page differs.
-    let own_tree = moss_core::home::lang_tree_prefix(&target_url).unwrap_or("");
-
-    // For root folder (folder_id_slug = ""), prefix is empty so that all
-    // non-homepage docs are considered candidates; starts_with("") is always true.
-    // For non-root, prefix includes the trailing slash to avoid partial matches
-    // (e.g. "blog/" doesn't match "blog-extra/index.html").
-    let folder_prefix = if folder_id_slug.is_empty() {
-        String::new()
-    } else {
-        format!("{}/", folder_id_slug)
+    let site = moss_core::page::listing::ListingSite {
+        has_language_trees: project.has_language_trees,
+        has_content_folders: project.has_content_folders,
     };
-    // Folders whose home says `children_listed: here`: their pages stay out of
-    // a flattened listing of any folder above them. A listing of the folder
-    // itself, or of one inside it, is not above it.
-    let kept_here: Vec<&str> = if is_flatten {
-        all_docs
-            .iter()
-            .filter(|d| d.kind == PageKind::Folder && d.children_listed.as_deref() == Some("here"))
-            .filter_map(|d| d.url_path.strip_suffix("index.html"))
-            .filter(|prefix| !prefix.is_empty() && !folder_prefix.starts_with(prefix))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let picked: Vec<&ParsedDocument> = all_docs
-        .iter()
-        .filter(|d| {
-            if d.url_path == target_url {
-                return false;
-            }
-            // Folder embeds publish a list of articles — `is_listable_in`
-            // covers draft/slot_only and hidden folders in one shot. A
-            // page-less entry is a row in its own folder only, never a term
-            // page or an `also_in` one.
-            if !d.is_listable_in(&folder_prefix)
-                && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix) && d.reaches(&folder_prefix))
-            {
-                return false;
-            }
-            // scope_default_tree: a home lists its own edition only (gated by
-            // `has_language_trees`). Set by `home_defaults` for a home in
-            // default mode only.
-            if scope_default_tree
-                && project.has_language_trees
-                && !d.edition.is_empty()
-                && !d.edition.eq_ignore_ascii_case(own_tree)
-            {
-                return false;
-            }
-            // exclude_nav: skip folder pages that act as top-level nav items.
-            // Only set by synthesize_children_marker for homepage default-mode.
-            if exclude_nav
-                && crate::build::components::nav::is_listing_nav_item(d, project.has_content_folders)
-            {
-                return false;
-            }
-            // also_in: include docs that declare membership in this folder
-            let in_folder = (d.url_path.starts_with(&folder_prefix)
-                && !kept_here.iter().any(|prefix| d.url_path.starts_with(prefix)))
-                || d.also_in.as_ref().map_or(false, |folders| {
-                    folders.contains(&folder_id_slug.to_string())
-                });
-            if !in_folder {
-                return false;
-            }
-            if is_flatten {
-                d.kind.is_listable_at_depth_all()
-            } else {
-                if !d.kind.is_listable_at_depth_direct() {
-                    return false;
-                }
-                // An `also_in` doc need not live under this folder at all — its
-                // declaration IS the membership claim, nothing to depth-check.
-                d.url_path
-                    .strip_prefix(folder_prefix.as_str())
-                    .is_none_or(|rem| {
-                        !rem.trim_end_matches("/index.html")
-                            .trim_end_matches('/')
-                            .contains('/')
-                    })
-            }
-        })
-        .collect();
-    one_per_translation(picked, edition)
-}
-
-/// A listing that reaches more than one edition shows a translated piece once:
-/// the page in the listing page's own edition, else the default edition's, else
-/// the first picked. Pages of one edition never displace each other, so a
-/// listing within an edition is returned as it came.
-fn one_per_translation<'a>(picked: Vec<&'a ParsedDocument>, edition: &str) -> Vec<&'a ParsedDocument> {
-    if picked.iter().all(|d| d.edition == picked[0].edition) {
-        return picked;
-    }
-    let rank = |d: &ParsedDocument| {
-        if d.edition.eq_ignore_ascii_case(edition) { 0 } else if d.edition.is_empty() { 1 } else { 2 }
-    };
-    let at: std::collections::HashMap<&str, usize> =
-        picked.iter().enumerate().map(|(i, d)| (d.url_path.as_str(), i)).collect();
-    let better_twin = |i: usize, d: &ParsedDocument| {
-        d.translations.iter().filter_map(|t| at.get(t.url_path.as_str())).any(|&j| {
-            let twin = picked[j];
-            twin.edition != d.edition && (rank(twin), j) < (rank(d), i)
-        })
-    };
-    let dropped: Vec<bool> = picked.iter().enumerate().map(|(i, d)| better_twin(i, d)).collect();
-    picked.into_iter().zip(dropped).filter(|(_, gone)| !gone).map(|(d, _)| d).collect()
-}
-
-/// What a home page lists when its frontmatter says nothing: shared by the
-/// renderer and the incremental group keys.
-pub(crate) struct HomeDefaults<'a> {
-    /// The folder it lists: `""` for the root home, `de` for `de/index.html`.
-    pub tree: &'a str,
-    /// Depth defaults to "all" rather than "direct".
-    pub depth_all: bool,
-    /// Pages of other editions and top-level nav pages are left out.
-    pub scoped: bool,
-}
-
-/// The root home lists its whole tree. An edition's own `<lang>/index.md`
-/// does the same for its tree, unless it sets `children_source` or
-/// `children_depth` itself: either one is the author choosing a listing, and
-/// `children_depth: direct` is the way back to the narrow edition listing.
-pub(crate) fn home_defaults(doc: &ParsedDocument) -> HomeDefaults<'_> {
-    let tree = moss_core::home::lang_tree_prefix(&doc.url_path).unwrap_or("");
-    let is_root = doc.url_path == "index.html";
-    let is_edition_home =
-        !is_root && !doc.edition.is_empty() && crate::build::render::lang_roots::is_language_root(&doc.url_path);
-    let edition_defaults = is_edition_home && doc.children_source.is_none() && doc.children_depth.is_none();
-    HomeDefaults {
-        tree,
-        depth_all: is_root || edition_defaults,
-        scoped: doc.children_source.is_none() && (is_root || edition_defaults),
-    }
+    moss_core::page::listing::select(&scope, all_docs, site)
 }
 
 enum Listed<'a> {
@@ -1564,28 +1032,9 @@ fn order_listed<'a>(
 ) -> members::Ordered<'a> {
     let style = parsed.style.as_ref().filter(|style| style.as_str() != "map").map(|s| moss_core::Resolved::frontmatter(s.clone()));
     let group = parsed.group.as_ref().map(|g| moss_core::Resolved::frontmatter(g.clone()));
-    members::order(pages, target_doc, is_flatten, parsed.sort, style.as_ref(), group.as_ref(), parsed.limit, parsed.when, math, now)
-}
-
-/// The pages a folder-list marker shows, in the listing's order; `None` when it
-/// draws something other than a page list (a static index, a missing folder).
-pub(crate) fn marker_pages<'a>(
-    body: &str,
-    from_md_path: &str,
-    all_docs: &'a [ParsedDocument],
-    project: &ProjectStructure,
-    dir_overrides: &std::collections::HashMap<String, String>,
-    math: bool,
-    now: chrono::NaiveDateTime,
-) -> Option<Vec<&'a ParsedDocument>> {
-    let parsed = parse_marker_body(body)?;
-    let from = if parsed.from.is_empty() { from_md_path } else { parsed.from };
-    match list_pages(&parsed, from, all_docs, project, dir_overrides, now).ok()? {
-        Listed::Iframe(_) => None,
-        Listed::Pages { target_doc, is_flatten, pages, .. } => {
-            Some(order_listed(&parsed, &pages, target_doc, is_flatten, math, now).limited)
-        }
-    }
+    let now = upcoming::minute(now);
+    let ask = moss_core::page::listing::OrderAsk { flatten: is_flatten, sort: parsed.sort, style: style.as_ref(), group: group.as_ref(), limit: parsed.limit, when: parsed.when, now: &now };
+    members::order(pages, target_doc, &ask, math)
 }
 
 /// Render a single resolved marker. `Err` carries the plain-text problem when
@@ -1633,6 +1082,7 @@ fn render_one(
             Listed::Iframe(html) => return Ok(html),
             Listed::Pages { folder_slug, target_doc, is_flatten, pages } => (folder_slug, target_doc, is_flatten, pages),
         };
+    let folder_docs = if parsed.skip_repeats { host.not_yet_drawn(folder_docs) } else { folder_docs };
 
     if is_embed && own_listing_open && is_own_listing_spot(parsed, target_doc, from, all_docs, place_maps) {
         return Ok(OWN_LISTING_PLACEHOLDER.to_string());
@@ -1655,7 +1105,7 @@ fn render_one(
         }
     }
 
-    let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } =
+    let members::Ordered { resolved, style: style_resolved, group: effective_group, pre_ordered, limited, truncated } =
         order_listed(parsed, &folder_docs, target_doc, is_flatten, math, now);
     host.urls.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
     if style_resolved.value == "stream" {
@@ -1679,7 +1129,7 @@ fn render_one(
         is_embed,
         placement: container_placement,
         lazy_cards: parsed.lazy_cards,
-        count: parsed.count.as_ref(),
+        count: host.count.as_ref(),
         listing_tag: Some(&host.lang_tag),
         pictures: parsed.pictures,
         marquee: parsed.marquee,
@@ -1696,11 +1146,11 @@ fn render_one(
             &children_style,
             &effective_group,
             site_lang,
-            skip_resort,
+            pre_ordered,
             dir_overrides,
             typesetting,
             media_lookup,
-            Some(resolved.presentation_axis()),
+            Some(&resolved),
             math,
             &rows,
             now,
@@ -1849,7 +1299,7 @@ fn resolve_more_link_target<'a>(
     from: &str,
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
-    let source_of = |d: &ParsedDocument| d.source_path.as_deref().map(|p| p.replace('\\', "/"));
+    let source_of = |d: &ParsedDocument| d.source_path_slashed();
     let edition = all_docs
         .iter()
         .find(|d| source_of(d).as_deref() == Some(from))
@@ -1908,7 +1358,7 @@ fn resolve_more_link_target<'a>(
 ///
 /// A home lists its whole edition (depth "all"), dropping other editions'
 /// pages and top-level nav pages (the nav bar already shows those), unless
-/// `children_source` names another folder on purpose; see [`home_defaults`].
+/// `children_source` names another folder on purpose; see [`moss_core::page::listing::home_defaults`].
 /// `names_scoped_home` is set when `children_source` names an edition home whose
 /// own listing is scoped: the listing then takes that home's filters too.
 /// Any other host lists its own `folder_path` at depth "direct", unfiltered.
@@ -1930,7 +1380,7 @@ pub(crate) fn synthesize_children_marker_for(
 ) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
-    let home = home_defaults(doc);
+    let home = moss_core::page::listing::home_defaults(doc);
     let scoped = home.scoped || names_scoped_home;
     let depth = doc.children_depth.clone().or_else(|| home.depth_all.then(|| "all".to_string()));
     let params = FolderEmbedParams {
@@ -1946,10 +1396,11 @@ pub(crate) fn synthesize_children_marker_for(
         when: doc.children_when.clone(),
         pictures: doc.children_pictures.map(|n| n as usize),
         marquee: doc.children_motion.is_some(),
+        // `repeat:none` is an embed option only: no frontmatter key opts in.
+        skip_repeats: false,
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
-        count: doc.children_count.clone(),
         scope_default_tree: scoped,
         exclude_nav: scoped,
         // A frontmatter listing has no pothole to read placement or a

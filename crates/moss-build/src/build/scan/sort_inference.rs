@@ -25,59 +25,72 @@ use crate::build::types::ParsedDocument;
 /// Must run after `apply_cascade` so that cascaded `sort:` values are visible
 /// to the inference (see `resolve_folder_sort` reading `folder.declared_sort()`).
 pub(crate) fn populate_direct_children_sorts(docs: &mut [ParsedDocument]) {
-    let folder_idxs: Vec<usize> = docs
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| d.url_path == "index.html" || d.url_path.ends_with("/index.html"))
-        .map(|(i, _)| i)
+    let sorts: Vec<(usize, moss_core::sort::ResolvedSort, Vec<String>)> = moss_core::sort::direct_children_sorts(docs)
+        .into_iter()
+        .map(|(fi, resolved, undated)| {
+            (fi, resolved, undated.iter().map(|d| d.source_path.clone().unwrap_or_else(|| d.url_path.clone())).collect())
+        })
         .collect();
-
-    for fi in folder_idxs {
-        // Prefix of this folder. Root index has empty prefix (everything is
-        // a descendant); nested folders use their parent path with a trailing
-        // slash, e.g. "blog/" for "blog/index.html".
-        let prefix = if docs[fi].url_path == "index.html" {
-            String::new()
-        } else {
-            docs[fi].url_path.trim_end_matches("index.html").to_string()
-        };
-
-        let resolved = {
-            let children: Vec<&ParsedDocument> = docs
-                .iter()
-                .enumerate()
-                .filter(|(i, d)| {
-                    if *i == fi {
-                        return false;
-                    }
-                    // Strip the folder prefix and any trailing "/index.html"
-                    // (so "blog/post/index.html" -> "post") or trailing "/"
-                    // (defensive). If the remaining path contains a "/", the
-                    // doc is a grandchild, not a direct child — exclude it.
-                    let Some(rem) = d.url_path.strip_prefix(prefix.as_str()) else {
-                        return false;
-                    };
-                    let clean = rem
-                        .trim_end_matches("/index.html")
-                        .trim_end_matches('/');
-                    !clean.is_empty() && !clean.contains('/')
-                })
-                .map(|(_, d)| d)
-                .collect();
-            let (resolved, undated) = moss_core::sort::resolve_folder_sort_with_undated(&docs[fi], &children);
-            // The site's home page is not a dated stream, and `children: false` lists nothing.
-            if !undated.is_empty() && !prefix.is_empty() && docs[fi].children != Some(false) {
-                let names: Vec<&str> = undated.iter().map(|d| d.source_path.as_deref().unwrap_or(&d.url_path)).collect();
-                crate::build::cli_output::log_warn_problem!(
-                    "folder `{}` lists by title, not date, because only some of its pages have a `date:`; add one to {} or set `sort: title` on the folder's home page to keep this order",
-                    prefix.trim_end_matches('/'),
-                    names.join(", ")
-                );
-            }
-            resolved
-        };
+    for (fi, resolved, undated) in sorts {
+        let prefix = docs[fi].url_path.trim_end_matches("index.html");
+        // The site's home page is not a dated stream, and `children: false` lists nothing.
+        if !undated.is_empty() && !prefix.is_empty() && docs[fi].children != Some(false) {
+            crate::build::cli_output::log_warn_problem!(
+                "folder `{}` lists by title, not date, because only some of its pages have a `date:`; add one to {} or set `sort: title` on the folder's home page to keep this order",
+                prefix.trim_end_matches('/'),
+                undated.join(", ")
+            );
+        }
         docs[fi].direct_children_sort = Some(resolved);
     }
+}
+
+/// A folder whose pages moss before 0.15.30 linked to the previous and next
+/// page from its order alone, and that sets no `series:` to keep them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnlinkedFolder {
+    /// The folder as the author named it.
+    pub folder: String,
+    /// The home page's file, which `moss migrate` gives `series: true`;
+    /// `None` when moss draws the folder's home itself.
+    pub home: Option<String>,
+}
+
+/// The folders that lost their previous and next links in 0.15.30, read after
+/// the cascade and [`populate_direct_children_sorts`], so a `sort:` or
+/// `series:` set from above counts. The site's home and each language tree's
+/// home never drew them.
+pub(crate) fn unlinked_folders(docs: &[ParsedDocument]) -> Vec<UnlinkedFolder> {
+    docs.iter()
+        .filter_map(|d| {
+            let prefix = d.url_path.strip_suffix("index.html")?;
+            let folder = prefix.trim_end_matches('/');
+            let linked = d.direct_children_sort.as_ref().is_some_and(linked_by_order);
+            if folder.is_empty() || folder == d.edition || d.series.is_some() || !linked || moss_core::page::series::chain(docs, d).len() < 2 {
+                return None;
+            }
+            // Named as the author's folder, not its address, where there is a file to name it by.
+            let named = d.source_path.as_deref().and_then(|home| home.rsplit_once('/')).map_or(folder, |(dir, _)| dir);
+            Some(UnlinkedFolder { folder: named.to_string(), home: d.source_path.clone() })
+        })
+        .collect()
+}
+
+/// The note for the first build after moss 0.15.30 replaced one older than it,
+/// read from the folder's last build record: an ordered folder without
+/// `series:` is a valid new site, so the note is not for every build.
+pub(crate) fn unlinked_note(unlinked: &[UnlinkedFolder], previous_moss: Option<&str>) -> Option<String> {
+    if unlinked.is_empty() || crate::system::floor_met("0.15.30", previous_moss?) != Some(false) {
+        return None;
+    }
+    let folders = unlinked.iter().map(|f| format!("`{}`", f.folder)).collect::<Vec<_>>().join(", ");
+    Some(format!("Pages in {folders} no longer link to the previous and next page: `moss migrate --apply` keeps the links"))
+}
+
+/// Whether moss before 0.15.30 drew previous and next links in a folder with
+/// this order and no `series:`: a weight order or a typed `sort:` list.
+pub(crate) fn linked_by_order(resolved: &moss_core::sort::ResolvedSort) -> bool {
+    resolved.axis == moss_core::sort::SortAxis::Weight || resolved.explicit_order.is_some()
 }
 
 #[cfg(test)]
@@ -112,7 +125,6 @@ mod tests {
         let folder = docs.iter().find(|d| d.url_path == "blog/index.html").unwrap();
         let r = folder.direct_children_sort.as_ref().expect("direct_children_sort should be set");
         assert_eq!(r.axis, SortAxis::Date);
-        assert!(!r.series_default);
     }
 
     #[test]
@@ -167,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn weight_signal_in_children_infers_weight_axis_and_series_default() {
+    fn weight_signal_in_children_infers_weight_axis() {
         let mut docs = vec![
             ParsedDocument {
                 url_path: "course/index.html".into(),
@@ -194,7 +206,6 @@ mod tests {
             .unwrap();
         let r = folder.direct_children_sort.as_ref().unwrap();
         assert_eq!(r.axis, SortAxis::Weight);
-        assert!(r.series_default, "weight axis should default series chrome on");
     }
 
     #[test]
@@ -257,5 +268,71 @@ mod tests {
             nested.direct_children_sort.is_some(),
             "nested folder index should also be populated"
         );
+    }
+
+    fn ordered_folder(prefix: &str, edition: &str, series: Option<moss_core::frontmatter_typed::SeriesField>) -> Vec<ParsedDocument> {
+        let page = |stem: &str, weight| ParsedDocument {
+            url_path: format!("{prefix}{stem}.html"),
+            clean_stem: stem.into(),
+            weight: Some(weight),
+            edition: edition.into(),
+            ..Default::default()
+        };
+        let home = ParsedDocument {
+            url_path: format!("{prefix}index.html"),
+            clean_stem: "index".into(),
+            kind: moss_core::PageKind::Folder,
+            source_path: Some(format!("{prefix}index.md")),
+            edition: edition.into(),
+            series,
+            ..Default::default()
+        };
+        vec![home, page("a", 1), page("b", 2)]
+    }
+
+    fn unlinked(docs: Vec<ParsedDocument>) -> Vec<String> {
+        let mut docs = docs;
+        populate_direct_children_sorts(&mut docs);
+        unlinked_folders(&docs).into_iter().map(|f| f.folder).collect()
+    }
+
+    #[test]
+    fn a_weighted_folder_without_series_is_unlinked_and_a_site_or_language_home_or_series_folder_is_not() {
+        assert_eq!(unlinked(ordered_folder("Journal/", "", None)), ["Journal"]);
+        assert!(unlinked(ordered_folder("", "", None)).is_empty());
+        assert!(unlinked(ordered_folder("zh-hans/", "zh-hans", None)).is_empty());
+        let off = Some(moss_core::frontmatter_typed::SeriesField::Flag(false));
+        assert!(unlinked(ordered_folder("Journal/", "", off)).is_empty());
+    }
+
+    #[test]
+    fn a_weighted_folder_of_article_subfolders_is_unlinked_and_of_plain_subfolders_is_not() {
+        let folders = |layout: &str| {
+            let sub = |stem: &str, weight| ParsedDocument {
+                url_path: format!("Awards/{stem}/index.html"),
+                clean_stem: "index".into(),
+                kind: moss_core::PageKind::Folder,
+                layout: Some(layout.into()),
+                weight: Some(weight),
+                ..Default::default()
+            };
+            let mut docs = ordered_folder("Awards/", "", None);
+            docs.truncate(1);
+            docs[0].sort = Some(SortField::Axis(SortAxis::Weight));
+            docs.extend([sub("writing", 1), sub("film", 2)]);
+            docs
+        };
+        assert_eq!(unlinked(folders("article")), ["Awards"]);
+        assert!(unlinked(folders("page")).is_empty());
+    }
+
+    #[test]
+    fn the_note_is_for_the_first_build_after_an_older_moss_only() {
+        let folders = [UnlinkedFolder { folder: "Journal".into(), home: None }];
+        let note = unlinked_note(&folders, Some("0.15.29")).expect("a site last built by 0.15.29 is told");
+        assert_eq!(note, "Pages in `Journal` no longer link to the previous and next page: `moss migrate --apply` keeps the links");
+        assert_eq!(unlinked_note(&folders, Some("0.15.30")), None);
+        assert_eq!(unlinked_note(&folders, None), None);
+        assert_eq!(unlinked_note(&[], Some("0.15.29")), None);
     }
 }

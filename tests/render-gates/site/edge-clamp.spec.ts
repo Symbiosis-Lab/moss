@@ -19,7 +19,7 @@
  * an edge. These assertions use 0 as the bound — being *inside* is the promise;
  * the gutter is a comfort margin the unit tests pin exactly.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 /** Phone and laptop. The failures are width-dependent, so both are load-bearing. */
 const WIDTHS = [

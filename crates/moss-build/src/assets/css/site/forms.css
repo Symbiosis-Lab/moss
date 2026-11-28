@@ -22,16 +22,19 @@
   border: 0;
 }
 
+/* A question leads its answers: the reading size, set heavier than the
+   choices under it. */
 .moss-form__label,
 .moss-form__group legend {
   padding: 0;
-  font-size: var(--moss-size-sm, 1rem);
-  font-weight: 500;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .moss-form__optional {
   margin-inline-start: 0.4em;
-  font-size: 0.875em;
+  font-size: 0.8em;
   font-weight: 400;
   color: var(--moss-color-muted);
 }
@@ -48,9 +51,17 @@
   color: color-mix(in oklch, var(--moss-error, #c85450) 65%, var(--moss-color-text));
 }
 
+/* Every field takes the form's measure, so the column reads as one edge. */
+.moss-form .moss-input {
+  box-sizing: border-box;
+  inline-size: 100%;
+}
+
 /* A text area has no single edge to underline, so it keeps a full border. */
 .moss-form textarea.moss-input {
   box-sizing: border-box;
+  block-size: auto;
+  min-block-size: 7.5em;
   padding: var(--moss-space-xs, 0.5rem);
   border: 1px solid var(--moss-border-strong);
   resize: vertical;
@@ -59,39 +70,79 @@
   border-color: var(--moss-error, #c85450);
 }
 
-/* Text fields take the field-edge focus in site.css; a checkbox has no edge
-   to draw on, so it keeps a ring. */
+/* An underline field's focus is a 2px ring inside its box (WCAG 2.4.13), clear of the text and drawn
+   on the field's own edge so nothing paints outside it. A text area already has its border. */
+.moss-form .moss-input:where(:not(select, textarea)) {
+  padding-inline: var(--moss-space-xs, 0.5rem);
+}
+.moss-form .moss-input:where(:not(select, textarea)):focus {
+  box-shadow: inset 0 0 0 2px var(--moss-focus-ring);
+}
+
+/* A checkbox has no edge to draw on, so it keeps a ring. */
 .moss-form__choice input:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
 }
 
+/* The box keeps to the label's first line when a long label wraps. */
 .moss-form__choice {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  padding-block: calc((2.75rem - 1lh) / 2);
+  box-sizing: border-box;
   gap: 0.6rem;
   min-block-size: 2.75rem;
 }
+/* Drawn rather than native: WebKit's unchecked box is too pale to find (under
+   3:1), and a drawn one is the same box in every engine. */
 .moss-form__choice input {
   flex: none;
+  display: grid;
+  place-content: center;
   inline-size: 1.15rem;
   block-size: 1.15rem;
-  margin: 0;
-  accent-color: var(--moss-color-accent);
+  margin: calc((1lh - 1.15rem) / 2) 0 0;
+  font: inherit;
+  appearance: none;
+  background: var(--moss-color-bg);
+  border: 1.5px solid var(--moss-border-strong);
+  border-radius: 3px;
+}
+.moss-form__choice input[type="radio"] {
+  border-radius: 50%;
+}
+.moss-form__choice input::before {
+  content: "";
+  inline-size: 0.7rem;
+  block-size: 0.7rem;
+  background: var(--moss-color-bg);
+  clip-path: polygon(14% 44%, 0 59%, 40% 96%, 100% 22%, 85% 8%, 39% 66%);
+  transform: scale(0);
+}
+.moss-form__choice input[type="radio"]::before {
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  clip-path: none;
+}
+.moss-form__choice input:checked {
+  background: var(--moss-color-accent);
+  border-color: var(--moss-color-accent);
+}
+.moss-form__choice input:checked::before {
+  transform: scale(1);
+}
+@media (forced-colors: active) {
+  .moss-form__choice input {
+    appearance: auto;
+  }
+  .moss-form__choice input::before {
+    content: none;
+  }
 }
 .moss-form__choice input[aria-invalid="true"] {
-  outline: 2px solid var(--moss-error, #c85450);
-  outline-offset: 2px;
-}
-
-/* The honeypot is for software: out of sight, out of the tab order. */
-.moss-form__hp {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+  border-color: var(--moss-error, #c85450);
 }
 
 .moss-form .moss-btn-slot {
@@ -115,6 +166,124 @@
   font-size: 0.95rem;
 }
 
+/* A pick-several group lays its choices in columns as wide as the longest
+   short label, so ten choices read as a set, not a long column. */
+.moss-form__group:has(> .moss-form__choice:nth-of-type(5)) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.5em), 1fr));
+  column-gap: var(--moss-space-md);
+  row-gap: 0;
+}
+.moss-form__group > :not(.moss-form__choice) {
+  grid-column: 1 / -1;
+}
+/* The choice that opens a follow-up box takes the whole row, so the box sits under it, not under column one. */
+.moss-form__group > .moss-form__choice:has(+ .moss-form__other) {
+  grid-column: 1 / -1;
+}
+.moss-form__group > .moss-form__help {
+  margin-block-end: 0.25rem;
+}
+
+/* The box under "Other": shown only while its choice is picked, so it works
+   with no script; the rule beside it ties it to that choice. */
+.moss-form__other {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-block: 0.25rem 0.5rem;
+  margin-inline-start: calc(0.575rem - 1.5px);
+  padding-inline-start: calc(1.15rem + 0.6rem - 0.575rem);
+  border-inline-start: 3px solid var(--moss-border-strong);
+}
+.moss-form__choice:has(> input:not(:checked)) + .moss-form__other {
+  display: none;
+}
+
+/* A field with a problem carries a bar on its edge as well as its words, so
+   the mark is not colour alone. */
+.moss-form__field:has([aria-invalid="true"]) {
+  padding-inline-start: 0.85rem;
+  border-inline-start: 3px solid var(--moss-error, #c85450);
+}
+
+.moss-form__status a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+/* The subscribe form that asks questions: the request form's column, with
+   the subscribe form's states. Its one-line rules (a wrapping row, a field
+   beside a fixed button) do not apply. */
+.moss-subscribe.moss-form .moss-subscribe-form[data-moss-hosted="true"] {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: var(--moss-space-lg, 1.5rem);
+}
+.moss-subscribe.moss-form .moss-btn-slot {
+  align-self: flex-start;
+  margin-block-start: calc(var(--moss-space-xs, 0.5rem) * -1);
+}
+.moss-subscribe.moss-form .moss-form__status:empty,
+.moss-subscribe.moss-form .moss-subscribe-status:not([data-state]),
+.moss-subscribe.moss-form .moss-subscribe-subscribed {
+  display: none;
+}
+.moss-subscribe.moss-form .moss-form__status {
+  margin-block-start: calc(var(--moss-space-md, 1rem) * -1);
+}
+
+/* Sending: the answers stay readable but cannot change under the request. */
+.moss-subscribe.moss-form [data-state="loading"] :is(.moss-form__field, .moss-form__group) {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+/* Sent: the questions give way to the one thing left to do, with the
+   address it went to. */
+.moss-subscribe.moss-form [data-state="success"] > :not(.moss-subscribe-status) {
+  display: none;
+}
+.moss-subscribe.moss-form [data-state="success"] .moss-subscribe-status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.75rem;
+  align-items: center;
+  padding-block: var(--moss-space-sm, 0.75rem);
+  font-size: var(--moss-reading-size, 1.125rem);
+  color: var(--moss-color-text);
+  opacity: 1;
+  transform: none;
+}
+.moss-subscribe.moss-form [data-state="success"] .moss-subscribe-status__icon {
+  grid-row: span 2;
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  color: var(--moss-color-accent);
+}
+.moss-subscribe.moss-form .moss-subscribe-status__to {
+  grid-column: 2;
+  font-size: 0.875em;
+  color: var(--moss-color-muted);
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-subscribe.moss-form [data-state="success"] .moss-subscribe-status {
+    animation: moss-form-arrive 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+@keyframes moss-form-arrive {
+  from { opacity: 0; transform: translateY(0.4rem); }
+}
+
+/* A reader this browser already confirmed sees the one word, not the form. */
+:root[data-moss-subscribed] .moss-subscribe.moss-form .moss-subscribe-subscribed {
+  block-size: auto;
+  font-size: var(--moss-reading-size, 1.125rem);
 }
 
 }

@@ -3,7 +3,7 @@
  * article. Only a real engine can say it is painted after the body, its
  * pictures loaded, and that it does not widen the page.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const PAGE = "/work/mill-house/";
 

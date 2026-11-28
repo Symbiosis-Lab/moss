@@ -2,11 +2,10 @@
  * markers.ts — one marker per in-scope work, clustered by proximity, and
  * the coincident-cluster ring.
  *
- * Placement: a work's FIRST place (`work.places[0]`) only (an `article`
- * scope draws every place of that one work) — the same
- * one-dot-per-work choice `places.<hash>.json` itself already made at build
- * time (`place_map/places_data.rs`'s module doc), so this module never has
- * to decide among a work's several places on its own. A work with no
+ * Placement: one dot per work, at its first place, or under a place scope
+ * at its first place inside that scope, so a page about one region never
+ * pins a work elsewhere (an `article` scope draws every place of that one
+ * work). A work with no
  * resolvable first place is skipped (not merely placeless: `places_data.rs`
  * never emits a work whose declared locations resolved to no coordinates at
  * all, so an id a `places` lookup misses here means stale/malformed data,
@@ -33,7 +32,7 @@ import {
   type ProximityCluster,
 } from "./clusters";
 import { project } from "./projection";
-import { inScope } from "./scope";
+import { firstPlaceIn, inScope } from "./scope";
 import { hasPoint, type Camera, type Place, type Point, type Precision, type Scope, type Viewport, type Work } from "./types";
 import type { PlacesStrings } from "./strings";
 import { worksHereLabel } from "./strings";
@@ -59,13 +58,13 @@ function coarsestPrecision(precisions: Precision[]): Precision {
   "exact" as Precision);
 }
 
-/** In-scope works, each projected to its own first resolvable place — or, under an `article` scope, every resolvable place of that one work. Pure — no DOM, no camera. */
+/** In-scope works, each projected to its first place in scope — or, under an `article` scope, every resolvable place of that one work. Pure — no DOM, no camera. */
 export function pointsForWorks(works: Work[], places: Place[], scope: Scope): WorkPoint[] {
   const byId = new Map(places.map((place) => [place.id, place]));
   const points: WorkPoint[] = [];
   for (const work of works) {
-    if (!inScope(work, places, scope)) continue;
     if (scope.kind === "article") {
+      if (!inScope(work, places, scope)) continue;
       work.places.forEach((placeId, index) => {
         const own = byId.get(placeId);
         if (!own || !hasPoint(own)) return;
@@ -74,11 +73,9 @@ export function pointsForWorks(works: Work[], places: Place[], scope: Scope): Wo
       });
       continue;
     }
-    const place = byId.get(work.places[0] ?? "");
-    // A grouping node (no coordinates) is never a work's own resolved
-    // place — `places_data.rs` only ever puts one of those in `places`,
-    // never in a `WorkEntry`'s own `places` ids — but the type can't say
-    // that on its own, so this still narrows rather than asserting past it.
+    // Undefined when no place of the work lies in a place scope. A grouping
+    // node never sits in a work's own places, but the type can't say so.
+    const place = firstPlaceIn(work, places, scope);
     if (!place || !hasPoint(place)) continue;
     const projected = project(place.lat, place.lng);
     points.push({ id: work.id, x: projected.x, y: projected.y, precision: place.precision });

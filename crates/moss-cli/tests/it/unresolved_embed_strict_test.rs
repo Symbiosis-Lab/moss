@@ -183,3 +183,27 @@ fn findings_inside_a_percent_comment_do_not_surface_on_a_page_with_an_embed() {
     assert!(out.status.success(), "stderr:\n{stderr}");
     assert!(!stderr.contains("bogus") && !stderr.contains("nosuchthing") && !stderr.contains("+++"), "stderr:\n{stderr}");
 }
+
+/// A build that carries or keeps an unchanged page still reports its
+/// problems, whether or not the build before it was `--strict`.
+#[test]
+fn every_build_of_an_unchanged_folder_reports_its_problems_again() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let site = tempfile::tempdir().unwrap();
+    std::fs::write(site.path().join("Page.md"), "A link to [[No Such Page]] and an image ![[no-such-image.png]].\n").unwrap();
+    let site_dir = std::fs::canonicalize(site.path()).unwrap();
+    for (build, strict) in [(1, true), (2, false), (3, false), (4, false), (5, true)] {
+        let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+            .arg("build")
+            .arg(&site_dir)
+            .arg("--no-plugins")
+            .args(strict.then_some("--strict"))
+            .env("MOSS_HOME", moss_home.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.success(), !strict, "build {build}; stderr:\n{stderr}");
+        assert!(stderr.contains("No Such Page") && stderr.contains("no-such-image.png") && stderr.contains("2 problems"), "build {build}; stderr:\n{stderr}");
+    }
+}

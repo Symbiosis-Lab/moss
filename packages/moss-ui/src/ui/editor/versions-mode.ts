@@ -134,7 +134,7 @@ export function createVersionsMode(host: VersionsModeHost): VersionsMode {
             // (run-action.ts): a failed Result or a rejection ends in a toast.
             onClick: () => void runAction({
               key: 'versions-undo',
-              run: () => engine.restoreVersion(restored.undoId!, restored.path, 'in_place'),
+              run: () => engine.restoreVersion(restored.undoId!, restored.scope, 'in_place'),
             }),
           }]
         : undefined,

@@ -72,9 +72,13 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
     // A problem is `note_cli_problem()` followed by its line on the same thread,
     // so this is the one place the problem's text is at hand.
     if PENDING_PROBLEM.with(|p| p.take()) {
-        let first_time = with_reported(|r| {
-            // Bounded: a long-lived host that never drains the count must not grow it forever.
-            r.len() >= 1000 || r.insert(args.to_string())
+        let line = args.to_string();
+        if !LOGGING_RECORDED.with(std::cell::Cell::get) {
+            RECORDING.with(|r| r.borrow_mut().as_mut().map(|(_, problems)| problems.push(Problem::Printed(line.clone()))));
+        }
+        let first_time = with_printed(|p| {
+            let since_take = p.total - p.taken;
+            since_take > p.lines.len() || !p.lines.iter().skip(p.lines.len() - since_take).any(|l| *l == line)
         });
         if quiet_now() {
             // Held problem, not yet counted: a repeat of one already shown is dropped,
@@ -82,8 +86,15 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
             if !first_time {
                 return;
             }
-            with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
+            with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
         }
+        with_printed(|p| {
+            p.total += 1;
+            if p.lines.len() == PRINTED_KEPT {
+                p.lines.pop_front();
+            }
+            p.lines.push_back(line);
+        });
     } else if quiet_now() {
         return;
     }
@@ -93,27 +104,64 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
 thread_local! {
     /// A problem was noted on this thread and its line has not been printed yet.
     static PENDING_PROBLEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Inside [`recorded_problems`]: how many problems were noted on this
+    /// thread, and each one as it was reported.
+    static RECORDING: std::cell::RefCell<Option<(usize, Vec<Problem>)>> = const { std::cell::RefCell::new(None) };
+    /// A [`log_warn_problem!`] record is being logged; it is already recorded,
+    /// so the line the CLI logger prints for it is not recorded again.
+    static LOGGING_RECORDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The text of every problem line printed since the count was last taken.
-/// Process-wide, because the passes of a build run their problems on different
-/// threads; per thread under test, for the reason `CLI_PROBLEMS` is.
-#[cfg(not(test))]
-static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-thread_local! {
-    static REPORTED: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+/// One build problem as it was reported, so it can be reported again the same way.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Problem {
+    /// A [`cli_warn!`] line.
+    Printed(String),
+    /// A [`log_warn_problem!`] record, which a host's own logger may take.
+    Logged { target: String, text: String },
 }
 
-fn with_reported<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R {
-    #[cfg(not(test))]
-    {
-        let mut guard = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        f(guard.get_or_insert_with(Default::default))
+impl Problem {
+    pub(crate) fn report(&self) {
+        match self {
+            Problem::Printed(line) => cli_warn!("{line}"),
+            Problem::Logged { target, text } => {
+                note_cli_problem();
+                log::warn!(target: target.as_str(), "{text}");
+            }
+        }
     }
-    #[cfg(test)]
-    REPORTED.with(|r| f(&mut r.borrow_mut()))
+}
+
+/// Whether this thread is inside [`recorded_problems`].
+pub(crate) fn recording_problems() -> bool {
+    RECORDING.with(|r| r.borrow().is_some())
+}
+
+/// [`log_warn_problem!`] inside [`recorded_problems`]: record the problem, then
+/// `log` it.
+pub(crate) fn record_logged_problem(target: &str, text: &str, log: impl FnOnce()) {
+    RECORDING.with(|r| r.borrow_mut().as_mut().map(|(_, problems)| problems.push(Problem::Logged { target: target.to_owned(), text: text.to_owned() })));
+    LOGGING_RECORDED.with(|l| l.set(true));
+    log();
+    LOGGING_RECORDED.with(|l| l.set(false));
+}
+
+/// Run `f`, returning with its value the problems it reported on this thread,
+/// each of which [`Problem::report`] reports again. `None` when a problem was
+/// noted here without being reported here, so the list would under-report.
+pub(crate) fn recorded_problems<R>(f: impl FnOnce() -> R) -> (R, Option<Vec<Problem>>) {
+    struct Restore(Option<(usize, Vec<Problem>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RECORDING.with(|r| *r.borrow_mut() = self.0.take());
+        }
+    }
+    let outer = Restore(RECORDING.with(|r| r.replace(Some((0, Vec::new())))));
+    let value = f();
+    let (noted, lines) = RECORDING.with(|r| r.replace(None)).unwrap_or_default();
+    drop(outer);
+    (value, (noted == lines.len()).then_some(lines))
 }
 
 #[cfg(not(test))]
@@ -177,8 +225,12 @@ pub use crate::cli_eprintln;
 /// the only thing that can tell [`print_cli_build_result`] whether the build it
 /// is about to summarize as "complete" actually had any. `Relaxed` is enough:
 /// this is a plain counter, not a synchronization point with other memory.
+///
+/// Two counts: every problem this process has counted, which only grows, and
+/// that count when the last closing line took it. A build's seal judges its
+/// own problems from the first, whatever closing lines print meanwhile.
 #[cfg(not(test))]
-static CLI_PROBLEMS: AtomicUsize = AtomicUsize::new(0);
+static CLI_PROBLEMS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
 
 // Unit tests count per thread instead. The test harness runs every test on its
 // own fresh thread, all in one process, and dozens of tests drive code that
@@ -189,16 +241,16 @@ static CLI_PROBLEMS: AtomicUsize = AtomicUsize::new(0);
 // `spawn_blocking`) is not seen by that test.
 #[cfg(test)]
 thread_local! {
-    static CLI_PROBLEMS: AtomicUsize = const { AtomicUsize::new(0) };
+    static CLI_PROBLEMS: [AtomicUsize; 2] = const { [AtomicUsize::new(0), AtomicUsize::new(0)] };
 }
 
 #[cfg(not(test))]
-fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+fn with_problem_count<R>(f: impl FnOnce(&[AtomicUsize; 2]) -> R) -> R {
     f(&CLI_PROBLEMS)
 }
 
 #[cfg(test)]
-fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+fn with_problem_count<R>(f: impl FnOnce(&[AtomicUsize; 2]) -> R) -> R {
     CLI_PROBLEMS.with(f)
 }
 
@@ -252,20 +304,75 @@ fn take_built() -> Option<(usize, usize, usize)> {
 /// print separately, or the count can drift from what was actually shown.
 pub fn note_cli_problem() {
     PENDING_PROBLEM.with(|p| p.set(true));
+    RECORDING.with(|r| r.borrow_mut().as_mut().map(|(noted, _)| *noted += 1));
     // Under `quiet`, counting waits for the line: a problem the first pass
     // already printed is dropped, a new one is counted when it is printed.
     if quiet_now() {
         return;
     }
-    with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
+    with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
 }
 
-/// Read and reset the problem count. `swap`, not `load`: each build (and each
-/// `--watch` rebuild) must start counting from zero, or problems from an
-/// earlier build would be double-reported in a later summary.
+/// The problem lines this process has printed: how many, how many when the
+/// count was last taken, and the last [`PRINTED_KEPT`] of them. Under
+/// `quiet` a line already printed since the take is dropped; a build that
+/// ends at its entry prints its seal's again. Process-wide, because the
+/// passes of a build print their problems on different threads; per thread
+/// under test, for the reason `CLI_PROBLEMS` is.
+struct Printed {
+    total: usize,
+    taken: usize,
+    lines: std::collections::VecDeque<String>,
+}
+const PRINTED_KEPT: usize = 1000;
+const NONE_PRINTED: Printed = Printed { total: 0, taken: 0, lines: std::collections::VecDeque::new() };
+
+#[cfg(not(test))]
+static PRINTED: std::sync::Mutex<Printed> = std::sync::Mutex::new(NONE_PRINTED);
+
+#[cfg(test)]
+thread_local! {
+    static PRINTED: std::cell::RefCell<Printed> = const { std::cell::RefCell::new(NONE_PRINTED) };
+}
+
+fn with_printed<R>(f: impl FnOnce(&mut Printed) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&mut PRINTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    #[cfg(test)]
+    PRINTED.with(|p| f(&mut p.borrow_mut()))
+}
+
+/// Where the problem count and the printed problem lines stood when a build
+/// began.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ProblemMark {
+    counted: usize,
+    printed: usize,
+}
+
+pub(crate) fn problem_mark() -> ProblemMark {
+    ProblemMark { counted: with_problem_count(|n| n[0].load(Ordering::Relaxed)), printed: with_printed(|p| p.total) }
+}
+
+/// The problem lines printed since `mark`; `None` when a problem counted
+/// since cannot be printed again, because its line went to a host's own
+/// logger or fell out of the kept window.
+pub(crate) fn problems_since(mark: ProblemMark) -> Option<Vec<String>> {
+    let counted = with_problem_count(|n| n[0].load(Ordering::Relaxed)) - mark.counted;
+    with_printed(|p| {
+        let printed = p.total - mark.printed;
+        (printed == counted && printed <= p.lines.len()).then(|| p.lines.iter().skip(p.lines.len() - printed).cloned().collect())
+    })
+}
+
+/// The problems counted since the last take, which moves the mark: each build
+/// (and each `--watch` rebuild) reports only its own.
 pub fn take_cli_problems() -> usize {
-    with_reported(|r| r.clear());
-    with_problem_count(|n| n.swap(0, Ordering::Relaxed))
+    with_printed(|p| p.taken = p.total);
+    with_problem_count(|n| {
+        let now = n[0].load(Ordering::Relaxed);
+        now.saturating_sub(n[1].fetch_max(now, Ordering::Relaxed))
+    })
 }
 
 /// Drop-in for `cli_eprintln!` at call sites that report a build *problem*
@@ -304,14 +411,21 @@ pub(crate) use cli_warn;
 /// `[WARN]` line and still exited 0. Found by an agent-surface audit,
 /// 2026-08-06.
 macro_rules! log_warn_problem {
-    (target: $target:literal, $($arg:tt)*) => {{
+    (target: $target:literal, $($arg:tt)*) => {
+        $crate::build::cli_output::log_warn_problem!(@ concat!($target, "#counted"), $($arg)*)
+    };
+    (@ $target:expr, $($arg:tt)*) => {{
         $crate::build::cli_output::note_cli_problem();
-        log::warn!(target: concat!($target, "#counted"), $($arg)*)
+        if $crate::build::cli_output::recording_problems() {
+            let text = format!($($arg)*);
+            $crate::build::cli_output::record_logged_problem($target, &text, || log::warn!(target: $target, "{text}"));
+        } else {
+            log::warn!(target: $target, $($arg)*);
+        }
     }};
-    ($($arg:tt)*) => {{
-        $crate::build::cli_output::note_cli_problem();
-        log::warn!(target: concat!(module_path!(), "#counted"), $($arg)*)
-    }};
+    ($($arg:tt)*) => {
+        $crate::build::cli_output::log_warn_problem!(@ concat!(module_path!(), "#counted"), $($arg)*)
+    };
 }
 pub(crate) use log_warn_problem;
 
@@ -340,9 +454,9 @@ pub(crate) use log_note;
 /// about the build that just ran. Each CLI entry point prints it immediately
 /// after calling this — see `startup::headless` and `lib::run_cli_build`.
 ///
-/// **Returns the problem count it drained**, and that return value is the only
-/// way to learn it. [`take_cli_problems`] is a `swap`, so by the time this
-/// function returns the counter reads zero — a caller that decides `--strict`'s
+/// **Returns the problem count it took**, and that return value is the only
+/// way to learn it. [`take_cli_problems`] moves its mark, so by the time this
+/// function returns another take reads zero — a caller that decides `--strict`'s
 /// exit code by calling `take_cli_problems()` *after* this would always see 0
 /// and `--strict` would be green forever. Decide the exit code from the value
 /// returned here.

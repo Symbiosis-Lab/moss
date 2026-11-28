@@ -465,9 +465,41 @@ fn a_site_that_turned_heading_anchors_off_stays_off_without_a_warning() {
 }
 
 #[test]
+fn a_site_key_is_known_exactly_when_the_live_key_set_has_it() {
+    let config = ConfigFile::parse("[site]\nlang = \"en\"\nlangg = \"en\"\n").unwrap();
+    assert!(crate::config::site_settings::config_keys().any(|k| k == "site.lang"));
+    assert_eq!(
+        config.unknown_site_keys(),
+        ["[site] has an unknown key \"langg\" in .moss/config.toml; did you mean \"lang\"?"]
+    );
+}
+
+#[test]
+fn a_retired_site_key_gets_one_note_in_its_retired_wording() {
+    let config = ConfigFile::parse("[site]\ndomain = \"example.com\"\n").unwrap();
+    assert_eq!(
+        config.unknown_site_keys(),
+        ["[site] domain in .moss/config.toml was retired in moss 0.15.21; the site's address, path included, is `url`"]
+    );
+}
+
+#[test]
 fn field_decls_in_reply_to_is_moss_s_own_and_cannot_be_redeclared() {
     let config = ConfigFile::parse("[fields.in_reply_to]\nplace = \"end\"\n").unwrap();
     let (decls, problems) = config.field_decls();
     assert!(decls.is_empty());
     assert!(problems.iter().any(|p| p.contains("[fields.in_reply_to] is a moss field")), "got: {problems:?}");
+}
+
+#[test]
+fn the_email_channel_names_its_newsletter_service() {
+    let service = |toml: &str| ConfigFile::parse(toml).unwrap().newsletter_service();
+    assert_eq!(service("[channels.email]\nprovider = \"sendgrid\"\n"), Some(Ok("sendgrid".to_string())));
+    assert_eq!(service("[channels.email]\nprovider = \" \"\n"), None, "empty keeps subscribers with moss");
+    assert_eq!(service("[channels.email]\nsend_mode = \"all\"\n"), None);
+    assert_eq!(service("[services.newsletter]\nprovider = \"sendgrid\"\n"), None, "only the email channel names it");
+    assert_eq!(service("[channels.email]\nprovider = \"mailchimp\"\n"), Some(Ok("mailchimp".to_string())), "the host decides which services exist");
+    assert!(service("[channels.email]\nprovider = 3\n").unwrap().is_err());
+    let err = service("[channels.email]\nprovider = \"a/b\"\n").unwrap().unwrap_err();
+    assert!(err.contains("must be a name"), "{err}");
 }

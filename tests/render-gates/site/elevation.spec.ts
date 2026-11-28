@@ -6,7 +6,7 @@
 // compare a real surface against a bare element reading the same token, so a
 // surface that drifts back to a literal — even one that happens to look
 // similar — goes red without this file naming any number.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOKEN_CSS } from './tokens-block';

@@ -68,6 +68,17 @@ const opened = () => browser.execute(() => (window as unknown as { mossOpens: Op
 const release = () => browser.execute(() => (window as unknown as { mossOpens: Opens }).mossOpens.release.splice(0).forEach((done) => done()));
 const busy = () => browser.execute(() => [...document.querySelectorAll('.view-action[aria-busy="true"]')].length);
 
+async function openSource(file: string, source = true): Promise<void> {
+  await obsidianPage.openFile(file);
+  await browser.executeObsidian(async ({ app }, source) => {
+    const leaf = app.workspace.getMostRecentLeaf();
+    if (!leaf) return;
+    const state = leaf.getViewState();
+    state.state = { ...state.state, mode: "source", source };
+    await leaf.setViewState(state);
+  }, source);
+}
+
 async function startPreview(): Promise<void> {
   await browser.executeObsidianCommand("moss:preview");
   const proceed = browser.$(".modal button.mod-cta");
@@ -129,6 +140,23 @@ describe("a moss folder inside a vault", () => {
     await rename("Day notes", "Daily notes");
     await browser.pause(1000);
     expect(await marked()).toEqual(["moss garden", "site"]);
+  });
+
+  it("checks a note in the moss folder against that folder, and leaves notes outside it alone", async () => {
+    const note = "---\ntitel: Frost\ndraft: \"yes\"\n---\n\nSee [[posts/first-frost]] and [[nowhere]].\n";
+    await obsidianPage.write("site/posts/checked.md", note);
+    await obsidianPage.write("Daily notes/checked.md", note);
+    const diagnostics = () => browser.execute(() => [...document.querySelectorAll(".workspace-leaf.mod-active [class*='moss-diag-']")]
+      .map((element) => element.classList.contains("cm-line") ? "line" : element.textContent));
+    await openSource("site/posts/checked.md");
+    // The link to a page of the folder resolves by its path there; the one to no page does not.
+    await browser.waitUntil(async () => (await diagnostics()).length === 3, { timeout: 10000, timeoutMsg: `the note was not checked: ${await diagnostics()}` });
+    expect((await diagnostics()).sort()).toEqual(["draft", "line", "titel"]);
+    await openSource("Daily notes/checked.md");
+    await browser.pause(1500);
+    expect(await diagnostics()).toEqual([]);
+    // The preview below starts from the open note, so leave the folder's note open, as written.
+    await openSource("site/posts/first-frost.md", false);
   });
 
   it("opens the preview beside the editor, with no other tool's tab or button over it", async () => {

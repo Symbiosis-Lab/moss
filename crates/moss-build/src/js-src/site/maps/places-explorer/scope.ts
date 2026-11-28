@@ -41,11 +41,18 @@ function placeMatchesScope(place: Place, scopeId: string, byId: Map<string, Plac
 export function inScope(work: Work, places: Place[], scope: Scope): boolean {
   if (scope.kind === "all") return true;
   if (scope.kind === "article") return work.id === scope.id;
+  return firstPlaceIn(work, places, scope) != null;
+}
+
+/** `work`'s first place at or under a place `scope` (its first place at all under any other scope): the one place its marker stands on. */
+export function firstPlaceIn(work: Work, places: Place[], scope: Scope): Place | undefined {
   const byId = new Map(places.map((place) => [place.id, place]));
-  return work.places.some((placeId) => {
+  if (scope.kind !== "place") return byId.get(work.places[0] ?? "");
+  for (const placeId of work.places) {
     const place = byId.get(placeId);
-    return place != null && placeMatchesScope(place, scope.id, byId);
-  });
+    if (place && placeMatchesScope(place, scope.id, byId)) return place;
+  }
+  return undefined;
 }
 
 /** The breadcrumb trail for `scope`: `all`, or `all > article`, or `all > parent > place` (parent omitted for a top-level place). */

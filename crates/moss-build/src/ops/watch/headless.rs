@@ -296,16 +296,17 @@ async fn do_rebuild(
     reason: Option<crate::build::BuildReason>,
     admission_epoch: Option<u64>,
 ) -> bool {
-    let source = std::path::PathBuf::from(folder_path);
+    let root = crate::vault::paths::VaultRoot::resolve(std::path::Path::new(folder_path));
+    let server_port = worker::get(folder_path).and_then(|h| h.served_port());
     let result = run_pipeline(PipelineConfig {
-        root: crate::vault::paths::VaultRoot::resolve(&source),
+        root,
         // Tier-1 progress goes to the carrier too, so an attached browser
         // hears the rebuild's BuildComplete receipt.
         progress: Arc::new(CarrierReporter),
         plugins,
         watch: false,         // don't restart watching from within a rebuild
         start_server: false,  // server already running
-        server_port: None,
+        server_port,
         live_port: None,
         host: (host_ports)(folder_path),
         trigger, reason,

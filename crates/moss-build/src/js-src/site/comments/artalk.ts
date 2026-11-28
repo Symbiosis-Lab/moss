@@ -566,9 +566,8 @@ interface LiveComment {
     // POST the comment, transparently solving the service's captcha if it
     // demands one: a 403 { need_captcha:true, iframe:true } means a Turnstile
     // check is required; solveCaptcha() runs the service's captcha page, then
-    // we retry. This whole branch is inert until captcha is enabled
-    // server-side — otherwise the first POST returns 200 directly. Null means the
-    // visitor closed the check.
+    // we retry. The service asks only once a visitor has posted several in a
+    // row. Null means the visitor closed the check.
     async function submitComment(): Promise<Record<string, unknown> | null> {
       const post = () => fetch(serverUrl + "/api/v2/comments", {
         method: "POST",

@@ -12,7 +12,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-chip.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 import { untilRendering } from "./rendering";
 
 async function gotoReady(page: Page, search = ""): Promise<void> {

@@ -145,7 +145,7 @@ describe('progress-panel stage state machine', () => {
 
 describe('publish stage labels', () => {
   it('everything before the first byte leaves reads "Preparing…"', () => {
-    for (const stage of ['waiting', 'preparing', 'syncing'] as const) {
+    for (const stage of ['preparing', 'syncing'] as const) {
       expect(computePublishLabel({ stage })).toEqual({ text: 'Preparing…', percent: null });
     }
     expect(computePublishLabel({ stage: 'rebuilding' })).toEqual({ text: 'Preparing…', percent: null });
@@ -239,16 +239,7 @@ describe('publish stage labels', () => {
 });
 
 describe('nextPublishStage', () => {
-  it('idle -> waiting on waiting event', () => {
-    expect(nextPublishStage('idle', { kind: 'waiting' })).toBe('waiting');
-  });
-
-  it('waiting -> preparing on first progress event', () => {
-    expect(nextPublishStage('waiting', { kind: 'progress', stage: 'preparing' }))
-      .toBe('preparing');
-  });
-
-  it('idle -> preparing if first event is progress (no waiting fired)', () => {
+  it('idle -> preparing on the first progress event', () => {
     expect(nextPublishStage('idle', { kind: 'progress', stage: 'preparing' }))
       .toBe('preparing');
   });
@@ -260,6 +251,10 @@ describe('nextPublishStage', () => {
     expect(nextPublishStage('committing', { kind: 'progress', stage: 'finalizing' })).toBe('finalizing');
   });
 
+  it('a late progress event for an earlier stage does not regress', () => {
+    expect(nextPublishStage('uploading', { kind: 'progress', stage: 'preparing' })).toBe('uploading');
+  });
+
   it('complete event -> complete', () => {
     expect(nextPublishStage('finalizing', { kind: 'complete' })).toBe('complete');
   });
@@ -267,11 +262,6 @@ describe('nextPublishStage', () => {
   it('failed event -> failed from any stage', () => {
     expect(nextPublishStage('uploading', { kind: 'failed' })).toBe('failed');
     expect(nextPublishStage('preparing', { kind: 'failed' })).toBe('failed');
-  });
-
-  it('late waiting event after preparing does not regress (stays preparing)', () => {
-    expect(nextPublishStage('preparing', { kind: 'waiting' })).toBe('preparing');
-    expect(nextPublishStage('uploading', { kind: 'waiting' })).toBe('uploading');
   });
 });
 

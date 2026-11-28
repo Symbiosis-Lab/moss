@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::assets::paths::compute_manifest_generation_id;
 
 /// Verify that the generation_id derived from a prebuilt manifest is a real
 /// content-derived hash, not the old placeholder literal `"prebuilt"`.
@@ -242,155 +243,14 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
 }
 
-// ── Self-heal wiring: this call site, not the shared function ───────────────
-//
-// `upload_regular_file` (deploy/upload.rs) is proven to self-heal and to
-// return the actually-shipped hash by upload_tests.rs's own tests, called
-// directly with a stale hash handed in as a literal. None of that proves
-// `push_prebuilt_inner` (this file) does the right thing with what comes
-// back: `commit_sync` sends `manifest` verbatim as the server's new source of
-// truth, so a healed hash that never reaches `manifest` commits a permanently
-// wrong record for a file that was, in fact, uploaded correctly.
-// `push.rs`'s `a_self_healed_file_corrects_its_manifest_entry_before_commit`
-// proves this for the moss-format publish path; this is prebuilt's own,
-// independent fold-in loop (the `self_heal_corrections` block above
-// `push_prebuilt_inner`'s commit_sync call) and needs its own proof.
-//
-// Unlike `push.rs`, there is no separately-sealed manifest to hand a stale
-// hash to — `build_manifest_from_dir` hashes the file at call time, so the
-// drift has to be a real one: the mock server withholds its `sync_manifest`
-// response until the file has been rewritten on disk, which deterministically
-// places the rewrite between the manifest hash (already computed by then) and
-// the upload's own re-read (which only happens once that response arrives).
+// ── A site over its storage cap is refused at the open ──────────────────────
 
-#[tokio::test]
-async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit() {
-    use tokio::net::TcpListener;
-
-    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let prev_url = std::env::var("MOSS_SETA_URL").ok();
-
-    let old_bytes = b"<html>content the manifest hash was computed from</html>";
-    let new_bytes: &[u8] =
-        b"<html>content actually on disk by upload time - a racing rebuild</html>";
-    let hash_of = crate::build::assets::paths::compute_binary_hash;
-    let old_hash = hash_of(old_bytes);
-    let new_hash = hash_of(new_bytes);
-    assert_ne!(old_hash, new_hash, "fixture sanity: the drift must be real");
-
-    let project = tmp_dir();
-    let prebuilt = tmp_dir();
-    let target = prebuilt.path().join("index.html");
-    std::fs::write(&target, old_bytes).expect("seed prebuilt file");
-
-    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
-    let rewrite_target = target.clone();
-    let new_bytes_owned = new_bytes.to_vec();
-
-    tokio::spawn(async move {
-        // conn 0: GET /api/sites/:id/generation -> 404 (get_live_generation
-        // short-circuit: no live generation known, proceed normally).
-        {
-            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
-            crate::test_respond_and_close(
-                &mut stream,
-                b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
-            )
-            .await;
-        }
-        // conn 1: POST /api/sites/:id/sync — drain the request (built from
-        // OLD bytes), THEN rewrite the file on disk, THEN answer. Everything
-        // downstream of this response (the file-size stat, the upload's own
-        // read) happens only after the rewrite has landed.
-        {
-            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
-            tokio::fs::write(&rewrite_target, &new_bytes_owned)
-                .await
-                .expect("rewrite mid-deploy");
-            crate::test_respond_and_close(
-                &mut stream,
-                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
-            )
-            .await;
-        }
-        // conn 2: PUT /api/sites/:id/files/index.html — the upload itself.
-        {
-            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
-            crate::test_respond_and_close(
-                &mut stream,
-                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-            )
-            .await;
-        }
-        // conn 3: POST /api/sites/:id/commit — capture the body so the test
-        // can inspect which hash actually got committed.
-        {
-            let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
-            crate::test_respond_and_close(
-                &mut stream,
-                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 104\r\n\r\n{\"url\":\"https://healed-prebuilt.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
-            )
-            .await;
-            commit_tx.send(raw).ok();
-        }
-    });
-
-    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
-    let identity = Identity::generate().expect("generate identity");
-
-    let result = push_prebuilt(
-        project.path(),
-        prebuilt.path(),
-        "healed-prebuilt",
-        &identity,
-        false,
-        &silent(),
-    )
-    .await;
-
-    match prev_url {
-        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
-        None => std::env::remove_var("MOSS_SETA_URL"),
-    }
-
-    assert!(
-        result.is_ok(),
-        "a hash drift stable across the settle pause must self-heal a prebuilt deploy too: {result:?}"
-    );
-
-    let commit_request = commit_rx
-        .await
-        .expect("commit_sync must have been called for the publish to succeed");
-    let request_str = String::from_utf8_lossy(&commit_request);
-    let body = request_str
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .unwrap_or(&request_str);
-    assert!(
-        body.contains(&new_hash),
-        "commit_sync's manifest must carry the hash actually shipped for the self-healed file, \
-         not the one the manifest was built with before the drift: {body}"
-    );
-    assert!(
-        !body.contains(&old_hash),
-        "the stale pre-drift hash must not survive into the committed manifest: {body}"
-    );
-}
-
-// ── A site over its storage cap is refused at the sync ──────────────────────
-
-/// The sync carries each file's size, and a server that refuses the site as
+/// The open carries each file's size, and a server that refuses the site as
 /// over its storage cap stops the publish before any upload with its own
 /// sentence.
-#[tokio::test]
-async fn a_prebuilt_sync_sends_sizes_and_shows_the_storage_cap_refusal() {
-    use tokio::net::TcpListener;
-
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_prebuilt_open_sends_sizes_and_shows_the_storage_cap_refusal() {
+    use crate::deploy::push::deploy_resource_tests::{is_deploy_send, is_open, DeployStandIn, Reply};
     let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let prev_url = std::env::var("MOSS_SETA_URL").ok();
@@ -401,27 +261,12 @@ async fn a_prebuilt_sync_sends_sizes_and_shows_the_storage_cap_refusal() {
     std::fs::write(prebuilt.path().join("index.html"), page).unwrap();
 
     const SENTENCE: &str = "This folder is over the 1 GB limit. Remove some files and try again.";
-    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
-        crate::test_respond_and_close(
-            &mut stream,
-            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
-        )
-        .await;
-        let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
-        let body = format!(r#"{{"code":"storage_cap_exceeded","error":"{SENTENCE}","cap_bytes":1073741824,"site_bytes":1586736868}}"#);
-        let resp = format!(
-            "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
-        sync_tx.send(raw).ok();
-    });
+    let seta = DeployStandIn::start(4 << 20, Box::new(|r, _| {
+        is_open(r).then(|| Reply::Json(413, serde_json::json!({ "code": "storage_cap_exceeded", "error": SENTENCE, "cap_bytes": 1073741824u64, "site_bytes": 1586736868u64 })))
+    }))
+    .await;
 
-    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    std::env::set_var("MOSS_SETA_URL", &seta.url);
     let identity = Identity::generate().expect("generate identity");
     let result = push_prebuilt(project.path(), prebuilt.path(), "capped-site", &identity, false, &silent()).await;
     match prev_url {
@@ -430,91 +275,10 @@ async fn a_prebuilt_sync_sends_sizes_and_shows_the_storage_cap_refusal() {
     }
 
     assert_eq!(result.err().map(|e| e.to_string()).as_deref(), Some(SENTENCE));
-    let raw = sync_rx.await.expect("the sync was sent");
-    let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
-    let body: serde_json::Value = serde_json::from_slice(body).unwrap();
-    assert_eq!(body["sizes"], serde_json::json!({ "index.html": page.len() }));
-}
-
-// ── A removal that only touched `_moss/` still publishes ────────────────────
-//
-// The server leaves `_moss/` paths out of `remove` (they are not wipe
-// evidence) and reports how many it left out as `internal_remove`. With
-// `need` and `remove` both empty the publish used to return "up to date"
-// without committing, so a theme file deleted from the build stayed live.
-
-/// Publish a one-file directory against a fake server whose sync answer is
-/// `sync_body`; returns whether the client sent a commit.
-async fn commit_sent_for_sync_answer(sync_body: &'static str) -> bool {
-    use tokio::net::TcpListener;
-
-    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let prev_url = std::env::var("MOSS_SETA_URL").ok();
-
-    let project = tmp_dir();
-    let prebuilt = tmp_dir();
-    std::fs::write(prebuilt.path().join("index.html"), b"<html>same</html>").unwrap();
-
-    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let seen = requests.clone();
-    let server = tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let raw = crate::test_drain_http_request(&mut stream).await;
-            let line = String::from_utf8_lossy(&raw).lines().next().unwrap_or("").to_string();
-            seen.lock().unwrap().push(line.clone());
-            let json = |body: &str| {
-                format!(
-                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-            };
-            let resp = if line.contains("/generation") {
-                "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}".to_string()
-            } else if line.contains("/sync") {
-                json(sync_body)
-            } else {
-                json(r#"{"url":"https://fake.mosspub.com","files_updated":1,"files_removed":0,"timestamp":1700000000}"#)
-            };
-            crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
-        }
-    });
-
-    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
-    let identity = Identity::generate().expect("generate identity");
-    let result = push_prebuilt(project.path(), prebuilt.path(), "fake-site", &identity, false, &silent()).await;
-    match prev_url {
-        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
-        None => std::env::remove_var("MOSS_SETA_URL"),
-    }
-    server.abort();
-    assert!(result.is_ok(), "{result:?}");
-    let sent = requests.lock().unwrap().iter().any(|l| l.contains("/commit"));
-    sent
-}
-
-#[tokio::test]
-async fn a_publish_whose_only_change_is_removed_internal_files_commits() {
-    assert!(
-        commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":1}"#).await,
-        "internal_remove > 0 must reach the generation swap"
-    );
-}
-
-#[tokio::test]
-async fn nothing_changed_does_not_commit() {
-    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":0}"#).await);
-}
-
-#[tokio::test]
-async fn an_older_server_without_internal_remove_does_not_commit() {
-    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[]}"#).await);
+    assert!(!seta.requests().iter().any(is_deploy_send));
+    let manifest = seta.opened();
+    let entry = manifest["files"]["index.html"].as_str().unwrap();
+    assert_eq!(manifest["sizes"], serde_json::json!({ entry: page.len() }));
 }
 
 // ── Removal gate: an upload may not take a served address offline ───────────

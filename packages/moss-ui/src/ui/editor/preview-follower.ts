@@ -1,6 +1,6 @@
 import type { EntryRegistry } from './entry-registry';
 import type { SourceRole } from '@symbiosis-lab/moss-ui';
-import { toAbsolute } from './path-domain';
+import { normalizePath, toAbsolute, toRelative } from './path-domain';
 import type { EngineResult } from '@symbiosis-lab/moss-ui';
 import {
   previewProspect,
@@ -16,13 +16,19 @@ import { engine } from '../engine';
  * Single owner of the decision "should the preview iframe navigate?". Sources:
  *   1. Registry's active-document-path signal (subscribeActivePath).
  *      Fires on tree click (loadFile → setActive) and on rename of active.
+ *      Pages only: a selection also moves it, and selecting an asset is not
+ *      opening it.
  *   2. Public navigate(path) method. Called by editor-main's
  *      editor:file-selected listener so that re-clicking the same file
- *      still re-emits navigate-preview (the 404-escape).
+ *      still re-emits navigate-preview (the 404-escape), and the only way an
+ *      asset is followed.
  *
  * Action: subscribe to FileChanged FIRST (unless the path is a structurally
- * permanent miss — see preview-follower-permanence.ts), THEN resolve URL via
- * engine.resolveUrlForFile.
+ * permanent miss — see preview-prospect.ts), THEN resolve URL via
+ * engine.resolveUrlForFile, or engine.resolveAssetUrlForFile for an asset. An
+ * asset's address is read from the manifest the build seals after the preview
+ * already serves it, so an asset opened in that gap waits like an unbuilt page:
+ * the seal's FileChanged comes after the manifest is written.
  *   - Ok(Some(url)) → unsubscribe (no longer needed) and emit
  *     editor:navigate-preview { urlPath }.
  *   - Ok(None) → leave the subscription in place; retry on every FileChanged
@@ -57,11 +63,14 @@ type DescribeSourceRole = (filePath: string) => Promise<EngineResult<SourceRole>
 type EmitFn = (event: string, payload: unknown) => Promise<void>;
 type RebuildHandler = (msg: { kind: 'FileChanged' }) => void;
 type OnMossEvent = (kind: 'FileChanged', handler: RebuildHandler) => Promise<() => void>;
+/** A follow's payload; `echo` only when set, so an ordinary follow says what it always did. */
+const follow = (urlPath: string, echo: boolean) => (echo ? { urlPath, echo } : { urlPath });
 
 export interface PreviewFollowerOptions {
   registry: EntryRegistry;
   projectRoot: string;
   resolveUrlForFile: ResolveUrlForFile;
+  resolveAssetUrlForFile: ResolveUrlForFile;
   emit: EmitFn;
   onMossEvent: OnMossEvent;
   /** Optional: when omitted, slot files are treated as ordinary transient
@@ -76,6 +85,7 @@ export class PreviewFollower {
   private readonly registry: EntryRegistry;
   private readonly projectRoot: string;
   private readonly resolveUrlForFile: ResolveUrlForFile;
+  private readonly resolveAssetUrlForFile: ResolveUrlForFile;
   private readonly emit: EmitFn;
   private readonly onMossEvent: OnMossEvent;
   private readonly describeSourceRole: DescribeSourceRole | null;
@@ -89,11 +99,16 @@ export class PreviewFollower {
   private readonly gen: GenerationToken = createGenerationToken();
   /** Cleanup for any in-flight FileChanged subscription. */
   private pendingBuildUnsub: (() => void) | null = null;
+  /** The file the editor is opening because the preview shows its page, as the registry names it. */
+  private openingFromPreview: string | null = null;
+  /** The generation of the follow that answers that load. */
+  private echoGen: number | null = null;
 
   constructor(opts: PreviewFollowerOptions) {
     this.registry = opts.registry;
     this.projectRoot = opts.projectRoot;
     this.resolveUrlForFile = opts.resolveUrlForFile;
+    this.resolveAssetUrlForFile = opts.resolveAssetUrlForFile;
     this.emit = opts.emit;
     this.onMossEvent = opts.onMossEvent;
     this.describeSourceRole = opts.describeSourceRole ?? null;
@@ -171,9 +186,31 @@ export class PreviewFollower {
     }
   }
 
+  /**
+   * Run the editor's load of `sourcePath`, the file of the page the preview shows.
+   * Following that load only answers the preview, so its navigation is marked
+   * `echo`: the shell must not let it override a load the preview started since.
+   */
+  async openingPreviewPage<T>(sourcePath: string, load: () => Promise<T>): Promise<T> {
+    const path = normalizePath(toRelative(sourcePath, this.projectRoot));
+    this.openingFromPreview = path;
+    try {
+      return await load();
+    } finally {
+      if (this.openingFromPreview === path) this.openingFromPreview = null;
+    }
+  }
+
   private onPathChanged(newPath: string | null): void {
     const gen = this.bumpGeneration(newPath);
     if (newPath === null) return;
+    // Selecting an asset is not opening it ("Show in file list" selects a picture
+    // and must leave the page on screen): only navigate() follows one.
+    if (previewProspect(newPath, null) === 'asset') {
+      this.setNote(null);
+      return;
+    }
+    if (normalizePath(newPath) === this.openingFromPreview) this.echoGen = gen;
     void this.attempt('path change', () => this.resolveAndEmit(gen, newPath));
   }
 
@@ -238,11 +275,12 @@ export class PreviewFollower {
     );
 
     const permanentMiss = isStructurallyPermanentMiss(prospect);
+    const resolve = prospect === 'asset' ? this.resolveAssetUrlForFile : this.resolveUrlForFile;
     let unsub: (() => void) | null = null;
     if (!permanentMiss) {
       unsub = await this.onMossEvent('FileChanged', () => {
         if (this.gen.isStale(gen)) return;
-        void this.attempt('build retry', () => this.retryAfterBuild(gen, path));
+        void this.attempt('build retry', () => this.retryAfterBuild(gen, path, resolve));
       });
       if (this.gen.isStale(gen)) {
         unsub();
@@ -254,9 +292,9 @@ export class PreviewFollower {
 
     let result: EngineResult<string | null>;
     try {
-      result = await this.resolveUrlForFile(toAbsolute(path, this.projectRoot));
+      result = await resolve(toAbsolute(path, this.projectRoot));
     } catch (e) {
-      console.warn('[PreviewFollower] resolveUrlForFile threw:', e);
+      console.warn('[PreviewFollower] resolving the address threw:', e);
       if (unsub && this.pendingBuildUnsub === unsub) {
         unsub();
         this.pendingBuildUnsub = null;
@@ -265,7 +303,7 @@ export class PreviewFollower {
     }
     if (this.gen.isStale(gen)) return;
     if (result.status !== 'ok') {
-      console.warn('[PreviewFollower] resolveUrlForFile failed:', result.error);
+      console.warn('[PreviewFollower] resolving the address failed:', result.error);
       if (unsub && this.pendingBuildUnsub === unsub) {
         unsub();
         this.pendingBuildUnsub = null;
@@ -290,7 +328,7 @@ export class PreviewFollower {
         unsub();
         this.pendingBuildUnsub = null;
       }
-      await this.emit('editor:navigate-preview', { urlPath: result.data });
+      await this.emit('editor:navigate-preview', follow(result.data, gen === this.echoGen));
       return;
     }
     // New pages may navigate before a build, but the canonical answer owns
@@ -305,8 +343,7 @@ export class PreviewFollower {
         });
       }
     }
-    // Not yet resolvable. Permanent misses never subscribed (matches prior
-    // behavior — no retry loop for assets/.moss paths). Transient misses are
+    // Not yet resolvable. Permanent misses never subscribed. Transient misses are
     // already subscribed from above; retryAfterBuild fires from that
     // listener on the next FileChanged.
     console.debug(
@@ -315,12 +352,12 @@ export class PreviewFollower {
     );
   }
 
-  private async retryAfterBuild(gen: number, path: string): Promise<void> {
+  private async retryAfterBuild(gen: number, path: string, resolve: ResolveUrlForFile): Promise<void> {
     let result: EngineResult<string | null>;
     try {
-      result = await this.resolveUrlForFile(toAbsolute(path, this.projectRoot));
+      result = await resolve(toAbsolute(path, this.projectRoot));
     } catch (e) {
-      console.warn('[PreviewFollower] resolveUrlForFile threw on retry:', e);
+      console.warn('[PreviewFollower] resolving the address threw on retry:', e);
       return;
     }
     if (this.gen.isStale(gen)) return;
@@ -328,6 +365,6 @@ export class PreviewFollower {
     // Got URL. Unsubscribe from FileChanged (we're done) and emit.
     this.pendingBuildUnsub?.();
     this.pendingBuildUnsub = null;
-    await this.emit('editor:navigate-preview', { urlPath: result.data });
+    await this.emit('editor:navigate-preview', follow(result.data, gen === this.echoGen));
   }
 }

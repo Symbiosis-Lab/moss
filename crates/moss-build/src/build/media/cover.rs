@@ -1,309 +1,36 @@
-//! Cover type detection and HTML rendering for card covers.
-//!
-//! Supports image, video, and iframe cover types with automatic detection
-//! from file extensions or explicit override via frontmatter `cover_type`.
+//! A card's pictures as the build draws them: through the site's media scan
+//! (sizes, variants, LQIP) and with their colour band read from the image.
 
-use moss_core::render::image::Loading;
+use std::path::Path;
 
-/// The type of media used for a cover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoverType {
-    Image,
-    Video,
-    Iframe,
-}
+use crate::build::media::dimensions::MediaDimensionLookup;
 
-impl CoverType {
-    pub fn resolve(cover: Option<&str>, explicit: Option<CoverType>) -> Option<Self> {
-        cover.map(|_| explicit.unwrap_or(CoverType::Image))
-    }
-}
-
-/// Detect the cover type from a URL's file extension, with optional explicit override.
-///
-/// If `explicit` is provided, it takes priority:
-/// - `"video"` → `Video`
-/// - `"iframe"` → `Iframe`
-/// - anything else → `Image`
-///
-/// Otherwise, the extension of `url` is used:
-/// - `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.avif`, `.svg` → `Image`
-/// - `.mp4`, `.webm`, `.mov` → `Video`
-/// - `.html`, `.htm` → `Iframe`
-/// - unknown or missing extension → `Image`
-pub fn detect_cover_type(url: &str, explicit: Option<&str>) -> CoverType {
-    if let Some(e) = explicit {
-        return match e.to_ascii_lowercase().as_str() {
-            "video" => CoverType::Video,
-            "iframe" => CoverType::Iframe,
-            _ => CoverType::Image,
-        };
-    }
-
-    // Strip query string and fragment before extracting extension
-    let path = url.split(['?', '#']).next().unwrap_or(url);
-    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-
-    match ext.as_str() {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "svg" => CoverType::Image,
-        "mp4" | "webm" | "mov" | "m4v" => CoverType::Video,
-        "html" | "htm" => CoverType::Iframe,
-        _ => CoverType::Image,
-    }
-}
-
-/// Render the appropriate HTML for a cover element.
-///
-/// When `attrs` has non-default values, an inline `style` attribute is added to
-/// `<img>` and `<video>` tags with `object-fit` / `object-position`.
-/// Iframe covers ignore media attrs (iframes have their own sizing).
-///
-/// All parameters are HTML-escaped in the output.
-pub fn render_cover_html(
-    url: &str,
-    cover_type: CoverType,
-    alt: &str,
-    css_class: &str,
-    attrs: &moss_core::media::MediaAttrs,
-    block_interaction: bool,
-    // When `Some`, an image cover goes through the synthesizer
-    // (`ImageContext::FolderCardCover`), which bakes in dimensions, LQIP and
-    // the WebP `<picture>`; `None` (tests, fragments) emits a bare `<img>`.
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    loading: Loading,
-    // The `sizes=` of the grid cell the cover is drawn in; `None` in a listing.
-    grid_cell_sizes: Option<&str>,
-) -> String {
-    let alt_escaped = html_escape(alt);
-    let css_class = html_escape(css_class);
-    let style_attr = attrs
-        .to_inline_style()
-        .map(|s| format!(r#" style="{}""#, html_escape(&s)))
-        .unwrap_or_default();
-
-    match cover_type {
-        CoverType::Image => {
-            if let Some(lookup) = media_lookup {
-                let style = attrs.to_inline_style();
-                let opts = moss_core::render::image::ImageRenderOptions {
-                    loading,
-                    style: style.as_deref(),
-                    fit: attrs.fit,
-                    grid_cell_sizes,
-                    ..Default::default()
-                };
-                // The synthesizer takes `&AssetSnapshot`.
-                // Memoized on the lookup — this built one snapshot per CARD
-                // until 2026-08-24, which cost cards x images. No
-                // `AssetRegistry` available at this boundary, so variant kinds
-                // stay empty (the synthesizer still wraps raster originals in
-                // `<picture>` via `is_raster_original` by file extension).
-                //
-                // BUG 6: the snapshot indexes keys under the build's REAL
-                // `dir_overrides` (carried by the lookup), not an empty map.
-                // Covers arrive under the OVERRIDE slug (e.g. a CJK folder
-                // mapped to a custom English slug); an empty map would index
-                // only source-key + base-slug, so the override-slug probe would
-                // miss and re-fire the 800x600 fallback for card/folder covers.
-                let assets = lookup.asset_snapshot();
-                let img_html = moss_core::render::image::synthesize_image_html(
-                    url,
-                    alt,
-                    assets,
-                    moss_core::render::image::ImageContext::FolderCardCover,
-                    &opts,
-                );
-                return format!(r#"<div class="{css_class}">{img_html}</div>"#);
-            }
-            let url = html_escape(url);
-            let loading_attr = if loading == Loading::Lazy { "" } else { loading.attrs() };
-            format!(r#"<div class="{css_class}"><img src="{url}" alt="{alt_escaped}"{loading_attr}{style_attr} /></div>"#)
-        }
-        CoverType::Video => {
-            let src = html_escape(&moss_core::asset_paths::to_mp4(url));
-            let poster = html_escape(&moss_core::asset_paths::to_thumb(url));
-            // keep in sync with moss_core::render::video::AMBIENT_PLAYBACK_ATTRS
-            // (covers intentionally omit `autoplay` — they are hover-played, not auto)
-            format!(
-                r#"<div class="{css_class}"><video src="{src}"{style_attr} muted loop playsinline preload="metadata"></video><img src="{poster}" alt="{alt_escaped}" class="cover-thumb"{style_attr} /></div>"#
-            )
-        }
-        CoverType::Iframe => {
-            let url = html_escape(url);
-            // Defense-in-depth: carry `position:relative` inline alongside the
-            // overlay so it anchors correctly even if a caller's CSS class
-            // forgets to set a positioning context. Every current caller's CSS
-            // (.moss-card-cover, .moss-collection-cover) already sets position:relative, so the
-            // inline style is redundant for them — but cheap insurance for new
-            // call sites and keeps existing HTML snapshots byte-stable.
-            let (container_style, overlay) = if block_interaction {
-                (
-                    r#" style="position:relative""#,
-                    r#"<div style="position:absolute;inset:0"></div>"#,
-                )
-            } else {
-                ("", "")
-            };
-            format!(
-                r#"<div class="{css_class}"{container_style}><iframe src="{url}" title="{alt_escaped}" loading="lazy" sandbox="allow-scripts"></iframe>{overlay}</div>"#
-            )
-        }
-    }
-}
-
+pub use moss_core::page::card::{detect_cover_type, CoverType};
+pub use moss_core::render::cards::cover_html;
 pub(crate) use moss_core::media::html_escape;
+
+/// The build's [`CardPictures`](moss_core::render::cards::CardPictures).
+/// `root` is the project root a cover's colour is read under; `None` disables
+/// file reads, so an image cover then colours only through its `|color=`.
+pub struct BuildPictures<'a> {
+    pub root: Option<&'a Path>,
+    pub lookup: Option<&'a MediaDimensionLookup>,
+}
+
+impl moss_core::render::cards::CardPictures for BuildPictures<'_> {
+    fn assets(&self) -> Option<&moss_core::asset_snapshot::AssetSnapshot> {
+        self.lookup.map(MediaDimensionLookup::asset_snapshot)
+    }
+    fn card_color(&self, cover: Option<&str>, cover_type: Option<CoverType>) -> Option<String> {
+        crate::build::components::color_extract::resolve_card_color(cover, cover_type, self.root, self.lookup)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moss_core::render::image::Loading;
 
-    // ── detect_cover_type ────────────────────────────────────────
-
-    #[test]
-    fn detect_image_extensions() {
-        for ext in &["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"] {
-            let url = format!("photo.{ext}");
-            assert_eq!(detect_cover_type(&url, None), CoverType::Image, "ext: {ext}");
-        }
-    }
-
-    #[test]
-    fn detect_video_extensions() {
-        for ext in &["mp4", "webm", "mov", "m4v"] {
-            let url = format!("clip.{ext}");
-            assert_eq!(detect_cover_type(&url, None), CoverType::Video, "ext: {ext}");
-        }
-    }
-
-    #[test]
-    fn detect_iframe_extensions() {
-        for ext in &["html", "htm"] {
-            let url = format!("widget.{ext}");
-            assert_eq!(detect_cover_type(&url, None), CoverType::Iframe, "ext: {ext}");
-        }
-    }
-
-    #[test]
-    fn detect_unknown_defaults_to_image() {
-        assert_eq!(detect_cover_type("https://example.com/thing", None), CoverType::Image);
-        assert_eq!(detect_cover_type("no-extension", None), CoverType::Image);
-    }
-
-    #[test]
-    fn detect_case_insensitive() {
-        assert_eq!(detect_cover_type("photo.JPG", None), CoverType::Image);
-        assert_eq!(detect_cover_type("clip.MP4", None), CoverType::Video);
-    }
-
-    #[test]
-    fn detect_strips_query_and_fragment() {
-        assert_eq!(detect_cover_type("video.mp4?t=10", None), CoverType::Video);
-        assert_eq!(detect_cover_type("photo.png#section", None), CoverType::Image);
-    }
-
-    #[test]
-    fn explicit_override_takes_priority() {
-        assert_eq!(detect_cover_type("photo.png", Some("video")), CoverType::Video);
-        assert_eq!(detect_cover_type("clip.mp4", Some("iframe")), CoverType::Iframe);
-        assert_eq!(detect_cover_type("widget.html", Some("image")), CoverType::Image);
-    }
-
-    #[test]
-    fn explicit_override_case_insensitive() {
-        assert_eq!(detect_cover_type("x", Some("Video")), CoverType::Video);
-        assert_eq!(detect_cover_type("x", Some("IFRAME")), CoverType::Iframe);
-    }
-
-    #[test]
-    fn explicit_unknown_defaults_to_image() {
-        assert_eq!(detect_cover_type("x", Some("something")), CoverType::Image);
-    }
-
-    // ── render_cover_html ────────────────────────────────────────
-
-    use moss_core::media::{Fit, MediaAttrs, Position};
-
-    fn empty_attrs() -> MediaAttrs {
-        MediaAttrs {
-            fit: None,
-            position: None,
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn render_image() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert_eq!(
-            html,
-            r#"<div class="cover"><img src="photo.jpg" alt="A photo" /></div>"#
-        );
-    }
-
-    #[test]
-    fn render_video() {
-        let html = render_cover_html("clip.mp4", CoverType::Video, "A clip", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert_eq!(
-            html,
-            r#"<div class="cover"><video src="clip.mp4" muted loop playsinline preload="metadata"></video><img src="clip.thumb.jpg" alt="A clip" class="cover-thumb" /></div>"#
-        );
-    }
-
-    #[test]
-    fn render_iframe() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
-        assert_eq!(
-            html,
-            r#"<div class="cover" style="position:relative"><iframe src="widget.html" title="Widget" loading="lazy" sandbox="allow-scripts"></iframe><div style="position:absolute;inset:0"></div></div>"#
-        );
-    }
-
-    #[test]
-    fn render_iframe_has_title_attribute() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "My Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
-        assert!(
-            html.contains(r#"title="My Widget""#),
-            "Iframe should have title attribute for accessibility. Got: {}",
-            html
-        );
-    }
-
-    #[test]
-    fn render_iframe_escapes_title() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "A <script> & \"test\"", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
-        assert!(
-            html.contains(r#"title="A &lt;script&gt; &amp; &quot;test&quot;""#),
-            "Iframe title should be HTML-escaped. Got: {}",
-            html
-        );
-    }
-
-    #[test]
-    fn a_lazy_cover_without_a_manifest_carries_no_loading_attribute() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(!html.contains("loading="), "Default image should not have loading attr. Got: {}", html);
-    }
-
-    #[test]
-    fn render_escapes_html_in_url() {
-        let html = render_cover_html("x.jpg?a=1&b=2", CoverType::Image, "alt", "c", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(html.contains("a=1&amp;b=2"));
-    }
-
-    #[test]
-    fn render_escapes_html_in_alt() {
-        let html = render_cover_html("x.jpg", CoverType::Image, "<script>", "c", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(html.contains("&lt;script&gt;"));
-    }
-
-    #[test]
-    fn render_escapes_quotes_in_url() {
-        let html = render_cover_html(r#"x"y.jpg"#, CoverType::Image, "alt", "c", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(html.contains("x&quot;y.jpg"));
-    }
 
     // ── BUG 6: cover under a dir-override resolves real dims ─────
 
@@ -335,17 +62,17 @@ mod tests {
         let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None, &Default::default());
 
         // The emitter resolves the cover to the OVERRIDE slug.
-        let html = render_cover_html(
-            "assets/euro/e-006.jpg",
-            CoverType::Image,
-            "alt",
-            "cover",
-            &empty_attrs(),
-            false,
-            Some(&lookup),
-            Loading::Lazy,
-            None,
-        );
+        let html = cover_html(
+                "assets/euro/e-006.jpg",
+                CoverType::Image,
+                "alt",
+                "cover",
+                &Default::default(),
+                false,
+                Some(&lookup).map(|l| l.asset_snapshot()),
+                Loading::Lazy,
+                None,
+            );
         assert!(
             html.contains(r#"width="4515""#) && html.contains(r#"height="6158""#),
             "override-slug cover must carry real dims, got: {}", html
@@ -354,120 +81,5 @@ mod tests {
             !(html.contains(r#"width="800""#) && html.contains(r#"height="600""#)),
             "800x600 fallback must NOT fire for a dir-override cover, got: {}", html
         );
-    }
-
-    // ── render_cover_html with MediaAttrs ───────────────────────
-
-    #[test]
-    fn render_image_with_position_only() {
-        let attrs = MediaAttrs {
-            fit: None,
-            position: Some(Position::Left),
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
-        assert!(html.contains(r#"style="object-position:left""#), "Got: {}", html);
-        assert!(html.contains(r#"<img src="photo.jpg""#));
-    }
-
-    #[test]
-    fn render_image_with_fit_only() {
-        let attrs = MediaAttrs {
-            fit: Some(Fit::Contain),
-            position: None,
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
-        assert!(html.contains(r#"style="object-fit:contain""#), "Got: {}", html);
-    }
-
-    #[test]
-    fn render_image_with_both_fit_and_position() {
-        let attrs = MediaAttrs {
-            fit: Some(Fit::Contain),
-            position: Some(Position::Left),
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
-        assert!(html.contains(r#"style="object-fit:contain;object-position:left""#), "Got: {}", html);
-    }
-
-    #[test]
-    fn render_image_empty_attrs_no_style() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(!html.contains("style="), "Empty attrs should not add style. Got: {}", html);
-    }
-
-    #[test]
-    fn render_video_with_attrs() {
-        let attrs = MediaAttrs {
-            fit: None,
-            position: Some(Position::Top),
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        };
-        let html = render_cover_html("clip.mp4", CoverType::Video, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
-        assert!(html.contains(r#"<video src="clip.mp4" style="object-position:top""#), "Got: {}", html);
-        // Poster thumbnail should also get the same style
-        assert!(html.contains(r#"class="cover-thumb" style="object-position:top""#), "Poster thumb should get style. Got: {}", html);
-    }
-
-    #[test]
-    fn render_iframe_ignores_attrs() {
-        let attrs = MediaAttrs {
-            fit: Some(Fit::Cover),
-            position: Some(Position::Center),
-            align: None,
-            color: None,
-            class_names: Vec::new(),
-            extra_attrs: std::collections::BTreeMap::new(),
-        };
-        let html = render_cover_html("widget.html", CoverType::Iframe, "alt", "cover", &attrs, true, None, Loading::Lazy, None);
-        // Iframe should NOT have object-fit/object-position
-        assert!(!html.contains("object-fit"), "Iframe should ignore media attrs. Got: {}", html);
-        assert!(!html.contains("object-position"), "Iframe should ignore media attrs. Got: {}", html);
-    }
-
-    // ── block_interaction ─────────────────────────────────────────
-
-    #[test]
-    fn render_iframe_blocked() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
-        assert!(
-            html.contains(r#"<div style="position:absolute;inset:0"></div>"#),
-            "block_interaction=true should emit overlay. Got: {}", html
-        );
-    }
-
-    #[test]
-    fn render_iframe_interactive() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
-        assert!(
-            !html.contains(r#"position:absolute"#),
-            "block_interaction=false should NOT emit overlay. Got: {}", html
-        );
-        // iframe itself should still be present
-        assert!(html.contains("<iframe"), "iframe element should still render. Got: {}", html);
-    }
-
-    // ── CoverType::resolve ───────────────────────────────────────
-
-    #[test]
-    fn cover_type_resolve() {
-        assert_eq!(CoverType::resolve(Some("photo.jpg"), None), Some(CoverType::Image));
-        assert_eq!(CoverType::resolve(Some("clip.mp4"), Some(CoverType::Video)), Some(CoverType::Video));
-        assert_eq!(CoverType::resolve(None, Some(CoverType::Video)), None);
-        assert_eq!(CoverType::resolve(None, None), None);
     }
 }

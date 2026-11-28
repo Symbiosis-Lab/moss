@@ -100,8 +100,8 @@ impl UrlIndex for ArticleMapIndex {
 pub struct ChildCounts {
     /// `depth:direct` — Articles AND sub-folder index pages directly under it.
     pub direct: u32,
-    /// `depth:all` — Articles at any depth beneath it (folder pages excluded,
-    /// `crate::page_kind`: `is_listable_at_depth_all` is Article-only).
+    /// `depth:all` — Articles at any depth beneath it, folder pages excluded
+    /// as a flattened listing excludes them.
     pub descendant: u32,
 }
 

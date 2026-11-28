@@ -1,17 +1,16 @@
 #!/usr/bin/env node
-// The released-contract list records what releases shipped, so only a release
-// cut may change it, and then only by adding lines. Run by the pre-push hook
-// with git's pre-push lines on stdin (`<local ref> <sha> <remote ref> <sha>`),
-// or by hand with a commit: `node scripts/check-released-contract.mjs HEAD`.
+// The released-contract list and the content lock record what releases shipped, so only a release cut may
+// change them, and then only by adding lines. Run by the pre-push hook with git's pre-push lines on stdin
+// (`<local ref> <sha> <remote ref> <sha>`), or by hand with a commit: `node scripts/check-released-contract.mjs HEAD`.
 //
-// On a push to a `release/v*` branch the file may grow; everywhere else it
+// On a push to a `release/v*` branch each file may grow; everywhere else it
 // must match the newest release tag the commit contains. Before any tag
 // carries the file, there is nothing to compare against and the check passes.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const FILES = ["crates/moss-core/src/contract/released-contract.txt"];
+const FILES = ["crates/moss-core/src/contract/released-contract.txt", "crates/moss-build/tests/content.lock"];
 
 const git = (...args) => {
   try {

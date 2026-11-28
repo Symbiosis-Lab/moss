@@ -1024,6 +1024,8 @@ panel, as the author would paste it: moss runs its own script there with
 this data, never the plugin's code, and only on a page of one of the
 plugin's declared domains.
 
+With no parts and no title it waits for editor.body and changes nothing, so a plugin can use it to check that an element is there.
+
 Only in the moss app; elsewhere it rejects.
 
 #### Parameters

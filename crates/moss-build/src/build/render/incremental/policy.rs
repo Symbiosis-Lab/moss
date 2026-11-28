@@ -6,10 +6,8 @@
 //! environment variable. Mode differences live in
 //! the Config, not as branching inside the pipeline.
 //!
-//! It ships with exactly **one** field. Fields are added when the elision they
-//! gate lands, not in advance — the target architecture's abstraction gate wants two real
-//! callers, and a bag of bits for not-yet-existent elisions is predicting, not
-//! compressing.
+//! Fields are added when the elision they gate lands, not in advance: a bag of
+//! bits for elisions that do not exist yet is predicting, not compressing.
 
 use crate::build::render::config::SiteConfig;
 
@@ -26,6 +24,10 @@ pub struct IncrementalPolicy {
     /// the render skip *and* for the listing groups: with it false,
     /// the verdict is `Full(SkipDisabled)` and nothing below runs.
     pub skip_unchanged_renders: bool,
+    /// May a page that would render only because an image it shows has a new
+    /// placeholder wait for the settled build? See
+    /// `IncrementalGates::defer_image_placeholders`.
+    pub defer_image_placeholders: bool,
 }
 
 impl IncrementalPolicy {
@@ -37,6 +39,9 @@ impl IncrementalPolicy {
     /// `build/render/` instead of adding a second parameter to every layer
     /// between `pipeline::build_inner` and `generate_blocking_content`.
     pub fn resolve(site_config: &SiteConfig) -> Self {
-        Self { skip_unchanged_renders: site_config.incremental.render_skip }
+        Self {
+            skip_unchanged_renders: site_config.incremental.render_skip,
+            defer_image_placeholders: site_config.incremental.defer_image_placeholders,
+        }
     }
 }

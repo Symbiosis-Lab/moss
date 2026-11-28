@@ -125,14 +125,16 @@ pub trait DeploySink: Send + Sync {
     /// `window.drain()`) send the same shape; the difference is only *when*.
     fn upload_sample(&self, st: &UploadProgressState) {
         use std::sync::atomic::Ordering;
-        let done = st.completed_files.load(Ordering::Relaxed);
+        // A deploy the server lost is opened again and its files sent again,
+        // so the counts can pass the totals they were set against.
+        let done = st.completed_files.load(Ordering::Relaxed).min(st.total_files);
         self.deploy_progress(DeployProgress {
             stage: DeployStage::Uploading,
             current: done,
             total: st.total_files,
             message: format!("Uploading ({}/{})", done, st.total_files),
             // Widen to f64 for a clean TS `number` (see the struct field note).
-            bytes_uploaded: Some(st.bytes_uploaded.load(Ordering::Relaxed) as f64),
+            bytes_uploaded: Some(st.bytes_uploaded.load(Ordering::Relaxed).min(st.bytes_total) as f64),
             bytes_total: Some(st.bytes_total as f64),
             removing: Some(st.removing),
             current_file: st.largest_in_flight(),
@@ -438,5 +440,22 @@ mod tests {
         assert_eq!(events[1].bytes_uploaded, Some(1024.0));
         assert_eq!(events[1].removing, Some(1));
         assert_eq!(events[1].current_file.as_deref(), Some("assets/video/tour.mp4"));
+    }
+
+    /// Files sent again after a reopen never show past the totals.
+    #[test]
+    fn a_sample_never_passes_its_totals() {
+        let sink = RecordingSink::default();
+        let st = UploadProgressState::new(4096, 2, 0);
+        for _ in 0..2 {
+            for path in ["a.html", "b.html"] {
+                st.begin_file(path, 2048);
+                st.credit_bytes(2048);
+                st.finish_file(path);
+            }
+        }
+        sink.upload_sample(&st);
+        let events = sink.take();
+        assert_eq!((events[0].current, events[0].bytes_uploaded), (2, Some(4096.0)));
     }
 }

@@ -40,10 +40,7 @@ pub use moss_core::frontmatter_typed::{
 /// authoritative warning surface is `process_markdown_file`.
 pub fn parse_typed_frontmatter(content: &str) -> FrontMatter {
     let parsed = moss_core::frontmatter::parse(content);
-    let mut mapping = serde_yaml::Mapping::new();
-    for (k, v) in &parsed.frontmatter {
-        mapping.insert(serde_yaml::Value::String(k.clone()), v.clone());
-    }
+    let mapping = parsed.frontmatter.iter().map(|(k, v)| (serde_yaml::Value::String(k.clone()), v.clone())).collect();
     moss_core::frontmatter_typed::project_typed(&mapping).0
 }
 

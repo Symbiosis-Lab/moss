@@ -8,7 +8,7 @@
  * toggles actually land — is visible in any built site at a narrow window.
  */
 
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 
 import { initNavSplit, lineCount, oneRowFits, trailSize } from "../nav/nav-split";
 
@@ -31,22 +31,25 @@ beforeEach(() => {
 });
 
 describe("oneRowFits — the split decision", () => {
-  const row = { name: 180, links: 300, icons: 108, outerGap: 24, innerGap: 32 };
+  const row = { name: 180, links: 300, icons: 108, gap: 28, iconsGap: 28 };
 
   test("splits exactly when name + gaps + links + icons exceed the row", () => {
-    // 180+24+300+32+108 = 644.
+    // 180+28+300+28+108 = 644.
     expect(oneRowFits({ ...row, container: 644 })).toBe(true);
     expect(oneRowFits({ ...row, container: 643.5 })).toBe(false);
   });
 
   test("a row over by a fraction of a pixel wraps, so it does not fit", () => {
     // A trail page at 412px: 206.09 + 8 + 58.19 + 8 + 100.41 = 380.69 into 380.
-    expect(oneRowFits({ container: 380, name: 206.09, outerGap: 8, links: 58.19, innerGap: 8, icons: 100.41 })).toBe(false);
+    expect(oneRowFits({ container: 380, name: 206.09, gap: 8, iconsGap: 8, links: 58.19, icons: 100.41 })).toBe(false);
   });
 
   test("a wider toggle cluster tips the same row over", () => {
     expect(oneRowFits({ ...row, container: 644, icons: 150 })).toBe(false);
     expect(oneRowFits({ ...row, container: 644, icons: 0 })).toBe(true);
+    // A themed masthead's toggles sit inside .nav-right, after its own wider gap.
+    expect(oneRowFits({ ...row, container: 644, iconsGap: 36 })).toBe(false);
+    expect(oneRowFits({ ...row, container: 652, iconsGap: 36 })).toBe(true);
   });
 });
 
@@ -124,6 +127,27 @@ describe("initNavSplit — which mastheads it manages", () => {
     sizes(document.querySelector(".nav-icons")!, 36, 36);
     initNavSplit();
     expect(navContent().hasAttribute("data-nav-split")).toBe(false);
+  });
+
+  test("a themed trail beside the menu button counts the toggles' own gap", () => {
+    renderMasthead(
+      `<a href="/" class="site-name" data-trail-crumb>My Site</a>
+       <span class="breadcrumb-separator">/</span>
+       <a href="/a/" class="breadcrumb-segment" data-trail-crumb>A</a>`,
+      `<a href="/blog/">Blog</a>`,
+    );
+    navContent().style.columnGap = "20px";
+    document.querySelector<HTMLElement>(".nav-right")!.style.columnGap = "10px";
+    document.querySelector<HTMLElement>(".mobile-menu-button")!.style.display = "block";
+    const widths: Record<string, number> = { "nav-content": 375, "nav-left": 200, "mobile-menu-button": 40, "nav-icons": 100 };
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const width = Object.entries(widths).find(([cls]) => this.classList.contains(cls))?.[1] ?? 0;
+      return { width, height: 30 } as DOMRect;
+    });
+    // 200 + 20 + 40 + 10 + 100 = 370 fits in 375; with the row's 20 before the toggles it would not.
+    initNavSplit();
+    rect.mockRestore();
+    expect(navContent().hasAttribute("data-nav-split")).toBe(true);
   });
 
   test("in jsdom every width is 0, so a plain-name masthead fits and stays unsplit", () => {

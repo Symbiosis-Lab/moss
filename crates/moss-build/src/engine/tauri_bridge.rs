@@ -12,7 +12,7 @@ use rquickjs::{
     prelude::Func,
     Ctx, Function, Object, Result,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -97,6 +97,7 @@ pub fn install_event<'js>(
     hub: Rc<RefCell<EventHub>>,
     bridge: super::host_fns::DispatchBridge,
     plugin: &str,
+    ended: Rc<Cell<bool>>,
 ) -> Result<()> {
     let event = Object::new(ctx.clone())?;
 
@@ -110,6 +111,7 @@ pub fn install_event<'js>(
     // `Value<'js>` invariance reject it.
     let app_emit = app.clone();
     let bridge_emit = bridge.clone();
+    let ended_emit = ended.clone();
     event.set(
         "emit",
         Func::from(Async(
@@ -121,7 +123,11 @@ pub fn install_event<'js>(
                     .0
                     .and_then(|v| ctx.json_stringify(v).ok().flatten())
                     .and_then(|s| s.to_string().ok());
+                let ended = ended_emit.get();
                 async move {
+                    if ended {
+                        return Err(super::web_shims::run_ended(&ctx));
+                    }
                     if name == "plugin-message" {
                         // Progress/log heartbeats MUST reach the keyed sink map →
                         // route_signal → PluginHookState activity stamps, or quickjs
@@ -159,11 +165,18 @@ pub fn install_event<'js>(
                 let hub = hub_listen.clone();
                 let bridge = bridge_listen.clone();
                 let plugin = plugin_listen.clone();
-                let persistent = rquickjs::Persistent::save(&ctx, handler);
-                let id = hub.borrow_mut().add(name.clone(), persistent);
                 let host_name = name.clone();
-                let unlisten = make_unlisten(ctx, hub, name, id);
+                // Nothing is saved for an ended run: its handler would root that
+                // Context's objects in a hub nothing clears again.
+                let unlisten = (!ended.get()).then(|| {
+                    let persistent = rquickjs::Persistent::save(&ctx, handler);
+                    let id = hub.borrow_mut().add(name.clone(), persistent);
+                    make_unlisten(ctx.clone(), hub, name, id)
+                });
                 async move {
+                    let Some(unlisten) = unlisten else {
+                        return Err(super::web_shims::run_ended(&ctx));
+                    };
                     // Host-side bridge registration: ONE app.listen per (plugin, name),
                     // forwarding the Tauri bus into engine.deliver_event (Task 11b).
                     let _ = bridge.call("__engine_listen__".to_string(),
@@ -183,7 +196,8 @@ pub fn install_event<'js>(
 //
 // Consumed by the host-side delivery path (engine `Job::DeliverEvent`) + the
 // acceptance gate.
-pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, name: &str, payload_json: &str) -> Result<()> {
+/// Whether a listener failed with moss's interrupt.
+pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, plugin: &str, name: &str, payload_json: &str) -> Result<bool> {
     // Snapshot the callbacks for `name` and DROP the borrow before invoking any —
     // a handler may call back into listen()/unlisten and re-borrow the hub.
     // `restore` CONSUMES the Persistent, so clone the stored ones (Function<'static>
@@ -194,6 +208,7 @@ pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, name: &str, payload_j
         .get(name)
         .cloned()
         .unwrap_or_default();
+    let mut stopped = false;
     for (_, cb) in cbs {
         let one = (|| -> Result<()> {
             let f: Function = cb.restore(ctx)?;
@@ -205,11 +220,13 @@ pub fn deliver(ctx: &Ctx<'_>, hub: &Rc<RefCell<EventHub>>, name: &str, payload_j
         })();
         if let Err(e) = one {
             // Clear any pending exception so the NEXT listener runs clean, then log.
-            let _ = ctx.catch();
-            log::warn!(target: "plugin", "event '{name}' listener failed: {e}");
+            let thrown = ctx.catch();
+            stopped |= super::budgets::is_interrupt(&thrown);
+            let why = thrown.as_exception().and_then(|x| x.message()).unwrap_or_else(|| e.to_string());
+            log::warn!(target: "plugin", "{plugin}: event '{name}' listener failed: {why}");
         }
     }
-    Ok(())
+    Ok(stopped)
 }
 
 // The emit-side helpers — `emit_to_panel`, `plugin_toast_payload`, the
@@ -234,7 +251,7 @@ mod tests {
                     ctx.globals().set("__seen", false).unwrap();
                     let handler: Function = ctx.eval("(e) => { globalThis.__seen = e.payload.reason === 'user'; }").unwrap();
                     hub.borrow_mut().add("browser-closed".into(), rquickjs::Persistent::save(&ctx, handler));
-                    deliver(&ctx, &hub, "browser-closed", r#"{"reason":"user"}"#).unwrap();
+                    deliver(&ctx, &hub, "p", "browser-closed", r#"{"reason":"user"}"#).unwrap();
                     let seen: bool = ctx.eval("globalThis.__seen").unwrap();
                     assert!(seen);
                 }).await;
@@ -253,9 +270,9 @@ mod tests {
                 ctx.globals().set("__hits", 0).unwrap();
                 let handler: Function = ctx.eval("() => { globalThis.__hits += 1; }").unwrap();
                 let id = hub.borrow_mut().add("browser-closed".into(), rquickjs::Persistent::save(&ctx, handler));
-                deliver(&ctx, &hub, "browser-closed", "null").unwrap();
+                deliver(&ctx, &hub, "p", "browser-closed", "null").unwrap();
                 hub.borrow_mut().remove("browser-closed", id);
-                deliver(&ctx, &hub, "browser-closed", "null").unwrap();
+                deliver(&ctx, &hub, "p", "browser-closed", "null").unwrap();
                 let hits: i32 = ctx.eval("globalThis.__hits").unwrap();
                 assert_eq!(hits, 1, "second deliver must not reach the removed listener");
             }).await;
@@ -277,7 +294,7 @@ mod tests {
                 hub.borrow_mut().add("e".into(), rquickjs::Persistent::save(&ctx, good));
                 // Browser semantics: a throwing handler must not stop later handlers,
                 // and deliver itself must not return Err for a handler throw.
-                deliver(&ctx, &hub, "e", "null").unwrap();
+                deliver(&ctx, &hub, "p", "e", "null").unwrap();
                 let second: bool = ctx.eval("globalThis.__second").unwrap();
                 assert!(second, "the second listener must fire despite the first throwing");
             }).await;

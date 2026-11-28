@@ -6,7 +6,7 @@
  * Fixture: PLACE_DOT_LINKS_GATE (tests/e2e/helpers/gate-sites.ts). Run via:
  *   npx playwright test -c playwright/place-dot-links.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
 
 const LOCATOR_LINK = ".moss-place-locator .moss-place-map a";
 
@@ -87,7 +87,7 @@ test("Enter on the focused dot opens its place page, whose own dot is not a link
 for (const path of ["places/", "nearby/", "maps/"]) {
   test(`static map targets do not overlap at 390px: ${path}`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto(new URL(path, test.info().project.use.baseURL).href);
     const map = page.locator(".moss-place-map").first();
     await map.scrollIntoViewIfNeeded();

@@ -628,13 +628,13 @@ mod tests {
     /// straight through in `resolve_for_project`.
     #[test]
     fn a_hosted_address_holds_only_in_the_environment_that_gave_it() {
-        let dir = folder_recording("https://her-blog.mosspub.page");
-        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        let dir = folder_recording("https://her-blog.mosspub.com");
+        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.com");
         assert_eq!(built_for(&dir, HostingEnvironment::Staging), "https://her-blog.staging.mosspub.com");
 
         let dir = folder_recording("https://her-blog-test.mosspub.page");
         assert_eq!(built_for(&dir, HostingEnvironment::Staging), "https://her-blog-test.mosspub.page");
-        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.com");
+        assert_eq!(built_for(&dir, HostingEnvironment::Production), "https://her-blog.mosspub.page");
     }
 
     /// A folder with a site id that publishes through a deploy plugin: the

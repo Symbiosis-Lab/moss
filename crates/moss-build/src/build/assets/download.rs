@@ -185,13 +185,28 @@ pub fn verify_sha256(data: &[u8], expected_hex: &str) -> Result<(), String> {
 /// or if the filesystem cannot be queried.
 #[cfg(unix)]
 pub fn check_disk_space(path: &Path, required_bytes: u64) -> Result<(), String> {
+    let (available, _) = volume_space(path)?;
+    if available < required_bytes {
+        let available_mb = available / (1024 * 1024);
+        let required_mb = required_bytes / (1024 * 1024);
+        Err(format!(
+            "Insufficient disk space: {} MB available, {} MB required",
+            available_mb, required_mb,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// The bytes free to an unprivileged writer, and the volume's size, on the
+/// volume holding `path` (or its nearest existing ancestor).
+#[cfg(unix)]
+pub fn volume_space(path: &Path) -> Result<(u64, u64), String> {
     use std::ffi::CString;
     use std::mem::MaybeUninit;
-
-    // Find an existing ancestor directory to stat.
-    let check_path = find_existing_ancestor(path)?;
-
     use std::os::unix::ffi::OsStrExt;
+
+    let check_path = find_existing_ancestor(path)?;
     let c_path = CString::new(check_path.as_os_str().as_bytes())
         .map_err(|e| format!("Invalid path for statvfs: {}", e))?;
 
@@ -208,25 +223,16 @@ pub fn check_disk_space(path: &Path, required_bytes: u64) -> Result<(), String> 
             std::io::Error::last_os_error(),
         ));
     }
-
     // SAFETY: statvfs returned 0 (success), guaranteeing the struct was fully initialized.
     let stat = unsafe { stat.assume_init() };
-    // Available blocks for non-privileged users * fragment size.
-    // Casts are intentional for cross-platform portability (f_bavail/f_frsize
-    // types vary across Unix targets).
+    // f_bavail/f_blocks/f_frsize widths vary across Unix targets.
     #[allow(clippy::unnecessary_cast)]
-    let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+    Ok((stat.f_bavail as u64 * stat.f_frsize as u64, stat.f_blocks as u64 * stat.f_frsize as u64))
+}
 
-    if available < required_bytes {
-        let available_mb = available / (1024 * 1024);
-        let required_mb = required_bytes / (1024 * 1024);
-        Err(format!(
-            "Insufficient disk space: {} MB available, {} MB required",
-            available_mb, required_mb,
-        ))
-    } else {
-        Ok(())
-    }
+#[cfg(not(unix))]
+pub fn volume_space(_path: &Path) -> Result<(u64, u64), String> {
+    Err("disk space is not measured on this platform".into())
 }
 
 /// Fallback for non-Unix platforms (Windows).

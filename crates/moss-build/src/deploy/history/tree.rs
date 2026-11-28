@@ -44,6 +44,17 @@ impl SourceTree {
         Self { sources: sealed.sources().clone(), generation_id: sealed.generation_id().to_string() }
     }
 
+    /// The tree with each listed source's hash replaced: the bytes a publish
+    /// wrote back (its note ID stamp) are the ones kept and later compared.
+    pub fn with_hashes(mut self, hashes: &HashMap<String, String>) -> Self {
+        for (path, hash) in hashes {
+            if let Some(meta) = self.sources.get_mut(path) {
+                meta.hash.clone_from(hash);
+            }
+        }
+        self
+    }
+
     /// The tree as the disk holds it now. A changed file no build has recorded
     /// is downloaded first if it is in the cloud; one still in the cloud after
     /// the wait, or one that cannot be read, refuses the tree with its name,

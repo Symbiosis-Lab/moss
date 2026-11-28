@@ -23,6 +23,7 @@
 //! [`ParsedDocument`]: crate::build::types::ParsedDocument
 
 use serde::{Deserialize, Serialize};
+use moss_core::page::site_page::SitePage;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -158,7 +159,7 @@ fn resolved_values(
     }
     values.insert("layout".into(), json!(layout));
     values.insert("lang".into(), json!(lang));
-    values.insert("nav".into(), json!(crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders)));
+    values.insert("nav".into(), json!(moss_core::page::nav::is_nav_bar_page(doc, has_content_folders)));
     values.insert("typesetting".into(), json!(typesetting.unwrap_or("horizontal")));
     values.insert("listed".into(), json!(doc.listed != Some(false)));
     values.insert("children".into(), json!(lists));
@@ -205,7 +206,7 @@ fn hidden_reasons(
         reasons.push("hidden-folder".to_string());
     }
     if !doc.slot_only
-        && crate::build::components::nav::is_listing_nav_item(doc, has_content_folders)
+        && moss_core::page::listing::is_listing_nav_item(doc, has_content_folders)
     {
         // The one hiding mechanism with no frontmatter behind it: in a site
         // that has content folders, every root-level non-index file is a nav
@@ -303,6 +304,11 @@ pub fn page_facts_for_source(project_root: &Path, rel_path: &str) -> PageFacts {
     row_for_source(project_root, rel_path).map(|r| PageFacts { position: r.position, auto: r.resolved }).unwrap_or_default()
 }
 
+/// The uid the last build gave the source at `rel_path`, which keys its comments.
+pub fn page_uid_for_source(project_root: &Path, rel_path: &str) -> Option<String> {
+    row_for_source(project_root, rel_path).and_then(|r| r.uid)
+}
+
 /// The last build's row for the source at `rel_path`, matched as the content
 /// graph matches paths.
 fn row_for_source(project_root: &Path, rel_path: &str) -> Option<InventoryEntry> {
@@ -350,6 +356,7 @@ pub fn page_status_for_source(
     use crate::build::cloud_readiness::{probe_input, Found};
     use crate::build::manifest::published_record::load_for_no_wait;
     use crate::syndication::record::{CopyRecord, Records, State};
+    use std::collections::BTreeSet;
     /// What the last publish to the current host knew of the page.
     enum Live {
         Unknown(String),
@@ -394,13 +401,18 @@ pub fn page_status_for_source(
     };
     let records = Records::in_vault(&paths);
     let mut copies = BTreeMap::new();
-    for (uid, channel) in row.uid.iter().flat_map(|uid| row.channels.iter().map(move |c| (uid, c))) {
-        match records.get_no_wait(uid, channel) {
-            Ok(Some(CopyRecord { state: State::Posted, remote: Some(remote), .. })) => {
-                copies.insert(channel.clone(), remote.url);
+    // A copy already out stays out when the page stops naming its channel; a named channel is read even without a
+    // record file in sight, so one still in the cloud is reported as unknown.
+    for uid in row.uid.iter() {
+        let channels: BTreeSet<String> = records.channels_of(uid).into_iter().chain(row.channels.iter().cloned()).collect();
+        for channel in channels {
+            match records.get_no_wait(uid, &channel) {
+                Ok(Some(CopyRecord { state: State::Posted, remote: Some(remote), .. })) => {
+                    copies.insert(channel, remote.url);
+                }
+                Ok(_) => {}
+                Err(e) => unknown.push(format!("{channel} copy unknown: {e}")),
             }
-            Ok(_) => {}
-            Err(e) => unknown.push(format!("{channel} copy unknown: {e}")),
         }
     }
     let status = PageStatus {
@@ -623,6 +635,18 @@ mod tests {
         // Against another host, nothing of it is live there.
         let (page, _) = status(&dir, "posts/heron.md", Ok(plugin("onionpress"))).unwrap();
         assert_eq!((page.published, page.changed), (Some(false), Some(false)));
+    }
+
+    #[test]
+    fn a_copy_stays_listed_after_the_page_stops_naming_its_channel() {
+        let dir = published_site(b"# Heron\n");
+        let copy = serde_json::json!({"uid": "heron1", "channel": "threads", "state": "posted", "source_path": "posts/heron.md",
+            "url_path": "posts/heron", "remote": {"id": "2", "url": "https://threads.example/post/2"}, "updated_at": "2026-11-20T00:00:00Z"});
+        std::fs::write(dir.path().join(".moss/deploy/copies/heron1.threads.json"), copy.to_string()).unwrap();
+        let (page, unknown) = status(&dir, "posts/heron.md", Ok(moss_site("her-blog"))).unwrap();
+        assert_eq!(page.copies.get("threads").map(String::as_str), Some("https://threads.example/post/2"));
+        assert_eq!(page.channels, ["bluesky", "mastodon"]);
+        assert!(unknown.is_empty(), "{unknown:?}");
     }
 
     #[test]

@@ -7,7 +7,9 @@
 //! under the size the ratchet caps at, and matches how the island reads on
 //! screen — related to the masthead, not part of it.
 
-use super::{BreadcrumbSegment, NavigationBuilder};
+use super::NavigationBuilder;
+use moss_core::page::nav::BreadcrumbSegment;
+use moss_core::page::nav::{fold_more_fragment, SEPARATOR};
 
 /// What the island is for this page, decided once when the builder is set up.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -23,30 +25,6 @@ pub(super) enum IslandShape {
     /// `sections` (a page with no contents list worth one) it carries no
     /// sections button and the script shows its controls alone.
     Pinned { sections: bool },
-}
-
-/// The `…` disclosure a folding breadcrumb trail opens, plus the separator
-/// that follows it — ONE fragment for both trails (masthead and island), so
-/// the two cannot drift. Both ship `hidden`: the fold script
-/// (`breadcrumb-fold.ts`) unhides them only once the trail
-/// has actually had to fold, so with JavaScript off neither exists.
-///
-/// No `aria-haspopup="menu"` and no `role="menu"` on the panel it opens:
-/// both promise arrow-key roving focus, which a popover of plain links does
-/// not implement. Claiming menu semantics and then not honouring them is
-/// worse than not claiming them — a screen-reader user told "menu" presses
-/// ArrowDown and nothing moves. `aria-expanded` already says the button
-/// discloses something, which is the truth here.
-/// The `/` between crumbs, for the masthead and the island alike. Hidden from
-/// assistive technology: the trail's links already say where each level is, and
-/// a reader announcing "slash" between them adds nothing. As a visual delimiter
-/// it is held to non-text contrast (3:1), which `--moss-border-strong` meets.
-pub(super) const SEPARATOR: &str = r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#;
-
-pub(super) fn fold_more_fragment(class: &str, more_label: &str) -> String {
-    format!(
-        r#"<button type="button" class="{class}" hidden aria-expanded="false" aria-label="{more_label}">…</button><span class="breadcrumb-separator" aria-hidden="true" data-trail-more-separator hidden>/</span>"#
-    )
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -92,7 +70,7 @@ impl<'a> NavigationBuilder<'a> {
             // end by position alone, so they are never hidden with the bar.
             let site_name = self.site_name_link_html(&self.home_path(), &self.logo_html());
             let bar = [site_name, if sections { self.sections_button_html() } else { String::new() }];
-            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html());
+            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html(""));
         }
         // `nav` header mode carries no breadcrumb trail — a home segment
         // would reintroduce the brand link this mode exists to drop, in the

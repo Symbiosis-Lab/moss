@@ -14,7 +14,8 @@ use super::NormalizedComment;
 ///
 /// A comment is hidden if the latest *verified* visibility event for its
 /// `(source, id)` is `hide`, OR any ancestor (via `reply_to_id`, same source) is
-/// hidden. "Latest" = max `(seq, ts)`. Unhiding a parent restores only the
+/// hidden, OR it links to a host blocked after its own latest event
+/// ([`resolve_detailed`]). "Latest" = max `(seq, ts)`. Unhiding a parent restores only the
 /// descendants that are not independently hidden. Events not signed by one of
 /// `owners` (the folder's current key and its previous ones,
 /// `Identity::read_trusted_pubkeys`), and `pin`/`unpin` (v1), are ignored.
@@ -26,31 +27,32 @@ pub fn resolve<'a>(
     resolve_detailed(comments, events, owners).0
 }
 
-/// [`resolve`], plus the `(source, id)` of every comment whose own latest
-/// verified event is a hide, as opposed to one hidden only through its parent.
-pub fn resolve_detailed<'a, 'e>(
+/// [`resolve`], plus the `(source, id)` of every comment hidden in its own
+/// right, as opposed to one hidden only through its parent: its own latest
+/// verified event is a hide, or it links to a blocked host and has no unhide
+/// later than that block.
+pub fn resolve_detailed<'a>(
     comments: &'a [NormalizedComment],
-    events: &'e [ModEvent],
+    events: &[ModEvent],
     owners: &[String],
-) -> (Vec<&'a NormalizedComment>, HashSet<(&'e str, &'e str)>) {
-    // Latest verified visibility event per (source, target), ordered by (seq, ts).
-    let mut latest: HashMap<(&'e str, &'e str), &'e ModEvent> = HashMap::new();
-    for e in events {
-        if (e.kind != "hide" && e.kind != "unhide") || !owners.contains(&e.pubkey) || !e.verify(&e.pubkey) {
-            continue;
+) -> (Vec<&'a NormalizedComment>, HashSet<(&'a str, &'a str)>) {
+    let latest = super::link_block::latest_by_target(events, owners, ["hide", "unhide"]);
+    let blocks = super::link_block::active_blocks(events, owners);
+    let hidden_itself = |c: &NormalizedComment| {
+        let own = latest.get(&(c.source.as_str(), c.id.as_str()));
+        if own.is_some_and(|e| e.kind == "hide") {
+            return true;
         }
-        let key = (e.source.as_str(), e.target.as_str());
-        match latest.get(&key) {
-            Some(prev) if (prev.seq, prev.ts) >= (e.seq, e.ts) => {}
-            _ => {
-                latest.insert(key, e);
-            }
-        }
-    }
-    let directly_hidden: HashSet<(&'e str, &'e str)> = latest
+        let unhidden_at = own.map(|e| e.seq);
+        !blocks.is_empty()
+            && super::link_block::comment_hosts(c)
+                .iter()
+                .any(|h| blocks.get(h.as_str()).is_some_and(|seq| unhidden_at.is_none_or(|u| u < *seq)))
+    };
+    let directly_hidden: HashSet<(&'a str, &'a str)> = comments
         .iter()
-        .filter(|(_, e)| e.kind == "hide")
-        .map(|(k, _)| *k)
+        .filter(|c| hidden_itself(c))
+        .map(|c| (c.source.as_str(), c.id.as_str()))
         .collect();
 
     let by_id: HashMap<(&str, &str), &NormalizedComment> = comments

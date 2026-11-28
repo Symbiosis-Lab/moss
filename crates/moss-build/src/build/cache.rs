@@ -52,6 +52,8 @@ pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
+#[cfg(test)]
+pub(crate) use records::RecordRead;
 pub use fit::{Facts, Fit, Need};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
@@ -378,7 +380,7 @@ impl ObjectStore {
     /// when the caller already has bytes in memory — e.g., a small JSON
     /// metadata blob.
     pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
-        let oid = format!("{:x}", Sha256::digest(data));
+        let oid = Self::oid_of(data);
         self.store_routed(&oid, |store| store.store_bytes_in_base(data, &oid))
     }
 
@@ -405,6 +407,11 @@ impl ObjectStore {
         .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
         self.place_pending(oid, &tmp, &dest)
+    }
+
+    /// The oid [`store_bytes`](Self::store_bytes) would give `data`.
+    pub(crate) fn oid_of(data: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(data))
     }
 
     /// Return the on-disk path for a blob only if it is really an output.
@@ -1379,45 +1386,31 @@ impl<V: Clone + Send + Sync + 'static> Singleflight<V> {
         }
     }
 
-    /// Signal successful completion, delivering `value` to all waiters.
-    ///
-    /// Sends `Some(value)` through the watch channel (async waiters) and
-    /// notifies the condvar (sync waiters), then removes the key from the
-    /// in-flight map.
-    pub fn complete(&self, key: &str, value: V) {
-        let slot = {
-            let mut map = self.in_flight.lock().unwrap();
-            map.remove(key)
-        };
-        if let Some(slot) = slot {
-            // Signal async waiters via watch channel.
-            let _ = slot.tx.send(Some(value.clone()));
-            // Signal sync waiters via condvar.
-            {
-                let mut guard = slot.state.lock().unwrap();
-                *guard = (true, Some(value));
-            }
-            slot.condvar.notify_all();
+    /// Until no call for `key` is in flight.
+    pub async fn settled(&self, key: &str) {
+        let rx = self.in_flight.lock().unwrap().get(key).map(|slot| slot.tx.subscribe());
+        if let Some(mut rx) = rx {
+            let _ = rx.changed().await;
         }
     }
 
+    /// Signal successful completion, delivering `value` to all waiters.
+    pub fn complete(&self, key: &str, value: V) {
+        self.finish(key, Some(value));
+    }
+
     /// Signal failure/cancellation, waking all waiters with `None`.
-    ///
-    /// Sends `None` through the watch channel and notifies the condvar,
-    /// then removes the key from the in-flight map.
     pub fn abort(&self, key: &str) {
-        let slot = {
-            let mut map = self.in_flight.lock().unwrap();
-            map.remove(key)
-        };
+        self.finish(key, None);
+    }
+
+    /// Remove `key` from the in-flight map and wake its async waiters (the
+    /// watch channel) and sync waiters (the condvar) with `value`.
+    fn finish(&self, key: &str, value: Option<V>) {
+        let slot = self.in_flight.lock().unwrap().remove(key);
         if let Some(slot) = slot {
-            // Re-send None to trigger changed() for async waiters.
-            let _ = slot.tx.send(None);
-            // Signal sync waiters via condvar.
-            {
-                let mut guard = slot.state.lock().unwrap();
-                *guard = (true, None);
-            }
+            let _ = slot.tx.send(value.clone());
+            *slot.state.lock().unwrap() = (true, value);
             slot.condvar.notify_all();
         }
     }
@@ -1712,7 +1705,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                 let Some(source_oid) = file_path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else {
                     continue; // not a transform record
                 };
-                if !live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL) {
+                if crate::nested_roots::is_sync_copy(source_oid) || (!live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL)) {
                     condemned_records.push(file_path);
                     continue;
                 }

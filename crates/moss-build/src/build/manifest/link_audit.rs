@@ -59,6 +59,7 @@ use std::path::Path;
 pub(crate) mod drafts;
 
 use super::SealedManifest;
+use crate::build::media::orphan_prune::PageLinks;
 use crate::build::served_path::ServedPath;
 
 /// Attribute names whose value can be a root-relative URL. Held as data rather
@@ -176,6 +177,15 @@ pub fn url_attr_values(html: &str) -> Vec<String> {
     out
 }
 
+/// The `url_attr_values` of `html` this module judges, once each: the
+/// root-relative ones, which is what a seal remembers per page.
+pub(crate) fn root_relative_urls(html: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut urls = url_attr_values(html);
+    urls.retain(|href| candidate_keys(href).is_some() && seen.insert(href.clone()));
+    urls
+}
+
 /// Answer 2 of the module docs: a passthrough root's files reach the stage
 /// without necessarily reaching the manifest, so disk gets the last word.
 /// Routed through [`ServedPath`] rather than a bare `join` so a candidate that
@@ -197,38 +207,63 @@ pub fn is_dead(href: &str, satisfied: &HashSet<&str>, stage_dir: &Path) -> bool 
 /// is one thing to fix, and printing it 36 times buries the other 35 problems.
 pub fn dead_links_in_page(
     page: &str,
-    html: &str,
+    hrefs: &[String],
     satisfied: &HashSet<&str>,
     stage_dir: &Path,
 ) -> Vec<DeadLink> {
     let mut seen = HashSet::new();
     let mut dead = Vec::new();
-    for href in url_attr_values(html) {
-        if is_dead(&href, satisfied, stage_dir) && seen.insert(href.clone()) {
-            dead.push(DeadLink { page: page.to_string(), href });
+    for href in hrefs {
+        if is_dead(href, satisfied, stage_dir) && seen.insert(href) {
+            dead.push(DeadLink { page: page.to_string(), href: href.clone() });
         }
     }
     dead
 }
 
-/// Audit every HTML page the manifest names, reading it back from `stage_dir`.
+/// Audit every HTML page the manifest names, from the links the shipped-reference
+/// scan took from each page's ship source.
 ///
 /// The page list comes from the manifest, not a directory walk: those keys are
 /// exactly what this build shipped, so nothing left over from an earlier
-/// generation is scanned and no tree traversal is added to the seal tail.
-/// A page that cannot be read (an eviction between write and audit) is skipped
-/// — the alternative is inventing broken links out of an I/O error.
-pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
+/// generation is scanned. A page the scan did not read (gone between write and
+/// scan, such as a redirect stub) has no entry and is read from its ship
+/// source; one unreadable there yields no links, never an invented broken one.
+/// Pages are audited in parallel; `collect` keeps them in sorted order.
+pub fn audit(stage_dir: &Path, sealed: &SealedManifest, page_links: &PageLinks) -> Vec<DeadLink> {
+    use rayon::prelude::*;
     let files = sealed.files();
     let satisfied: HashSet<&str> = files.keys().map(String::as_str).collect();
     let mut pages: Vec<&&str> = satisfied.iter().filter(|k| k.ends_with(".html")).collect();
     pages.sort();
-    let mut dead = Vec::new();
-    for page in pages {
-        let Ok(html) = std::fs::read_to_string(stage_dir.join(page)) else { continue };
-        dead.extend(dead_links_in_page(page, &html, &satisfied, stage_dir));
-    }
-    dead
+    pages
+        .par_iter()
+        .flat_map_iter(|page| {
+            // A page that entered the manifest after the scan (a redirect
+            // stub) has no memo; read it from its ship source so every page is
+            // audited every seal.
+            let read;
+            let hrefs = match page_links.get(**page) {
+                Some(hrefs) => hrefs,
+                None => {
+                    read = unscanned_page_links(stage_dir, sealed, page);
+                    &read
+                }
+            };
+            dead_links_in_page(page, hrefs, &satisfied, stage_dir)
+        })
+        .collect()
+}
+
+/// Root-relative references of a page the seal's scan did not see, read from
+/// where `ship_phase` will read it. An unreadable page yields none.
+fn unscanned_page_links(stage_dir: &Path, sealed: &SealedManifest, page: &str) -> Vec<String> {
+    use crate::build::ship::{resolve_ship_source, ShipRead};
+    let html = match resolve_ship_source(page, &stage_dir.join(page), sealed, None) {
+        ShipRead::Held(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        ShipRead::Blob(path) | ShipRead::Path(path) => std::fs::read_to_string(path).unwrap_or_default(),
+    };
+    root_relative_urls(&html)
 }
 
 /// How many dead links the summary line quotes by name before falling back to
@@ -312,8 +347,8 @@ fn print_list(dead: &[DeadLink]) {
 /// Returns the full list (still advisory) so the caller can additionally
 /// scope it down to this build's own unfulfilled promises — see
 /// [`dead_links_among_promises`].
-pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
-    let dead = audit(stage_dir, sealed);
+pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest, page_links: &PageLinks) -> Vec<DeadLink> {
+    let dead = audit(stage_dir, sealed, page_links);
     // `log_note!`, not `log_warn_problem!` — see the module docs on why this
     // stays out of the `--strict` count.
     if let Some(line) = summary_line(&dead) {

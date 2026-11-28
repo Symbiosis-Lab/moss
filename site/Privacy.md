@@ -14,16 +14,16 @@ This is an early policy. moss is in active development, and we'll keep refining 
 
 Your folder and everything in it stays on your own device, including the website moss builds from it. Data only leaves your computer when you choose to publish; at that point moss uploads the site and its content to the server or platform you picked.
 
-You can host the static site moss builds anywhere you like. When you do, moss's servers collect nothing about you, apart from [crash reports](#crash-reports) and the downloads listed below.
+You can host the static site moss builds anywhere you like. When you do, moss's servers collect nothing about you, apart from [crash reports and log streaming](#crash-reports-and-log-streaming), if you agree to them, and the downloads listed below.
 
 ## What the app does by default
 
-- **Your folder and the app's log stay on your computer.** The log records what moss did, so we can find bugs; it leaves your computer only when you press [Send Logs](#support-logs).
-- **Crash reports are on.** You can turn them off in **moss → Settings → Crash reporting**. [More below](#crash-reports).
+- **Your folder and the app's log stay on your computer.** The log records what moss did, so we can find bugs; it leaves your computer only if you agree to stream it, or when you press [Send Logs](#support-logs).
+- **During the beta, moss asks once whether to send crash reports and stream its log.** If you say no, it sends neither. [More below](#crash-reports-and-log-streaming).
 - **Updates are checked and downloaded.** When moss starts, it asks GitHub, where moss is published, whether there is a newer version, and downloads it in the background so it is ready to install. It installs only when you say so.
 - **The plugin list is refreshed.** When moss starts, it downloads the list of plugins, and any it must block, from symbiosis-lab.org.
 - **Link cards fetch the page they show.** When your site shows a link as a card, moss fetches that page's title and picture from the linked site.
-- **No usage tracking.** The app does not record or send which features you use, or how often.
+- **Nothing else is tracked.** Apart from what you agree to when you first open moss, the app does not record or send what you do in it, such as which features you use, or how often.
 
 These downloads carry only what any download does: your IP address and the moss version.
 
@@ -55,13 +55,19 @@ If you enable comments through moss, then when someone comments on your publishe
 
 For sites we host, including this one, we keep basic traffic stats: the pages viewed, the referring site (its name only, not the full address), country, browser and OS family, a screen‑size bucket (phone, tablet, or desktop), campaign tags in the link (utm_source and utm_medium), and named clicks on buttons a site marks for counting, such as a download button. We also count clicks on links to other sites and links to supported file downloads, and record coarse ranges for how far readers scroll and how long the page is visible. To count unique visitors without cookies, our server turns each visitor's IP address and browser details into a short code, using a secret that is replaced every day and never written to disk. The same visitor gets the same code on one site for one day, and an unrelated code on another site or another day, so no one can follow a reader across sites or over time. The IP address itself is never stored. These stats contain no cookies and no cross‑site tracking. We keep them on our server for 400 days and then delete them. We process them on the basis of a legitimate interest: letting each site understand its own readers with as little data as that takes.
 
-On this site only (mosspub.com), we also run Cloudflare Web Analytics, a cookieless counter from our hosting provider, so we can compare its numbers with our own. Sites published with moss do not run it.
-
 If you turn on the analytics dashboard, your site's stats sync from our server to your device and are kept locally, so you can analyze them on your own machine.
 
-## Crash reports
+## Server access log
 
-If moss hits an error, it can send a crash report to our own server so we can fix the bug. It's the only thing moss reports automatically, and it does not track how you use the app. We strip personal data: your IP isn't stored (we mask it before it reaches our error tracker) and file paths are scrubbed. You can turn this off any time in **moss → Settings → Crash reporting**, and we delete crash reports after 90 days.
+Our server keeps a log of the requests it receives for the sites we host, including this one: the page asked for, without anything after a `?`, the referring page, the browser, the time, and a shortened IP address (IPv4 cut to its first three numbers, IPv6 to its first two groups), which points to a network rather than one device. We use it to watch the server's traffic and bandwidth, and delete it after 14 days.
+
+## Crash reports and log streaming
+
+While moss is in beta, the first time you open it, moss asks one question: may it send us crash reports and stream its log while you work? If you say no, it sends neither, and you can still press [Send Logs](#support-logs) whenever you want our help. You can change your answer in **moss → Settings**.
+
+**Crash reports:** when moss hits an error, it sends a report to our own server so we can fix the bug. Your IP address isn't stored (we mask it before it reaches our error tracker) and file paths are scrubbed. We delete crash reports after 90 days.
+
+**Log streaming:** about once a minute, moss sends us how long it took to build, preview and publish, and, for each warning or error, the place in moss's code it came from. The rest of the log stays on your computer. Email addresses, keys and your computer's user name are removed before anything leaves, and again on our server. We delete it after 30 days. moss offers log streaming only during the beta; when the beta ends, it stops.
 
 ![[crash report.mp4|loop|100%|Toggle crash report]]
 
@@ -75,17 +81,25 @@ If you use **"Send Logs"** to report a problem, moss uploads your recent app log
 
 If you ask us to maintain your site, we can agree with you that moss sends that site's activity log to us while the site is open in moss, on any computer, so we see problems as they happen. We set this up in your site's folder ourselves; the app has no setting for it, and nobody else's moss does it. The log is scrubbed the same way as Send Logs and deleted after 30 days. Tell us any time and we stop it and delete what we hold.
 
+## Threads
+
+If you connect Threads to a site, you sign in on Threads' own page and allow moss to read your Threads profile and posts (`threads_basic`) and to publish and delete posts on your behalf (`threads_content_publish`, `threads_delete`). moss uses this only to post copies of your pages, with a link back, and to find and remove those copies later. It reads your Threads user ID and the posts it made.
+
+When you approve, Threads sends a one-time code to our server, which swaps it for an access token. Our server holds the token in memory for up to five minutes, hands it once to the moss app on your computer, and then forgets it; it is never written to disk or to a log. The app keeps the token in the secret store of the plugin on your computer and refreshes it there. We keep no Threads data on our servers, so there is nothing for us to delete.
+
+To disconnect, remove Threads in moss, or remove moss in Threads under Settings → Account → Website permissions. A deletion request from Threads is answered at `https://api.mosspub.com/connect/threads/deletion`. Posts moss already made stay on your Threads account until you delete them there or from moss.
+
 ## Where your data is processed
 
 Our server is in the **United States**, and some of the services we rely on (Stripe, Resend, Cloudflare) are US‑based; our domain registrar (OpenSRS / Tucows) is in **Canada**. If you're in the EU or UK, your data may be processed outside your country.
 
 ## How long we keep things
 
-Crash reports: 90 days. Support logs, and the activity logs of sites we look after: 30 days. Sign-in records: 180 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
+Crash reports: 90 days. Support logs, streamed logs, and the activity logs of sites we look after: 30 days. Server access log: 14 days. Sign-in records: 180 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
 
 ## Your choices and rights
 
-You can ask us to see, correct, or delete your data, and you can turn off crash reporting at any time using the in‑app toggle.
+You can ask us to see, correct, or delete your data, and you can change your answer on crash reports and log streaming at any time in **moss → Settings**.
 
 ## Contact
 
@@ -95,4 +109,4 @@ Questions, or want your data deleted? Email us at **hi@symbiosis-lab.org**.
 
 moss is early, and this policy will grow with it. We'll update this page when our practices change.
 
-*Last updated: 2026‑11‑08.*
+*Last updated: 2026‑11‑26.*

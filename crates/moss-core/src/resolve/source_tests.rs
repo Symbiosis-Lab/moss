@@ -314,3 +314,17 @@ use super::*;
         );
     }
 
+
+#[test]
+fn criticmarkup_marks_match_leftmost_and_nearest() {
+    let cases = [
+        ("{~~a~~>b~~}", "b"),
+        ("{~~old~>new~~} and {++add++}", "new and add"),
+        ("{++never closed {--gone--} kept", "{++never closed  kept"),
+        ("{==mark==}{>>note<<}", "mark"),
+        ("{++across\nlines++}", "across\nlines"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(accept_criticmarkup(input), expected, "{input}");
+    }
+}

@@ -260,7 +260,7 @@ fn hero_from_an_event_carries_its_end_and_keeps_the_fallback_in_a_template() {
         "no hero or template relies on the hidden attribute"
     );
     assert!(!hero_of(&html).contains("Between seasons"));
-    assert!(html.contains("/_moss/js/hero-ends."), "the swap script loads on this site");
+    assert!(html.contains("/_moss/js/event-ends."), "the swap script loads on this site");
 }
 
 #[test]
@@ -319,13 +319,13 @@ fn hero_from_a_page_that_is_not_an_event_never_swaps() {
     let html = site.html("index.html");
     assert!(html.contains("Hello Post"));
     assert_eq!(hero_tags(&html).len(), 1, "no fallback copy");
-    assert!(!html.contains("data-hero-ends") && !html.contains("hero-ends."), "no swap for a post");
+    assert!(!html.contains("data-hero-ends"), "no swap for a post");
 }
 
 #[test]
-fn a_site_without_an_event_hero_ships_no_swap_script() {
+fn a_site_without_an_upcoming_event_ships_no_swap_script() {
     let site = Site::new(&[("index.md", &home(":::hero\n# Plain\n:::"))]);
-    assert!(!site.html("index.html").contains("hero-ends"));
+    assert!(!site.html("index.html").contains("event-ends"));
 }
 
 fn cover_shows(cover_line: &str, fence_image: &str) -> String {

@@ -33,14 +33,17 @@
 use crate::build::scan::slug::slugify_dir_path;
 use std::fmt;
 
-/// Directory every auto-generated OG card is written under, shared by
-/// [`ServedPath::for_og_card`] and the incremental render skip's card
-/// carry-forward (`build/render/blocking.rs`) and the media-settle re-render
-/// trigger (`build.rs`), both of which recognize cards by this prefix alone.
+/// Directory every auto-generated OG card is written under.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
-/// Where the not-found page is built: the page at `/404/`.
-pub const NOT_FOUND_PAGE: &str = "404/index.html";
+/// Whether a served path is a sharing card. A page names its card by an
+/// address hashed from the card's inputs, so no page reads whether the card
+/// exists yet: a card landing at a seal changes no page.
+pub fn is_sharing_card(path: &str) -> bool {
+    path.starts_with(OG_CARD_PREFIX)
+}
+
+pub use moss_core::page::site_page::NOT_FOUND_PAGE;
 
 /// Where a static host looks for the page to show for an unknown address: a copy
 /// of the not-found page at the site root.
@@ -444,6 +447,12 @@ impl ServedPath {
         ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
     }
 
+    /// The link hosts the site's comments refuse, as sha256 digests, at a
+    /// fixed address the comment server reads.
+    pub fn for_comments_json() -> Self {
+        ServedPath(crate::build::features::comment::link_block::COMMENTS_PATH.to_string())
+    }
+
     /// Membership admission at its stable address beside commerce settings.
     pub fn for_members_json() -> Self {
         ServedPath(crate::build::emit::members::MEMBERS_PATH.to_string())
@@ -665,6 +674,14 @@ impl ServedPath {
     /// `bundlePath`. Example: "/_moss/pagefind/".
     pub fn search_mount_url() -> &'static str {
         "/_moss/pagefind/"
+    }
+
+    /// Root-relative URL where the preview serves its search delta: the pages
+    /// edited since the held bundle, which the search panel merges into it.
+    /// Never a prefix of [`Self::search_mount_url`], since Pagefind skips a
+    /// merge whose path starts its own. Never written to the build output.
+    pub fn search_delta_mount_url() -> &'static str {
+        "/_moss/pagefind-delta/"
     }
 
     /// Whether a manifest key addresses the search-index bundle.

@@ -3,7 +3,8 @@
 use crate::build::assets::paths::{compute_content_hash, PathResolver};
 use crate::build::assets::theme_modules::ThemeModules;
 use crate::build::cloud_ledger::InputEvidence;
-use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
+use crate::build::components::nav::NavigationBuilder;
+use moss_core::page::nav::breadcrumb_segments;
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::page::layout::LayoutConfig;
 use crate::build::page::meta::escape_html_attr;
@@ -54,6 +55,15 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
 }
 
+/// What the page's own render takes from the site's layout, folded into its
+/// fingerprint so a change reaches exactly the pages it affects.
+pub(crate) fn shell_facts(layout: &LayoutConfig, doc: &ParsedDocument) -> crate::build::facade::ShellFacts {
+    crate::build::facade::ShellFacts {
+        nav_island: shows_nav_island(layout, Some(doc)),
+        verify_link: layout.page_link(&doc.url_path).map(str::to_string),
+    }
+}
+
 /// Whether a page that is not bare draws the floating nav island. The render
 /// verdict folds it into the page's fingerprint, so a `[site].floating_nav`
 /// toggle re-renders only the pages whose answer moved.
@@ -82,7 +92,7 @@ impl PageChromeContext<'_, '_> {
             self.layout.site_name.clone()
         };
         doc.map_or(fallback.clone(), |d| {
-            super::html::localized_site_title(self.documents, d.lang, self.site_lang, &fallback)
+            moss_core::page::site_page::localized_site_title(self.documents, d.lang, self.site_lang, &fallback, |d| &d.title)
         })
     }
 
@@ -109,11 +119,13 @@ impl PageChromeContext<'_, '_> {
         });
         // Generated folders historically scope the initial navigation in their
         // own language; authored pages scope it in the site language.
+        let page_css_link = self.assets.page_owned.link(doc.and_then(|d| d.source_path.as_deref()), &self.assets.paths);
+        let nav_themed = self.assets.has_user_css || !page_css_link.is_empty();
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
         ).with_color_scheme(self.layout.color_scheme).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
-            .with_asset_snapshot(self.media_lookup.asset_snapshot());
+            .with_asset_snapshot(self.media_lookup.asset_snapshot()).with_themed(nav_themed);
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
         }
@@ -129,7 +141,7 @@ impl PageChromeContext<'_, '_> {
             nav = nav.with_logo(logo);
         }
         if let Some(d) = doc {
-            if let Some(segments) = compute_breadcrumb_segments(
+            if let Some(segments) = breadcrumb_segments(
                 d, self.documents, &site_title, self.project.has_content_folders, force_breadcrumb,
             ) {
                 nav = nav.with_breadcrumb(segments, force_breadcrumb);
@@ -178,7 +190,7 @@ impl PageChromeContext<'_, '_> {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
             }
-            body_attrs.push_str(&format!(r#" style="{}""#, escape_html_attr(&crate::build::scan::section_text::section_style(section))));
+            body_attrs.push_str(&format!(r#" style="{}""#, escape_html_attr(&section.style())));
         }
         let homepage = self.project.homepage_file.as_ref()
             .and_then(|_| self.documents.iter().find(|d| d.url_path == "index.html"));
@@ -203,11 +215,11 @@ impl PageChromeContext<'_, '_> {
             colophon_credit: self.layout.colophon_credit.clone(),
             // A bare page keeps only the controls, loose where a headerless
             // site's island would put them at the top of the page.
-            nav_island: if bare { nav.nav_icons_html() } else if shows_nav_island(self.layout, doc) { nav.generate_nav_island() } else { String::new() },
+            nav_island: if bare { nav.nav_icons_html("") } else if shows_nav_island(self.layout, doc) { nav.generate_nav_island() } else { String::new() },
             footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
-            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str()]
+            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str(), doc.and_then(|d| self.layout.page_link(&d.url_path)).unwrap_or_default()]
                 .iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("\n    "))
                 .filter(|tags| !tags.is_empty()),
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),
@@ -219,7 +231,7 @@ impl PageChromeContext<'_, '_> {
                     "{}<link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">",
                     if generated { "\n    " } else { "" }, paths.user_css_path(),
                 )).unwrap_or_default(),
-                self.assets.page_owned.link(page_source, paths),
+                page_css_link,
             )).filter(|tags| !tags.is_empty()),
             user_js_tag: Some(format!(
                 "{}{}",
@@ -229,6 +241,8 @@ impl PageChromeContext<'_, '_> {
             theme_importmap,
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
+            inline_js: self.assets.scripts.inline_tags(&self.layout.assets),
+            nav_themed,
             content_width_attr: resolve_data_attr(page_width.as_ref(), site_width.as_ref(), "content-width", None),
             typesetting_attr: resolve_data_attr(doc.and_then(|d| d.typesetting.as_ref()), self.layout.typesetting.as_ref(), "typesetting", Some("horizontal")),
             comments_attr: resolve_comments_attr(doc.and_then(|d| d.comments), self.layout.comments),

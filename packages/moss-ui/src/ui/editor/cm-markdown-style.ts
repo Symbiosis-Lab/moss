@@ -20,10 +20,10 @@ import { EditorState, RangeSet, RangeSetBuilder, StateEffect, type Extension } f
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { t, onLocaleChange } from "../i18n/index";
-import { hangsInRanges, type Hang } from './cm-hangs';
+import { hangsInRanges, isGrip, type Hang } from './cm-hangs';
 import { headFitExtension } from './cm-head-fit';
 import { listDecorations, listHangExtension, type DecoRange, type SyntaxNode } from './cm-lists';
-import { footnoteDecorations, type FootnoteDeco } from '@symbiosis-lab/moss-syntax/cm6';
+import { footnoteDecorations, shortcodeBlockField, type FootnoteDeco } from '@symbiosis-lab/moss-syntax/cm6';
 
 const HEADING_CLASSES: Record<string, string> = {
   ATXHeading1: 'cm-lp-h1',
@@ -41,11 +41,14 @@ const LINE_HEADING: Record<string, Decoration> = Object.fromEntries(
 const indicatorLabel = (h: Pick<Hang, 'kind' | 'level'>): string =>
   h.kind === 'heading' ? t('indicator.heading', { level: String(h.level) }) : t('indicator.quote');
 
-/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). */
-const markHang = (h: Hang) =>
+/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). A fence has no line type, so its marker carries none of that. A grip (cm/grip-drag.ts) is also dragged. */
+const markHang = (h: Hang, lineFrom: number) =>
   Decoration.mark({
     class: 'cm-hang',
-    attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' },
+    attributes: {
+      ...((h.kind === 'heading' || h.kind === 'quote') && { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' }),
+      ...(isGrip(h, lineFrom) && { 'data-grip': '' }),
+    },
   });
 const LINE_HUNG = Decoration.line({ class: 'cm-hung' });
 const MARK_HANG_RUN = Decoration.mark({ class: 'cm-hang-run' });
@@ -173,7 +176,7 @@ export function buildMarkdownStyleDecorations(
       while (hangs[last + 1] && state.doc.lineAt(hangs[last + 1].from).from === lineFrom) last++;
       if (last > i) decos.push({ from: h.from, to: hangs[last].to, deco: MARK_HANG_RUN });
     }
-    decos.push({ from: h.from, to: h.to, deco: markHang(h) });
+    decos.push({ from: h.from, to: h.to, deco: markHang(h, lineFrom) });
   }
   return Decoration.set(decos.map((d) => d.deco.range(d.from, d.to)), true);
 }
@@ -525,6 +528,7 @@ const hungPrefixAtomicRanges = (view: EditorView): RangeSet<Decoration> => view.
 
 export function markdownStyleExtension(): Extension {
   return [
+    shortcodeBlockField,
     markdownStylePlugin,
     listHangExtension(),
     EditorView.atomicRanges.of(hungPrefixAtomicRanges),

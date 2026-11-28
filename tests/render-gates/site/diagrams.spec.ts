@@ -7,7 +7,7 @@
 // "skipped" count is the inconclusive count.
 //
 // DIAGRAM_GATE_PAGES (comma-separated paths) points the same checks at another built site.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import { createRequire } from 'node:module';
 import type { AxeResults } from 'axe-core';
 import { gatePort } from '../../../playwright/gate-ports';
@@ -155,7 +155,7 @@ for (const path of PAGES) {
     await page.goto(base + path);
     const on = await inspect(page);
     const ctx = await browser.newContext({ javaScriptEnabled: false });
-    const off = await ctx.newPage();
+    const off = await newPage(ctx);
     await off.goto(base + path);
     const offFigures = await off.locator('figure.moss-diagram').count();
     const offDrawings = await off.locator('figure.moss-diagram:not(.moss-diagram-error) svg.pele:visible').count();

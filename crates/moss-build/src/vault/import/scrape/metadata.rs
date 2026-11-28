@@ -37,6 +37,9 @@ pub struct ArticleMetadata {
     pub publisher: Option<String>,
     /// Two-letter language code (`en`, `zh`, `de`).
     pub lang: Option<String>,
+    /// `lang` came only from the bare `<html lang>` attribute, which a CMS
+    /// default can set whatever the content's language. Never written to YAML.
+    pub lang_from_html_attr: bool,
     /// Local path of the cover image, set by the import pipeline AFTER the
     /// preferred cover image is downloaded (so the path is a real on-disk file).
     /// The metadata adapter itself never sets this — it's a downstream
@@ -94,13 +97,18 @@ pub fn derive(html: &str) -> ArticleMetadata {
         publisher = None;
     }
 
+    let schema_lang = schema_lang(article, webpage);
+    let html_lang = html_lang(&doc);
+    let lang_from_html_attr = schema_lang.is_none() && html_lang.is_some();
+
     ArticleMetadata {
         title,
         description: pick_description(&og, article, webpage),
         author: pick_author(&og, article),
         date: pick_date(&og, article, webpage),
         publisher,
-        lang: pick_lang(&doc, article, webpage),
+        lang: schema_lang.or(html_lang).map(|s| normalize_lang(&s)),
+        lang_from_html_attr,
         cover: None,
         og_image: og.get("og:image").cloned(),
         chrome_images: chrome_images(&doc),
@@ -544,18 +552,15 @@ fn pick_publisher(
     og.get("og:site_name").cloned()
 }
 
-fn pick_lang(doc: &Html, article: Option<&Value>, webpage: Option<&Value>) -> Option<String> {
+fn schema_lang(article: Option<&Value>, webpage: Option<&Value>) -> Option<String> {
     article
         .and_then(|a| entry_string(a, "inLanguage"))
         .or_else(|| webpage.and_then(|w| entry_string(w, "inLanguage")))
-        .or_else(|| {
-            let sel = Selector::parse("html").ok()?;
-            doc.select(&sel)
-                .next()
-                .and_then(|e| e.value().attr("lang"))
-                .map(|s| s.to_string())
-        })
-        .map(|s| normalize_lang(&s))
+}
+
+fn html_lang(doc: &Html) -> Option<String> {
+    let sel = Selector::parse("html").ok()?;
+    doc.select(&sel).next().and_then(|e| e.value().attr("lang")).map(|s| s.to_string())
 }
 
 /// "en-US" → "en"; "en" → "en" — region subtags are noise for most languages.

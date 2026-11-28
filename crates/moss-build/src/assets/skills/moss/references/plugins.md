@@ -131,6 +131,7 @@ A plugin whose settings belong to the site, and should travel with it and be rea
 - `when` looks back within the same table. A select with no stored value is read from the fields it reveals; changing it removes the keys of the fields it hides and writes the defaults of the ones it shows, in one save.
 - `secret` and `hidden` are refused: the table syncs with the folder, and a key the tab does not draw is simply left out of the manifest and kept as written.
 - An action calls a route on one of moss's own services, signed by the folder, and opens the `https` address in the answer. moss makes the call only for plugins it ships or its registry lists.
+- `secrets` are credentials a service needs for this site, such as a calendar's secret address: `{ "id": "calendar", "label": "Calendar", "service": "commerce", "path": "/sites/{site}/calendar", "pattern": "^(https|webcal)://" }`, with optional `group`, `placeholder` and `pattern_message`. The tab draws a field and Connect; moss posts `{"value": "…"}` to `path`, signed by the folder, keeps its own copy on this computer for the site (never in the folder), and posts `{"value": null}` on Disconnect. A `GET` on `path` answers `{"state": "none" | "set" | "forgotten", "fingerprint", "read_at", "error": null | "gone" | "unreadable"}` and never the value; `fingerprint` is the first 8 hex of the value's sha256. On `none` moss sends its copy again (a new service, or one that lost it); on `forgotten`, or `set` with another fingerprint, it drops its copy.
 - `translations` at the manifest's top level, keyed by locale and then by the English text (`{ "zh": { "Currency": "币种" } }`), show the manifest's words in the reader's language; a missing entry shows the English.
 
 ### Proving the site is the person's
@@ -151,8 +152,62 @@ A network that lets a person's domain stand for their account (a Bluesky handle,
 
 - A proof is a `file` under `.well-known/`, a `link` or a `meta` written into the head of every page. A file is `atproto-did` or `nostr.json`, a link's rel is `me`, and a meta's name is `fediverse:creator`. Any other is refused and the manifest does not load: another file could grant an app authority over the domain (`webauthn`, `assetlinks.json`), and another rel or name could change every page (`canonical`, `robots`). A network that needs one more is added to moss by name.
 - `{key}` reads a setting the plugin declares in `site_settings`. An `acct` setting holds `@name@host`, refused in any other shape, and `{key.user}` and `{key.host}` read its two halves. Any other brace is text, so a `.json` body is written as JSON: each value goes in a string, escaped, and a body that is not JSON once filled does not load.
+- An `acct` setting marked `"from": "account"` is not drawn in the settings form: while `[services.<plugin>]` holds no value for it, a proof reads the account the folder is signed in to (its name must be `@name@host` on the account's own server), and signing out removes the proof; a value written in the table wins.
 - A proof whose setting is unset is not written, without a warning: the person has not set that network up. A hand-written value that cannot be written (an `acct` without a host, a control character) is left out with a warning naming the setting.
 - Proofs are data, read even by a build that runs no plugin code (`moss build --no-plugins`), so a CI deploy keeps them. A path two suppliers claim is written once, from `[site]` first and then plugins by name, with a warning naming both. When a proof the last build served is gone, the build says so (`identity: .well-known/atproto-did removed`), since that was someone's live handle.
+
+## A provider: one account, the parts it serves
+
+A plugin for an outside company holds one account there. It declares how the person signs in once, in `contributes.account`, and lists in `contributes.provider` each part of the site that one sign-in serves: the part, every outside address the site's pages or moss reach for it, what the part `needs` from the account in the company's own word (a permission or a scope), what each of its actions costs, and the part's own fields. A second part at the same company is another entry in the same plugin, never a second plugin. A plugin's `deploy_target` and `channel` read as its host and channels entries.
+
+`account` is one of these, by `kind`:
+
+- `key`: a key or token the person makes and pastes, with `url` (the page that makes keys), the `prefix` every key starts with (left out when the company's keys share none), its `length` (a number, or `[fewest, most]` when the company issues keys of several forms), and `env`, the environment variable that may hold it in the company's own documented spelling. moss reads `env` only for a command the person runs for one of the account's parts, never for a build or a preview. In a plugin with code, the pasted key is the plugin's `token` secret: the app asks for it on the plugin's settings page and before a publish that needs it, and the code reads it with `getSecret("token")`.
+- `none`: nothing to sign in to.
+
+A channel plugin declares no `account`: it signs in with its channel's `login`, which `moss provider status` reports as a `code` sign-in (`login: true`) or a `session` (an address).
+
+A cost is `{ "action", "variant", "amount", "unit", "price_url" }`: the plugin's name for the action, the shape of the call the price follows where it has one (a post with a link and one without), the amount as a decimal string such as `"0.20"`, an ISO currency code or `credits`, and the page that states the price. A read that costs declares its price as a send does. `moss provider status --json` reports each account's parts and their costs.
+
+A mailing service a site's subscribers are copied to is a provider of the `newsletter` part, signs in with a `key`, and needs no `entry`. It is a channel, never the only copy: the list stays with moss, with a copy in the folder's `.moss/data/email/subscribers.csv`, so removing the line or switching services loses no subscriber. The person picks it under Subscribers in the app, which writes `provider = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
+
+```json
+"account": { "kind": "key", "env": "SENDGRID_API_KEY", "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69 },
+"provider": [
+  {
+    "part": "newsletter",
+    "needs": "Full Access",
+    "newsletter": {
+      "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep {permission}, then Create & View", "Copy the key and paste it here"],
+      "webhooks_url": "https://app.sendgrid.com/settings/mail_settings/webhook_settings",
+      "senders_url": "https://app.sendgrid.com/settings/sender_auth"
+    }
+  }
+]
+```
+
+The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to the key's `url`. `{name}` stands for `moss`, the name the server looks for before it deletes the pasted key, and `{permission}` for the part's `needs`, which stays in the service's words in every translation. The service is shown by the manifest's `display_name`. Every address is `https`, and a field moss does not know is refused. The steps are translated through the manifest's `translations` table, keyed by the English text. A provider brings no code, so one installed from the registry at the registry's bytes needs no folder trust; an edited copy does.
+
+A company that holds a domain's DNS is a provider of the `address` part. Its body names the name servers it answers for, as suffixes such as `ns.cloudflare.com`; they only decide which signed-in accounts moss asks first, and a zone is the account's when the account lists it. Its code exports the zone's verbs: `dns_zones`, `dns_records`, `dns_set` (replace every record of one name and type) and `dns_delete`.
+
+An analytics service is a provider of the `analytics` part. Its body is the `script` every page loads, which is also one of the part's `addresses`, the script tag's `data-` `attributes`, where `{site_id}` stands for the site's `[services.analytics] site_id`, and `reads`: `events` when its code's `analytics_read` returns one record per visit, `daily_counts` when it returns visits per page per day. A site turns it on with `provider = "<plugin name>"` and its `site_id` under `[services.analytics]` in `.moss/config.toml`; every published page then loads the script, and the preview never does. A build whose plugin is missing succeeds without analytics and names the install command.
+
+Its code exports two verbs, each taking one object: `analytics_site({ host })` returns `{ site_id }`, the service's id for the site at that domain, made when the service has none, and `analytics_read({ site_id, since })` returns what was counted from that ISO date on. A verb that cannot do what it was asked returns `{ refused: "sign_in" }` when the service no longer takes the key, or `{ refused: "missing_permission", needs }` naming the permission, rather than throwing. `moss provider connect <folder> analytics --provider <plugin>` keeps the key, asks for the site's id at the site's domain and writes both lines. After each publish moss reads the counts back into `.moss/data/visits.jsonl`, one JSON object per page per day.
+
+One token that publishes the site, holds its domain's DNS and reads its visits:
+
+```json
+"account": { "kind": "key", "env": "CLOUDFLARE_API_TOKEN", "url": "https://dash.cloudflare.com/profile/api-tokens", "length": [40, 64] },
+"deploy_target": {},
+"provider": [
+  { "part": "address", "needs": "Zone · DNS · Edit", "addresses": ["https://api.cloudflare.com/client/v4"],
+    "address": { "nameservers": ["ns.cloudflare.com"] } },
+  { "part": "analytics", "needs": "Account · Account Analytics · Read",
+    "addresses": ["https://static.cloudflareinsights.com/beacon.min.js", "https://api.cloudflare.com/client/v4"],
+    "analytics": { "script": "https://static.cloudflareinsights.com/beacon.min.js",
+      "attributes": { "data-cf-beacon": "{\"token\": \"{site_id}\"}" }, "reads": "daily_counts" } }
+]
+```
 
 ## Setup: declare, don't build UI
 
@@ -166,7 +221,7 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
 
 ## Signing in to a channel
 
-A channel that posts to an account signs in with one button: its manifest sets `contributes.channel.login` to `true` and the plugin exports `login(ctx)`, or sets it to the provider's sign-in address for moss to open. Never ask for a handle, a server or a token in `settings`; the sign-in finds them out.
+A channel that posts to an account signs in with one button: its manifest sets `contributes.channel.login` to `true` and the plugin exports `login(ctx)`, or sets it to the provider's sign-in address for moss to open. Never ask for a handle or a token in `settings`; the sign-in finds them out. A network whose accounts live on servers the person names (Mastodon) declares the server as a plain `string` setting with `"at_sign_in": true`: moss's own sign-in row asks for it, writes the answer to the plugin's `config.toml`, and only then runs `login`, which reads it from `ctx.config` (and `logout` the same way). The settings page does not draw it again; the row shows it inside the account name. The plugin never opens a page of its own to collect it. A stored session issued by another server than the setting names is the plugin's to treat as signed out.
 
 `login` answers a `LoginResult`: `{ status: "completed", account: { id, name } }`, `{ status: "cancelled" }` or `{ status: "failed", message }`. `id` is the provider's stable identifier for the account (a DID, a numeric user id written as a string, `id@server`), never the handle: moss records the folder as signed in to it, under `[accounts.<plugin>]` in `.moss/state.toml`, and runs a channel's first sync when that binds a folder that had no account. `name` is only shown. A plugin never writes its own binding into its config (`boundUserName`, `boundUserId` are read only for plugins from before this contract), and a plugin that returns a `LoginResult` sets `min_moss_version` to `0.15.29`.
 

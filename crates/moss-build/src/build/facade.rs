@@ -447,10 +447,12 @@ pub struct PageFingerprints {
 /// What a page's own render takes from a site setting that may change without
 /// a full render (`inputs::FINGERPRINTED_KEYS`), decided for that page. Folded
 /// into its facade, so a toggle re-renders exactly the pages whose answer moved.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ShellFacts {
     /// `render::page_chrome::shows_nav_island`.
     pub nav_island: bool,
+    /// The head elements the page's copy records ask for (`LayoutConfig::page_link`).
+    pub verify_link: Option<String>,
 }
 
 impl PageFingerprints {
@@ -547,6 +549,12 @@ pub struct FacadeCache {
     /// Per image, a digest of the placeholder fields `listing_globals` leaves
     /// out of `image_files` (`render::incremental::listing::image_placeholders`).
     /// A move re-renders the pages that show the image, not the site.
+    ///
+    /// Invariant: per image, the recorded digest is the oldest placeholder a
+    /// page of this generation may still show. A build that leaves those
+    /// pages to the settled build records the digest they still show
+    /// ([`Self::restore_previous_digests`]), so whichever build comes next
+    /// renders them.
     ///
     /// `serde(default)` gives an empty map for a cache written before this
     /// existed, so every image reads as moved and every page that shows one
@@ -755,6 +763,25 @@ impl FacadeCache {
     /// move obliges the caller to render is on each field's docs.
     pub fn digests_moved(&self, which: DigestMap, current: &std::collections::BTreeMap<String, String>) -> Vec<String> {
         moved_keys(self.digests(which), current)
+    }
+
+    /// `current` with the digest this cache recorded for each of `keys` put
+    /// back, and a key it did not record dropped, so the next build sees them
+    /// moved again.
+    pub fn restore_previous_digests(
+        &self,
+        which: DigestMap,
+        mut current: std::collections::BTreeMap<String, String>,
+        keys: &[String],
+    ) -> std::collections::BTreeMap<String, String> {
+        let previous = self.digests(which);
+        for key in keys {
+            match previous.get(key) {
+                Some(old) => current.insert(key.clone(), old.clone()),
+                None => current.remove(key),
+            };
+        }
+        current
     }
 
     /// Record this build's asset versions, so the next build can detect one

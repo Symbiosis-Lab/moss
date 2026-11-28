@@ -1,10 +1,13 @@
 //! Every contract name moss has released and no longer writes: classes,
-//! `data-*` values and `--moss-*` properties.
+//! `data-*` values and `--moss-*` properties a theme selects, and the
+//! shortcodes, attributes, front-matter fields, config keys and syntax a
+//! folder's pages are written in.
 //!
 //! A theme selects these names, so one going away changes how a site looks
-//! with no error anywhere. A row here is what the build tells the theme's
-//! author ([`Retired::note`], and [`Retired::replaced_by`] when something
-//! matches the same elements today). The released-contract lock test fails
+//! with no error anywhere; a page written in an old spelling must keep
+//! building. A row here is what the build tells the author
+//! ([`Retired::note`], and [`Retired::replaced_by`] when something reaches
+//! the same thing today). The released-contract lock test fails
 //! when a released name is neither live nor listed here, so a name cannot
 //! leave the contract without a row.
 //!
@@ -22,6 +25,16 @@ pub enum RetiredKind {
     Data,
     /// A `--moss-*` design token or escape-hatch custom property.
     Property,
+    /// A `:::name` block.
+    Shortcode,
+    /// An attribute a block reads, written without its `=`.
+    ShortcodeAttr,
+    /// A front-matter field.
+    FrontMatter,
+    /// A `.moss/config.toml` key as `<table>.<key>`.
+    ConfigKey,
+    /// A piece of markdown syntax moss reads.
+    Syntax,
 }
 
 /// What replaces a retired name, and how `moss migrate` rewrites a folder
@@ -45,10 +58,15 @@ pub struct Retired {
     pub retired_in: Option<&'static str>,
     /// What reaches the same thing today, and how a folder is moved to it.
     pub migrate: Migrate,
-    /// Whether moss still writes the old name beside its replacement.
+    /// Whether moss still writes the old name beside its replacement, or for
+    /// a content row still reads it.
     pub aliased: bool,
-    /// What the theme's author is told, as one clause.
+    /// What the author is told, as one clause.
     pub note: &'static str,
+    /// The date (`YYYY-MM-DD`) the build first told authors the name was
+    /// going. A removal from [`ALIAS_FLOOR`] on is at least 12 months after
+    /// it; `None` on rows from before that rule.
+    pub deprecated_on: Option<&'static str>,
 }
 
 impl RetiredKind {
@@ -58,6 +76,11 @@ impl RetiredKind {
             RetiredKind::Class => "class",
             RetiredKind::Data => "data",
             RetiredKind::Property => "property",
+            RetiredKind::Shortcode => "shortcode",
+            RetiredKind::ShortcodeAttr => "shortcode-attr",
+            RetiredKind::FrontMatter => "front-matter",
+            RetiredKind::ConfigKey => "config-key",
+            RetiredKind::Syntax => "syntax",
         }
     }
 }
@@ -83,17 +106,36 @@ impl Retired {
     pub const fn keeps_look(&self) -> bool {
         self.aliased
     }
+
+    /// The new spelling of a renamed row the parser names in its own note.
+    pub(crate) fn renamed_to(&self) -> &'static str {
+        self.replaced_by().unwrap_or_else(|| panic!("retired row {} has no replacement", self.id()))
+    }
+
+    /// When it went, as a sentence ends: `in moss 0.15.1`.
+    pub fn when(&self) -> String {
+        self.retired_in.map_or_else(|| "before moss 0.6.6".to_string(), |v| format!("in moss {v}"))
+    }
 }
 
 /// The first release in which a retired rename must stay aliased.
 pub const ALIAS_FLOOR: &str = "0.15.28";
 
 const fn class(name: &'static str, retired_in: Option<&'static str>, migrate: Migrate, note: &'static str) -> Retired {
-    Retired { kind: RetiredKind::Class, name, retired_in, migrate, aliased: false, note }
+    Retired { kind: RetiredKind::Class, name, retired_in, migrate, aliased: false, note, deprecated_on: None }
 }
 
 const fn property(name: &'static str, retired_in: &'static str, migrate: Migrate, note: &'static str) -> Retired {
-    Retired { kind: RetiredKind::Property, name, retired_in: Some(retired_in), migrate, aliased: false, note }
+    Retired { kind: RetiredKind::Property, name, retired_in: Some(retired_in), migrate, aliased: false, note, deprecated_on: None }
+}
+
+/// A content spelling moss still reads beside its replacement.
+const fn renamed(kind: RetiredKind, name: &'static str, retired_in: &'static str, now: &'static str, note: &'static str) -> Retired {
+    Retired { kind, name, retired_in: Some(retired_in), migrate: Migrate::Rename(now), aliased: true, note, deprecated_on: None }
+}
+
+const fn removed_block(name: &'static str, retired_in: &'static str, note: &'static str) -> Retired {
+    Retired { kind: RetiredKind::Shortcode, name, retired_in: Some(retired_in), migrate: Migrate::Gone, aliased: false, note, deprecated_on: None }
 }
 
 const COLLAPSED: &str = "the card layouts share one set of classes";
@@ -177,14 +219,26 @@ pub const RETIRED: &[Retired] = &[
     class("moss-syndication-label", Some("0.15.23"), Gone, SYNDICATION),
     class("moss-series-nav-text", Some("0.15.26"), Rename(".moss-series-nav-link"), "a series link holds its arrow and title directly"),
     class("moss-series-nav-label", Some("0.15.26"), Gone, "the direction word is hidden, read by screen readers only"),
+    class("moss-form__hp", Some("0.15.30"), Gone, "request forms no longer carry a honeypot field"),
     property("--moss-font-size", "0.7.4", Rename("--moss-reading-size"), "renamed"),
     property("--moss-font-size-base", "0.7.4", Rename("--moss-reading-size-base"), "renamed"),
     property("--moss-font-weight", "0.7.11", Rename("--moss-font-weight-body"), "renamed"),
     property("--moss-size-3xl", "0.12.0", Gone, "nothing read it; --moss-size-2xl is the largest step"),
     property("--moss-scroll-dot-start", "0.15.13", Gone, "nothing read it"),
+    renamed(RetiredKind::ShortcodeAttr, "cols", "0.15.1", "per-line", "renamed"),
+    renamed(RetiredKind::Syntax, "---", "0.6.5", "+++", "a `:::grid` cell ends at a `+++` line"),
+    renamed(RetiredKind::FrontMatter, "sidebar", "0.6.5", "children", "a folder's pages go in the sidebar with `children_in: sidebar`"),
+    renamed(RetiredKind::ConfigKey, "site.domain", "0.15.21", "site.url", "the site's address, path included, is `url`"),
+    removed_block("apply", "0.15.13", APPLY),
+    removed_block("toc", "0.6.5", "the :::toc block was removed"),
 ];
 
 /// The retired row for `name` of `kind`, if there is one.
 pub fn find(kind: RetiredKind, name: &str) -> Option<&'static Retired> {
     RETIRED.iter().find(|r| r.kind == kind && r.name == name)
+}
+
+/// A row the parser names in its own message, so it is always there.
+pub(crate) fn row(kind: RetiredKind, name: &str) -> &'static Retired {
+    find(kind, name).unwrap_or_else(|| panic!("no retired row for {} {name}", kind.slug()))
 }

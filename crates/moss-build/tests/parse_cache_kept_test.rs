@@ -133,11 +133,12 @@ fn the_first_edit_after_an_open_replays_the_kept_parse_and_renders_the_same_site
     assert!(replayed_somewhere, "no fixture opened without building, so nothing was replayed");
 }
 
-/// A grid, an inline subscribe form and a hero drawn from a folder keep typed
-/// blocks for the render phase, which the kept file does not hold: those pages
-/// parse again, and the site still renders what a full parse renders.
+/// A grid and a hero drawn from a folder keep typed blocks for the render
+/// phase, which the kept file does not hold: those pages parse again. An inline
+/// subscribe form is kept, and its page replays. The site still renders what a
+/// full parse renders.
 #[test]
-fn a_page_with_a_grid_a_subscribe_form_or_a_drawn_hero_parses_again_and_renders_the_same() {
+fn a_page_with_a_grid_or_a_drawn_hero_parses_again_and_a_subscribe_page_replays() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let site = tempfile::tempdir().unwrap();
     let root = site.path();
@@ -157,7 +158,8 @@ fn a_page_with_a_grid_a_subscribe_form_or_a_drawn_hero_parses_again_and_renders_
     let stats = parse_cache::last_stats().expect("stats");
     assert!(stats.eligible, "{}", stats.reason);
     assert!(!stats.missed("about.md"), "a plain page replays: {stats:?}");
-    assert!(stats.missed("index.md") && stats.missed("join.md"), "the grid and subscribe pages parse again: {stats:?}");
+    assert!(stats.missed("index.md"), "the grid page parses again: {stats:?}");
+    assert!(!stats.missed("join.md"), "the subscribe page replays: {stats:?}");
     assert!(stats.missed("latest.md"), "the drawn hero's page parses again: {stats:?}");
     let replayed = generation(root);
 

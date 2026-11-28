@@ -763,3 +763,20 @@ fn the_code_hash_is_exactly_the_code_and_the_bundle_s_is_exactly_the_bundle() {
     assert!(bundled_code_hash("not-a-plugin-moss-ships").is_none());
     assert!(code_hash(temp.path(), &manifest).is_none(), "no entry file, no hash");
 }
+
+/// The registry computes this hash itself when it publishes the catalog
+/// (`.github/scripts/build-index.mjs` in moss-registry, `codeSha256`), from
+/// these same fixture folders. A change here unlists every registry plugin
+/// until build-index changes with it.
+#[test]
+fn the_code_hash_matches_the_registry_s_build_index() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/registry-code-hash");
+    for (dir, want) in [
+        ("with-entry", "e4b862f1d8df4cfd8d4665f61e8e5ec754caa65efc40c8b2a6ab8abc3fede68b"),
+        ("blocks-only", "2cd1923c0b69358f797a2bd918312dbf98a57f4ff05345d680b1caa04e65f80d"),
+    ] {
+        let dir = root.join(dir);
+        let manifest = read_installed_manifest(&dir).unwrap();
+        assert_eq!(code_hash(&dir, &manifest).as_deref(), Some(want), "{}: moss's code hash no longer matches moss-registry's build-index.mjs codeSha256; change both together", dir.display());
+    }
+}

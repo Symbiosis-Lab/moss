@@ -327,7 +327,8 @@ describe("copy picture payload", () => {
     expectTypeOf<CopyJob["pictures"]>().toEqualTypeOf<CopyPicture[] | undefined>();
     expectTypeOf<CopyJob["included_pictures"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<CopyJob["omitted_pictures"]>().toEqualTypeOf<number | undefined>();
-    expectTypeOf<CopyJob["site"]>().toEqualTypeOf<{ url: string; name: string }>();
+    expectTypeOf<CopyJob["site"]>().toEqualTypeOf<{ url: string; name: string; icon?: string }>();
+    expectTypeOf<NonNullable<CopyOutcome["verify"]>["page_link"]>().toEqualTypeOf<{ rel: string; href: string } | undefined>();
     const picture: CopyPicture = { url: "https://example.org/photo.png", alt: "A maple" };
     const job: CopyJob = {
       op: "publish", channel: "one", idempotency_key: "stable-key",

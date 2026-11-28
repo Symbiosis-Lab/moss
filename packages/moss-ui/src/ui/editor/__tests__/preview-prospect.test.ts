@@ -29,6 +29,7 @@ async function follow(path: string, role: SourceRole | null) {
     registry: makeRegistryStub(),
     projectRoot: '/proj',
     resolveUrlForFile: async () => ({ status: 'ok', data: null }),
+    resolveAssetUrlForFile: async () => ({ status: 'ok', data: null }),
     emit: async () => {},
     onMossEvent: async () => { retries++; return () => {}; },
     setNote: setPreviewNote,
@@ -71,9 +72,10 @@ describe('preview prospect → note + retry', () => {
     { kind: '.moss theme asset', path: '.moss/theme/grain.png', role: null,
       note: SITE_WIDE, retries: 0, asked: 0 },
 
-    // Assets navigate by their own built URL; an unbuilt one is not "not a page".
-    { kind: 'image', path: 'photo.png', role: null, note: null, retries: 0, asked: 0 },
-    { kind: 'folder (no extension)', path: 'posts', role: null, note: null, retries: 0, asked: 0 },
+    // Assets navigate by their own built URL; an unbuilt one is not "not a page",
+    // and waits for the build that records it, as an unbuilt page does.
+    { kind: 'image', path: 'photo.png', role: null, note: null, retries: 1, asked: 0 },
+    { kind: 'folder (no extension)', path: 'posts', role: null, note: null, retries: 1, asked: 0 },
 
     // Text files: only the backend knows whether the build makes pages of them.
     { kind: 'markdown', path: 'posts/new.md', role: page(),

@@ -16,7 +16,7 @@
  *
  *   npx playwright test -c playwright/places-explorer-perf.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function gotoReady(page: Page, path: string): Promise<void> {
   await page.goto(path, { waitUntil: "domcontentloaded" });

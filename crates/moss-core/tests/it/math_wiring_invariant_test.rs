@@ -124,6 +124,10 @@ fn the_only_exemption_is_the_one_we_reasoned_about() {
             // HTML-block collectors are blind because pulldown emits no
             // math event inside either construct.
             "src/ast/parser.rs".to_string(),
+            // `non_prose_view`: routes on event kind to mark skip-lines and
+            // redaction spans; the excerpt's text comes from the redacted
+            // SOURCE string, never from rebuilding the event stream.
+            "src/page/excerpt.rs".to_string(),
             // `image_definition_spans`: matches only
             // `Event::Start(Tag::Image { .. })` to record a reference
             // definition's source byte span; every other event, math

@@ -7,7 +7,7 @@
  * Run via:
  *   npx playwright test -c playwright/country-map-interaction.config.ts
  */
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "../../support/browser-test";
 import { expectFocusOnOwnEdge } from "./field-focus-edge";
 
 // Plain Tab reaches only form fields in macOS WebKit unless the system's "Keyboard navigation" setting is on;

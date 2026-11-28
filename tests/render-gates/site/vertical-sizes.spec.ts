@@ -15,7 +15,7 @@
 // whether the rung it picks covers the box the CSS actually draws. The second
 // also pins drift: if `--moss-vertical-column` ever outgrows `100vh - 4rem`,
 // the chosen rung falls short here.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,7 +71,7 @@ for (const [shape, sizes] of Object.entries(GOLDEN)) {
     for (const scale of [1, 2]) {
       test(`${shape} at ${vw}x${vh}@${scale}x fetches a rung covering its drawn width, without gross excess`, async ({ browser }) => {
         const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: scale });
-        const p = await ctx.newPage();
+        const p = await newPage(ctx);
         const { picked, width, dpr } = await fetchVsBox(p, w, h, sizes);
         await ctx.close();
         const need = width * dpr;

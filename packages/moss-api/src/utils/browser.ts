@@ -207,7 +207,7 @@ export interface BrowserSignIn {
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
    * included; check `state` yourself. Rejects with {@link SignInCancelled}
-   * when the person closes the sign-in panel or another sign-in starts. Any
+   * when the person presses Sign in again or another sign-in starts. Any
    * other rejection is a failure, such as "the sign-in took longer than ten
    * minutes" or "the sign-in stopped listening".
    */
@@ -218,7 +218,7 @@ export interface BrowserSignIn {
 const CANCELLED = "sign-in cancelled";
 
 /**
- * The person stopped the sign-in: they closed it, or another sign-in started.
+ * The person stopped the sign-in: they pressed Sign in again, or another sign-in started.
  * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
  *
  * @example
@@ -521,6 +521,8 @@ export interface EditorFillAnswer {
  * panel, as the author would paste it: moss runs its own script there with
  * this data, never the plugin's code, and only on a page of one of the
  * plugin's declared domains.
+ *
+ * With no parts and no title it waits for editor.body and changes nothing, so a plugin can use it to check that an element is there.
  *
  * Only in the moss app; elsewhere it rejects.
  *

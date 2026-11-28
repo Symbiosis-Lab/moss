@@ -73,7 +73,7 @@ const DERIVED: [&str; 8] = [
     // Hover-preview index: one entry per public page, from its title, description
     // and the first 300 characters of its body.
     "_moss/previews.json",
-    // The whole site's markdown, concatenated: any edit to any listed page moves it.
+    // The index of listed pages: moves when one is added, removed, retitled or re-described.
     "llms.txt",
     // Full HTML of every dated, listed article: moves when one of those changes.
     "rss.xml",
@@ -651,17 +651,17 @@ async fn an_md_edit_moves(edit: Edit, moves: &[&str]) {
     assert_nothing_diverges(&o);
 }
 
-/// Body text of an undated page, past the hover preview's 300 characters: only the
-/// concatenation of all markdown changes.
+/// Body text of an undated page, past the hover preview's 300 characters: no
+/// derived file moves, llms.txt included, since it lists titles and descriptions.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_body_edit_of_an_undated_page_moves_llms_txt_alone() {
+async fn a_body_edit_of_an_undated_page_moves_no_derived_file() {
     an_md_edit_moves(
         Edit {
             apply: |v| v.write("notes.md", &notes("", "A-EDIT B-TAIL")),
             trigger: || md_only("notes.md"),
             on_stage: Some(("notes/index.html", "B-TAIL")),
         },
-        &["llms.txt"],
+        &[],
     )
     .await;
 }
@@ -675,7 +675,7 @@ async fn an_edit_near_the_top_of_an_undated_page_also_moves_previews() {
             trigger: || md_only("notes.md"),
             on_stage: Some(("notes/index.html", "B-HEAD")),
         },
-        &["_moss/previews.json", "llms.txt"],
+        &["_moss/previews.json"],
     )
     .await;
 }
@@ -689,7 +689,7 @@ async fn a_body_edit_of_a_dated_article_moves_the_feed_too() {
             trigger: || md_only("posts/b.md"),
             on_stage: Some(("posts/b/index.html", "B-BODY")),
         },
-        &["_moss/previews.json", "feed.json", "feed.xml", "llms.txt", "rss.xml"],
+        &["_moss/previews.json", "feed.json", "feed.xml", "rss.xml"],
     )
     .await;
 }

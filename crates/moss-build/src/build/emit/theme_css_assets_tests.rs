@@ -131,7 +131,7 @@ fn site_with_theme(files: &[(&str, &[u8])]) -> tempfile::TempDir {
 
 fn for_site_on(dir: &tempfile::TempDir, css: &str) -> ThemeCss {
     let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
-    for_site(css, dir.path(), &evidence)
+    for_site(css, dir.path(), "en", &evidence)
 }
 
 #[cfg(unix)]

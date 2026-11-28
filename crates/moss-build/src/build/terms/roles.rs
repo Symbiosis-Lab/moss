@@ -1,7 +1,5 @@
 //! The role a name holds in a term field: the heading a term page gives each
 //! field's section, and the role a listing card shows beside a credited name.
-//! The card credits (`set_card_credits`) read the same labels, so they live
-//! with the labels rather than beside the term model in `terms.rs`.
 
 use super::{field_names, TermKind};
 use crate::build::media::cover::html_escape;
@@ -18,21 +16,7 @@ pub fn term_role_heading(lang: crate::i18n::Language, field: &str) -> String {
     )
 }
 
-/// The plain label a field's role carries: the translated copy for a
-/// built-in, the field's name capitalized for a declared one. The heading
-/// above a term page's section and the role beside a card's name both read it.
-pub fn term_role_label(lang: crate::i18n::Language, field: &str) -> String {
-    match field {
-        "author" | "tags" | "editor" | "jury" | "location" => {
-            crate::i18n::t(lang, &format!("term_role_{}", field)).to_string()
-        }
-        // A declared field has no translated label: its name, capitalized.
-        declared => {
-            let mut chars = declared.chars();
-            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
-        }
-    }
-}
+pub use moss_core::terms::lines::term_role_label;
 
 /// Set [`ParsedDocument::card_extras`] on every page to its card credits, from the
 /// kinds that declare `cards = true`; a site with no such kind sets `None` everywhere.
@@ -51,13 +35,21 @@ fn card_credits_html(doc: &ParsedDocument, kinds: &[TermKind]) -> Option<String>
             if names.is_empty() {
                 continue;
             }
-            let role = html_escape(&term_role_label(doc.lang, field).to_lowercase());
+            // A kind of one field has nothing to tell its names apart by.
+            let role = if kind.fields.len() > 1 {
+                format!(
+                    r#"<span class="moss-credit-role">, {}</span>"#,
+                    html_escape(&term_role_label(doc.lang, field).to_lowercase())
+                )
+            } else {
+                String::new()
+            };
             for name in names {
                 // The slug the term's own page uses, so `data-value` matches its address.
                 let key = crate::vault::places::slugged_key(&kind.slugs, &kind.key, name);
                 let slug = key.strip_prefix(kind.key.as_str()).unwrap_or(&key).trim_start_matches('/');
                 credits.push(format!(
-                    r#"<span class="moss-credit" data-term="{}" data-value="{}">{}<span class="moss-credit-role">, {}</span></span>"#,
+                    r#"<span class="moss-credit" data-term="{}" data-value="{}">{}{}</span>"#,
                     html_escape(&kind.key),
                     html_escape(slug),
                     html_escape(name),

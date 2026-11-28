@@ -274,7 +274,6 @@ pub enum MossEvent {
     SitePromoted(SitePromoted),
     PluginProgress(PluginProgressEvent),
     FileChanged(FileChangeEvent),
-    DeployWaitingForBuild,
     /// What publishing right now would change on the live site, recomputed at
     /// every seal and once more when a deploy discovers there is no local
     /// record to classify against.
@@ -405,6 +404,11 @@ pub enum MossEvent {
     ///
     /// Design: C3.
     LoginBrowserFailed { reason: LoginFailureReason },
+
+    /// A sign-in worked; `panel` names the panel showing it. The page stays in
+    /// view while the shell dries the drop over it, then closes that panel.
+    /// Routed via `emit_to("main", …)` — NOT broadcast.
+    SignInClosing { panel: u64 },
 
     /// A plugin whose process hook needs its account has none bound for this
     /// folder, and the person has not dismissed the prompt. Emitted before

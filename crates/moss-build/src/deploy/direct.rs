@@ -18,10 +18,15 @@
 //!   record is refused. The record also stands in for a remote hash, and it
 //!   is what the mass-removal gate judges against.
 
+pub mod check;
+pub mod connect;
 pub mod destination;
 #[cfg(test)]
 mod folder;
 pub mod plan;
+pub mod server;
+pub mod openssh;
+pub mod sftp;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,6 +36,17 @@ pub use destination::{Body, Destination};
 use plan::{Plan, Record, RECORD_NAME};
 
 use crate::deploy::progress::{DeploySink, DeployStage, UploadProgressState};
+
+/// The refusals a person can lift for one publish.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Allow {
+    /// Deleting most of what the record says is live, the signature of an
+    /// empty or stale build.
+    pub mass_removal: bool,
+    /// Publishing where another site's record is. That record is replaced
+    /// by this site's, and the files it named stay: nobody owns them now.
+    pub take_over: bool,
+}
 
 /// What a publish changed on the destination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,16 +58,13 @@ pub struct Published {
 /// Publish `files` (output path → manifest entry), read from `site_dir`, into
 /// `dest` as the site `owner`, a stable identity of the site that is the same
 /// on every computer publishing it.
-///
-/// `allow_mass_removal` lifts the gate that refuses a publish deleting most
-/// of what the record says is live, the signature of an empty or stale build.
 pub async fn publish(
     dest: &dyn Destination,
     owner: &str,
     site_dir: &Path,
     files: &HashMap<String, String>,
     sink: &Arc<dyn DeploySink>,
-    allow_mass_removal: bool,
+    allow: Allow,
 ) -> Result<Published, String> {
     // A plain file host serves every file it holds to everyone.
     let files = &crate::build::emit::members::public_files(files);
@@ -62,20 +75,15 @@ pub async fn publish(
         Some(bytes) => Some(Record::parse(&bytes)?),
         None => None,
     };
-    if let Some(other) = on_dest.as_ref().map(Record::owner).filter(|o| *o != owner) {
+    let live = on_dest.as_ref().filter(|record| record.owner() == owner);
+    if let Some(other) = on_dest.as_ref().map(Record::owner).filter(|o| *o != owner && !allow.take_over) {
         return Err(format!(
             "this destination holds files another site published ({other:?}); publish each site to its own folder"
         ));
     }
-    let plan = Plan::new(owner, files, on_dest.as_ref());
-    if let Some(live) = &on_dest {
-        super::mass_remove::check_mass_removal(
-            files.len(),
-            plan.puts.len(),
-            &plan.deletes,
-            Some(live.files().len()),
-            allow_mass_removal,
-        )?;
+    let plan = Plan::new(owner, files, live);
+    if let Some(live) = live {
+        super::mass_remove::check_mass_removal(files.len(), &plan.deletes, live.files().len(), allow.mass_removal)?;
     }
     let puts = local_files(site_dir, files, &plan.puts)?;
 
@@ -153,3 +161,7 @@ async fn put_record(dest: &dyn Destination, on_dest: &mut Option<Record>, record
 #[cfg(test)]
 #[path = "direct/publish_tests.rs"]
 mod publish_tests;
+
+#[cfg(test)]
+#[path = "direct/sftp_tests.rs"]
+mod sftp_tests;

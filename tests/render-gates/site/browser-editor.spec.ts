@@ -40,6 +40,14 @@
  * preview shows it at its address before it has any text, in no listing, and
  * after one typed word it is an ordinary page its folder lists.
  *
+ * Then Alt with an arrow on a `:::` block's opening fence moves the whole
+ * block, and on a line in its body stops at the closing fence.
+ *
+ * Then the `:::` fences of a paired block hang in the margin beside a rail, at
+ * a phone width and past the reading measure, and an unpaired one stays in the
+ * text; Backspace on a hung fence unwraps the block in one undo step, and a
+ * fence marker opens no line-type menu where a heading's `#` does.
+ *
  * Then the create menu offers a page's version in another language only when
  * it has none: a version linked by `translationKey` under another file name
  * counts.
@@ -60,12 +68,12 @@
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
-import { test, expect, type Frame, type Page } from '@playwright/test';
+import { test, expect, type Frame, type Page } from '../../support/browser-test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { png } from '../../e2e/helpers/contents-ruler-site';
-import { openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
+import { frameOf, openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -75,6 +83,12 @@ const EVENTS: Record<string, string> = {
   'walk.md': '---\ntitle: Walk\nstart: 2026-12-1\nend: 2026-12-02T10:00\n---\nA walk. [Next](fair.md)\n',
   'fair.md': '---\ntitle: Fair\nstart:\n---\nA fair.\n',
 };
+
+const BLOCKS = '---\ntitle: Blocks\n---\nIntro paragraph.\n\n:::callout\nFirst inside.\n\nSecond inside.\n:::\n\nAfter the block.\n';
+
+const FENCES = '---\ntitle: Fences\n---\n# Heading\n\n:::grid\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n:::\n\nA paragraph.\n\n:::note\n';
+
+const DRAG = '---\ntitle: Drag\n---\n# One\n\nIntro.\n\n:::callout\nInside.\n:::\n\nMiddle.\n\n## Sub\n\nsub text\n\n# Two\n\ntwo text\n';
 
 const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -165,6 +179,9 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
     writeFileSync(join(site, 'pictures', 'door.png'), gradient(800, 600, 40));
     writeFileSync(join(site, 'album.md'), '---\ntitle: Album\n---\nAn album.\n\n![Door](pictures/door.png)\n\n![Later](pictures/later.png)\n\nLast line.\n');
   }
+  writeFileSync(join(site, 'blocks.md'), BLOCKS);
+  writeFileSync(join(site, 'fences.md'), FENCES);
+  writeFileSync(join(site, 'drag.md'), DRAG);
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -173,18 +190,26 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
   writeFileSync(join(site, '.moss', 'config.toml'), '[site]\nurl = "https://garden.example.org"\n');
   mkdirSync(join(site, 'notes'));
   writeFileSync(join(site, 'notes', 'first-frost.md'), '---\ntitle: First frost\ndate: 2026-10-01\n---\nThe beds are covered.\n');
+  // A page that owns a script, which draws into it as a theme's map does. In a folder, so the tree the drag test measures keeps its length.
+  writeFileSync(join(site, 'notes', 'drawn.md'), '---\ntitle: Drawn\n---\n' + Array.from({ length: 80 }, (_, i) => `Row ${i} of the drawn page.`).join('\n\n') + '\n');
+  writeFileSync(join(site, 'notes', 'drawn.js'), "document.querySelector('main').append(Object.assign(document.createElement('figure'), { className: 'drawn' }));\n");
 }, {
   // The new-page test reads the rename's own request from the log.
   MOSS_LOG_LEVEL: 'info',
 });
 
 /**
- * Open the file tree's list from the root crumb and wait for the panel to
- * finish growing. Its rows move while it grows, so a click made then can press
- * one row and release on another, which the tree takes as a click on no row.
+ * Open the file tree's list from the root crumb, unless it is open, and wait
+ * for the panel to finish growing. The crumb is a folder, with
+ * `aria-expanded`, only once the file list has arrived; a click before that
+ * opens nothing. Rows move while the panel grows, so a click made then can
+ * press one row and release on another, which the tree takes as a click on no row.
  */
 async function openTreeRoot(editor: Frame) {
-  await editor.click('.seg.bc[data-path=""]');
+  const root = editor.locator('.seg.bc[data-path=""][aria-expanded]');
+  await expect(root).toBeVisible({ timeout: 30_000 });
+  if ((await root.getAttribute('aria-expanded')) === 'false') await root.click();
+  await expect(root).toHaveAttribute('aria-expanded', 'true');
   await editor.waitForFunction(() => document.querySelector('.nav-surface')?.getAnimations().length === 0);
 }
 
@@ -274,7 +299,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     // The footer asks before it opens; answered "don't ask again" here.
     await editor.evaluate(() => localStorage.setItem('moss.specialFile.skipConfirm.footer', '1'));
     // The root crumb toggles the list: open it only when it is closed.
-    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await openTreeRoot(editor);
+    await openTreeRoot(editor);
     await editor.click('.seg[data-path="footer.md"]');
     // The editor's own address names a file only when the preview follows to it, so the text is read.
     await expect(editor.locator('.cm-content')).toContainText('Tended by hand', { timeout: 15_000 });
@@ -327,7 +352,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
 test('a click on text in the page washes its line in the editor and brings it into view', async ({ page }) => {
   const { editor, preview } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
-  if ((await editor.locator('.seg[data-path="almanac.md"]').count()) === 0) await openTreeRoot(editor);
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="almanac.md"]');
   await preview.waitForFunction(() => document.body?.innerText.includes('Entry 1 of the almanac'), null, { timeout: 30_000 });
   await expect(editor.locator('.cm-content')).toContainText('Entry 1 of the almanac', { timeout: 15_000 });
@@ -355,6 +380,166 @@ test('a click on text in the page washes its line in the editor and brings it in
   await preview.locator('.moss-grid-card p:has-text("The pond freezes last.")').click();
   await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click inside a grid column' })
     .toEqual([{ text: 'The pond freezes last.', shown: true }]);
+});
+
+test('Alt with an arrow moves a ::: block whole from its fence, and keeps a body block inside it', async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  await openTreeRoot(editor);
+  await editor.click('.seg[data-path="blocks.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('Second inside.', { timeout: 15_000 });
+  const file = () => readFileSync(join(serve.site, 'blocks.md'), 'utf8');
+  const caretLine = () => editor.evaluate(() => {
+    const at = getSelection()?.focusNode;
+    return (at instanceof Element ? at : at?.parentElement)?.closest('.cm-line')?.textContent ?? null;
+  });
+
+  await editor.locator('.cm-line', { hasText: ':::callout' }).click();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Alt-Up on the opening fence' })
+    .toBe('---\ntitle: Blocks\n---\n:::callout\nFirst inside.\n\nSecond inside.\n:::\n\nIntro paragraph.\n\nAfter the block.\n');
+  expect(await caretLine(), 'the caret stays on the moved fence').toBe(':::callout');
+
+  await editor.locator('.cm-line', { hasText: 'Second inside.' }).click();
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Alt-Down then Alt-Up on a body line' })
+    .toBe('---\ntitle: Blocks\n---\n:::callout\nSecond inside.\n\nFirst inside.\n:::\n\nIntro paragraph.\n\nAfter the block.\n');
+  expect(await caretLine(), 'the caret moves with its block').toBe('Second inside.');
+});
+
+test('paired ::: fences hang in the margin beside a rail, an unpaired one stays text, and Backspace unwraps the block', async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  await openTreeRoot(editor);
+  await editor.click('.seg[data-path="fences.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('A paragraph.', { timeout: 15_000 });
+  const file = () => readFileSync(join(serve.site, 'fences.md'), 'utf8');
+  const line = (text: string) => editor.locator('.cm-line', { hasText: text });
+  // Where the line's marker ends and its text begins, and the rail's box.
+  const geometry = (text: string) => line(text).evaluate((el) => {
+    const hang = el.querySelector('.cm-hang')?.getBoundingClientRect();
+    const own = el.getBoundingClientRect();
+    const textLeft = own.left + parseFloat(getComputedStyle(el).paddingLeft);
+    const rail = getComputedStyle(el, '::after');
+    return {
+      hung: !!hang, hangRight: hang?.right ?? null, hangLeft: hang?.left ?? null, textLeft,
+      railWidth: rail.content === 'none' ? 0 : parseFloat(rail.width), railLeft: rail.content === 'none' ? null : own.left + parseFloat(rail.left),
+      menuTarget: !!el.querySelector('.cm-hang[data-indicator]'),
+    };
+  });
+
+  // The reading inset is spine + gutter in a pane up to about 797px wide and (pane - measure) / 2 beyond it: the panes run from the narrowest through both sides of that switch.
+  const pane = () => editor.evaluate(() => document.querySelector('.cm-scroller')!.clientWidth);
+  const inset = () => line('One.').evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft));
+  let narrowInset = 0;
+  for (const [width, regime] of [[420, 'below'], [780, 'below'], [820, 'above'], [1600, 'above']] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(async () => (await pane() > 797) === (regime === 'above'), { message: `the editor pane at ${width}px` }).toBe(true);
+    const paneWidth = await pane(), padding = await inset();
+    console.log(`hung fences: viewport ${width}px, editor pane ${paneWidth}px, text inset ${padding}px`);
+    if (regime === 'below') narrowInset = narrowInset || padding;
+    else expect(padding, 'past the switch the inset grows with the pane').toBeGreaterThan(narrowInset);
+    const open = await geometry(':::grid');
+    expect(open.hung, `the opening fence hangs at ${width}px`).toBe(true);
+    expect(open.hangRight!, 'the marker ends before the text column').toBeLessThanOrEqual(open.textLeft);
+    expect(open.hangLeft!, 'the marker is not clipped off the left edge').toBeGreaterThanOrEqual(0);
+    expect(open.railWidth, 'one rail beside the outer fence').toBeGreaterThan(0);
+    expect(open.railLeft!, 'the rail is in the margin, left of the marker').toBeLessThan(open.hangLeft!);
+
+    const nested = await geometry('::::buttons');
+    expect(nested.hung).toBe(true);
+    expect(nested.railWidth, 'a nested block stacks a second rail').toBeGreaterThan(open.railWidth);
+
+    const body = await geometry('One.');
+    expect(body.hung).toBe(false);
+    expect(body.railWidth, 'a body line keeps its rail').toBeGreaterThan(0);
+
+    const close = await line(':::').evaluateAll((els) => els.map((el) => ({ text: el.textContent, hung: !!el.querySelector('.cm-hang') })));
+    expect(close.filter((l) => l.hung).length, 'both closing fences hang and so does the outer opening one').toBeGreaterThanOrEqual(3);
+
+    const lone = await geometry(':::note');
+    expect(lone.hung, 'an unpaired fence stays in the text column').toBe(false);
+    expect(lone.railWidth).toBe(0);
+  }
+
+  await editor.locator('.cm-line', { hasText: '# Heading' }).locator('.cm-hang').click();
+  await expect(editor.locator('[role="menu"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await line(':::grid').locator('.cm-hang').click();
+  await page.waitForTimeout(300);
+  expect(await editor.locator('[role="menu"]').count(), 'a fence marker opens no line-type menu').toBe(0);
+
+  // The press moved nothing; the caret goes to the start of the fence's text, where Backspace unwraps.
+  await line(':::grid').click();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Backspace');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Backspace on the hung opening fence' })
+    .toBe('---\ntitle: Fences\n---\n# Heading\n\nOne.\n\n::::buttons\n[Go](about.md)\n::::\n\nA paragraph.\n\n:::note\n');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the block' }).toBe(FENCES);
+});
+
+for (const width of [420, 1280]) test(`a block is dragged by its margin grip at ${width}px: a ::: block among its siblings, a heading's section whole, Esc cancels`, async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  await openTreeRoot(editor);
+  await editor.click('.seg[data-path="drag.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('two text', { timeout: 15_000 });
+  await page.setViewportSize({ width, height: 1600 }); // real mouse moves do not scroll: the whole page stays on screen
+  const file = () => readFileSync(join(serve.site, 'drag.md'), 'utf8');
+  const line = (text: string | RegExp) => editor.locator('.cm-line', { hasText: text });
+  const box = async (text: string | RegExp) => (await line(text).first().boundingBox())!;
+  const grip = async (text: string) => { const b = (await line(text).locator('.cm-hang').boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+  const undo = () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  const move = async (from: { x: number; y: number }, to: number, release = true) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 2, from.y + 2); // under the threshold: still a press
+    await page.mouse.move(from.x, to, { steps: 8 });
+    if (release) await page.mouse.up();
+  };
+  // The text a section's drag changes is only ever the file: the dim and the line are editor chrome.
+  const chrome = () => editor.evaluate(() => ({ lifted: document.querySelectorAll('.cm-grip-lifted').length, line: document.querySelectorAll('.cm-grip-insertion').length }));
+
+  // A :::  block's colons lift the block; the line shows below `Middle.`, between whole blocks of its section.
+  const afterMiddle = (await box('Middle.')).y + (await box('Middle.')).height + 4;
+  await move(await grip(':::callout'), afterMiddle, false);
+  expect(await chrome(), 'the block is dimmed (its three lines) and one insertion line shows').toEqual({ lifted: 3, line: 1 });
+  await page.mouse.up();
+  const DOWN = '---\ntitle: Drag\n---\n# One\n\nIntro.\n\nMiddle.\n\n:::callout\nInside.\n:::\n\n## Sub\n\nsub text\n\n# Two\n\ntwo text\n';
+  await expect.poll(file, { timeout: 15_000, message: 'the file after dragging the block below Middle.' }).toBe(DOWN);
+  expect(await chrome(), 'nothing is left dimmed or drawn').toEqual({ lifted: 0, line: 0 });
+  await undo();
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the block' }).toBe(DRAG);
+
+  // Dropped by its own gaps, the block stays put and no line was drawn there.
+  await move(await grip(':::callout'), (await box('Inside.')).y, false);
+  expect(await chrome(), 'the block is lifted but no line shows over its own gap').toEqual({ lifted: 3, line: 0 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(file(), 'a drop in its own gap changes nothing').toBe(DRAG);
+
+  // Esc cancels with the button still down.
+  await move(await grip(':::callout'), afterMiddle, false);
+  expect((await chrome()).line).toBe(1);
+  await page.keyboard.press('Escape');
+  expect(await chrome()).toEqual({ lifted: 0, line: 0 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect(file(), 'Esc leaves the file as it was').toBe(DRAG);
+  expect(await editor.locator('[role="menu"]').count(), 'a cancelled drag opens no menu').toBe(0);
+
+  // A heading's `#` lifts its whole section, sub-heading included, above the first one.
+  await move(await grip('# One'), (await box('# One')).y + (await box('# One')).height * 4, false);
+  expect((await chrome()).line, 'its own gap shows no line').toBe(0);
+  await page.mouse.up();
+  const two = await grip('# Two');
+  await move(two, (await box('# One')).y - 4);
+  const SWAPPED = '---\ntitle: Drag\n---\n# Two\n\ntwo text\n\n# One\n\nIntro.\n\n:::callout\nInside.\n:::\n\nMiddle.\n\n## Sub\n\nsub text\n';
+  await expect.poll(file, { timeout: 15_000, message: 'the file after dragging # Two above # One' }).toBe(SWAPPED);
+  await undo();
+  await expect.poll(file, { timeout: 15_000, message: 'one undo restores the sections' }).toBe(DRAG);
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
@@ -543,7 +728,7 @@ test("a page's problem count shows once, and steps through its problems", async 
   await expect.poll(caretLine).toContain('slide-02.jpg');
 
   // The tree: a closed folder carries its total, an open one leaves it to its rows.
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await expect(count('drafts')).toHaveText('2');
   await editor.locator('.seg[data-path="drafts"]').scrollIntoViewIfNeeded();
   await shots(page, 'count-tree-closed', browserName);
@@ -712,8 +897,27 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
 });
 
+test("an edit to a page whose own script draws into it reloads it, keeping the drawing and the scroll", async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await preview.evaluate(() => location.assign('/notes/drawn/'));
+  await preview.waitForFunction(() => location.pathname === '/notes/drawn/' && document.readyState === 'complete' && document.querySelector('figure.drawn'), null, { timeout: 30_000 });
+  await preview.evaluate(() => { window.scrollTo(0, 900); (window as unknown as { kept: boolean }).kept = true; });
+
+  writeFileSync(join(serve.site, 'notes', 'drawn.md'), readFileSync(join(serve.site, 'notes', 'drawn.md'), 'utf8') + '\nA line added.\n');
+  await preview.waitForFunction(() => document.body?.innerText.includes('A line added') && document.querySelector('figure.drawn'), null, { timeout: 30_000 });
+  expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was morphed, not reloaded').toBeUndefined();
+  expect(await preview.locator('figure.drawn').count()).toBe(1);
+  await expect.poll(() => preview.evaluate(() => Math.round(window.scrollY)), { message: 'the scroll was kept' }).toBe(900);
+});
+
 // Red only in WebKit without the fix: Chromium's in-place refresh succeeds mid-navigation, WebKit's fails and falls back to a reload.
-test('a build landing while a clicked page loads does not send the preview back', async ({ page }) => {
+// A site script leaves the page with no click to read (search, the series keys, forms).
+const LEAVINGS: [string, (preview: Frame) => Promise<unknown>][] = [
+  ['a clicked page', (preview) => preview.click('a:has-text("To the Chinese pages")')],
+  ['a page a site script opens', (preview) => preview.evaluate(() => location.assign('/zh-hans/'))],
+];
+for (const [what, leave] of LEAVINGS) test(`a build landing while ${what} loads does not send the preview back`, async ({ page }) => {
   const { preview } = await openEditor(page);
   await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
   // Hold the clicked page's response so the build below always lands mid-navigation.
@@ -726,7 +930,7 @@ test('a build landing while a clicked page loads does not send the preview back'
   const refreshes: string[] = [];
   page.on('console', (m) => m.text().startsWith('[preview-refresh]') && refreshes.push(m.text()));
 
-  await preview.click('a:has-text("To the Chinese pages")');
+  await leave(preview);
   // Both the page being left and the page being loaded change, so the shell refreshes whichever it watches.
   for (const file of ['index.md', join('zh-hans', 'index.md')]) {
     writeFileSync(join(serve.site, file), readFileSync(join(serve.site, file), 'utf8') + '\nA held line.\n');
@@ -736,6 +940,72 @@ test('a build landing while a clicked page loads does not send the preview back'
 
   await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
   await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+});
+
+// The editor opens the file of the page on screen and asks the preview to show that page; the request must not undo a load started since.
+for (const [what, leave] of LEAVINGS) test(`the editor opening the page on screen as ${what} loads does not send the preview back`, async ({ page }) => {
+  // The editor's request lands while the next page is in flight: its address is answered only once that load has begun, which waits for the answer.
+  let left!: () => void;
+  const leaving = new Promise<void>((resolve) => (left = resolve));
+  let answered!: () => void;
+  const answer = new Promise<void>((resolve) => (answered = resolve));
+  await page.route((url) => url.pathname === '/__moss/read/resolve_url_for_file', async (route) => {
+    await leaving;
+    await route.fulfill({ response: await route.fetch() });
+    answered();
+  });
+  await page.route('**/zh-hans/**', async (route) => {
+    if (route.request().isNavigationRequest()) {
+      left();
+      await answer;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await route.continue().catch(() => {}); // a navigation the frame cancelled has nothing to continue
+  });
+  const { preview } = await openEditor(page);
+  await leave(preview);
+  await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+  expect(new URL(preview.url()).pathname).toBe('/zh-hans/');
+});
+
+// The editor opens before the shell knows the page's file, and a build adds a file in the meantime: the shell's answer still decides what opens.
+test('a file added while the editor waits on the page leaves the editor and the preview on that page', async ({ page }) => {
+  const { shell, preview } = await openShell(page, serve, 'Hello garden');
+  let holding = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route((url) => url.pathname === '/__moss/read/resolve_page_source', async (route) => {
+    if (holding && route.request().frame() === shell) await held;
+    await route.continue().catch(() => {});
+  });
+  const created: string[] = [];
+  page.on('console', (m) => m.text().includes('green-flash: +') && created.push(m.text()));
+
+  holding = true;
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
+  const editor = await frameOf(page, 'moss-editor-frame');
+  await shell.click('#moss-edit-button');
+  await expect(page.locator('#moss-frames')).toHaveAttribute('data-editor', 'split', { timeout: 10_000 });
+  writeFileSync(join(serve.site, 'arrived while waiting.md'), '# Arrived\n');
+  await expect.poll(() => created.length, { timeout: 30_000, message: 'the editor heard of the new file' }).toBeGreaterThan(0);
+  // Time for a wrong decision to show: the editor opening the home page and the preview following it.
+  await page.waitForTimeout(2_000);
+  release();
+
+  await expect(editor.locator('.cm-content')).toContainText('你好，花园。', { timeout: 15_000 });
+  await expect(preview.locator('body')).toContainText('你好，花园。');
+  expect(new URL(preview.url()).pathname).toBe('/zh-hans/');
+});
+
+// The places explorer writes its view into the address at every pan's end; that loads nothing, so the next build still shows.
+test('a build after a site script rewrites the address in place still refreshes the page', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await expect(preview.locator('body')).toContainText('Hello garden', { timeout: 15_000 });
+  await preview.evaluate(() => history.replaceState(null, '', '?z=4'));
+  writeFileSync(join(serve.site, 'index.md'), readFileSync(join(serve.site, 'index.md'), 'utf8') + '\nA line after the pan.\n');
+  await expect(preview.locator('body')).toContainText('A line after the pan', { timeout: 15_000 });
 });
 
 test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
@@ -768,14 +1038,24 @@ test('the address copied from a page just made carries no reload stamp', async (
 test(PICTURE_GATE, async ({ page }) => {
   test.setTimeout(240_000);
   const { editor, preview } = await openEditor(page);
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="album.md"]');
   await preview.waitForFunction(() => document.body?.innerText.includes('An album'), null, { timeout: 30_000 });
   await editor.waitForSelector('.cm-line:has-text("Last line.")', { timeout: 30_000 });
 
+  /** A picture address's source, as a folder path without its extension: `/events/quay.w1200.webp` is `events/quay`. */
+  const stemOf = (pathname: string) => decodeURIComponent(pathname).replace(/^\//, '').replace(/(\.w\d+)?\.(webp|avif)$/, '');
+  const sourceStems = () => new Set(readdirSync(serve.site, { recursive: true, encoding: 'utf8' }).filter((f) => !f.startsWith('.moss')).map((f) => f.replace(/\.[^./]+$/, '')));
+  // A 404 counts only while the picture is at that path in the folder: a page the preview still shows may name a
+  // picture that has not landed yet, or has just been moved, until the build that replaces the page arrives.
   const notFound: string[] = [];
+  let settled = false;
+  const broken: string[] = [];
   page.on('response', (r) => {
-    if (r.status() === 404 && /harbour|quay|later/.test(r.url())) notFound.push(new URL(r.url()).pathname);
+    if (!/harbour|quay|later/.test(r.url())) return;
+    const pathname = new URL(r.url()).pathname;
+    if (r.status() === 404 && sourceStems().has(stemOf(pathname))) notFound.push(pathname);
+    if (settled && (r.status() === 404 || r.status() === 503)) broken.push(`${r.status()} ${pathname}`);
   });
   /**
    * The preview's picture whose address holds `name`: its drawn size, its `<source>` count and what it loaded.
@@ -819,8 +1099,6 @@ test(PICTURE_GATE, async ({ page }) => {
   });
 
   await test.step('a picture the page already names lands in its folder', async () => {
-    // Until now the page named a file that was not there.
-    notFound.splice(0, notFound.length, ...notFound.filter((path) => !path.includes('later')));
     writeFileSync(join(serve.site, 'pictures', 'later.png'), gradient(900, 1200, 200));
     await shown('later');
   });
@@ -844,9 +1122,13 @@ test(PICTURE_GATE, async ({ page }) => {
 
     await editor.locator(`.seg[data-path="${inFolder('quay.png')}"]`).dragTo(editor.locator('.seg[data-path="events"]:not(.bc)').first());
     await shown('events/quay');
+    settled = true;
+    await expect.poll(async () => (await picture('events/quay'))?.loaded ?? '', { message: 'the moved picture is loaded by the page that replaced the old one' }).toMatch(/events\/quay.*\.webp/);
+    await page.waitForTimeout(1_000);
   });
 
   expect(notFound, 'the preview answered 404 for a picture that is in the folder').toEqual([]);
+  expect(broken, 'the page shown after the move requested a picture that answered 404 or 503').toEqual([]);
 });
 
 test.describe(PICTURE_MENU, () => {

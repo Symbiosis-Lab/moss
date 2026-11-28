@@ -2,11 +2,9 @@
 //! a plain site-name link otherwise.
 //!
 //! A child module of `nav` for the same reason as `island`: it builds from
-//! `NavigationBuilder`'s private state, and a child module can read its
-//! parent's privates. Moved out of `nav.rs` whole (2026-08-14) to keep that
-//! file under the size the ratchet caps at.
+//! `NavigationBuilder`'s private state. The trail itself is moss-core's.
 
-use super::{NavigationBuilder, island};
+use super::NavigationBuilder;
 
 impl<'a> NavigationBuilder<'a> {
     /// The plain (non-breadcrumb) `.nav-left`: a linked site name. Extracted
@@ -22,122 +20,19 @@ impl<'a> NavigationBuilder<'a> {
         format!(r#"<a href="{}" class="site-name">{}{}</a>"#, home_path, logo_html, self.site_title)
     }
 
-    /// Build the `.nav-left` fragment: breadcrumb trail or plain site name.
-    ///
-    /// `home_path` / `logo_html` are precomputed by `generate_navigation`
-    /// (the logo also appears in the hamburger header it builds).
+    /// The `.nav-left` fragment: the breadcrumb trail, or the plain site name
+    /// where there is none. `home_path` / `logo_html` are computed once by
+    /// `generate_navigation`.
     pub(super) fn nav_left_html(&self, home_path: &str, logo_html: &str) -> String {
-        if let Some(segments) = &self.breadcrumb_segments {
-            if segments.is_empty() {
-                // No segments: fall back to plain site name
-                self.plain_site_name_html(home_path, logo_html)
-            } else {
-                let mut parts = Vec::new();
-                for segment in segments {
-                    if segment.is_current {
-                        // Ordinarily skipped — "you are here" is already
-                        // the page's own visible `<h1>`, so repeating the
-                        // title here would say it twice. `force`d on only
-                        // for an explorer root, whose `<h1>` is hidden (see
-                        // `breadcrumb_current_visible`'s own doc): render it
-                        // as the trail's own unlinked, `aria-current="page"`
-                        // terminal crumb, reusing the same label markup/
-                        // `data-trail-crumb` handle every other crumb gets.
-                        if self.breadcrumb_current_visible {
-                            // `breadcrumb-current` — not just `breadcrumb-segment` —
-                            // is what lets site.css's legibility/fold rules tell
-                            // this crumb apart from the real last ANCESTOR
-                            // segment: with this one forced on, it is the trail's
-                            // true last child, so a selector keyed on mere
-                            // position would now hit this span instead (see
-                            // `.breadcrumb-segment:last-child`'s own doc in
-                            // site.css). Same pattern the nav island already
-                            // uses for its own always-visible current crumb
-                            // (`island.rs`'s `moss-nav-island-current`).
-                            parts.push(format!(
-                                r#"<span class="breadcrumb-segment breadcrumb-current" aria-current="page" data-trail-crumb><span class="breadcrumb-label">{}</span></span>"#,
-                                segment.title
-                            ));
-                        }
-                        continue;
-                    }
-                    let is_home = segment.url == home_path;
-                    // Non-home segments nest their label in a `<span>`: the
-                    // span owns `overflow: hidden` + `text-overflow: ellipsis`
-                    // so the `<a>` itself can stay unclipped, which is what
-                    // lets its `data-tooltip` pseudo-element paint outside the
-                    // truncated box. Collapsing the two onto the `<a>` clips
-                    // the hint along with the label.
-                    let content = if is_home {
-                        format!("{}{}", logo_html, segment.title)
-                    } else {
-                        format!(r#"<span class="breadcrumb-label">{}</span>"#, segment.title)
-                    };
-                    // Middle/parent segments are the ones CSS shrinks with an
-                    // ellipsis (and clamps to a bare "…" on a phone), so they
-                    // carry their untruncated label — but in `data-hint-label`,
-                    // which site.css deliberately styles nothing from. The
-                    // hover hint is only worth showing when the label really is
-                    // cut off, and that is a question about rendered width that
-                    // CSS cannot ask; `breadcrumb-hint.ts` (bundled into
-                    // theme.js) measures `scrollWidth > clientWidth` on the
-                    // label span and copies this attribute over to
-                    // `data-tooltip` — the attribute site.css does render —
-                    // only while that holds. Emitting `data-tooltip` here
-                    // instead is what made every segment show a hint whether or
-                    // not it was truncated. The home segment is
-                    // `flex-shrink: 0` and never truncates, so it gets nothing.
-                    let hint = if is_home {
-                        String::new()
-                    } else {
-                        format!(
-                            r#" data-hint-label="{}""#,
-                            crate::build::page::meta::escape_html_attr(&segment.title)
-                        )
-                    };
-                    // `data-trail-crumb` is the fold algorithm's handle on the
-                    // trail (masthead-fold.ts) — on EVERY crumb, including the
-                    // two that never fold, so the script can index the list
-                    // positionally instead of re-deriving which is which.
-                    parts.push(format!(
-                        r#"<a href="{}" class="{}" data-trail-crumb{}>{}</a>"#,
-                        segment.url,
-                        if is_home { "site-name" } else { "breadcrumb-segment" },
-                        hint,
-                        content
-                    ));
-                }
-                let separator = island::SEPARATOR;
-                // Editor preview: the trail names the field that toggles it.
-                // Only the breadcrumb-mode `.nav-left` — the plain site-name
-                // fallbacks are not breadcrumbs and stay bare chrome.
-                let fm_attr =
-                    if self.fm_breadcrumb { r#" data-source-fm="breadcrumb""# } else { "" };
-                // Fewer than three crumbs means there is no middle to fold —
-                // the site name and the parent segment both always survive —
-                // so a shallow trail carries no `…` and no panel at all,
-                // rather than controls that can never unhide. With three or
-                // more, the masthead folds exactly like the island, extended
-                // to the masthead: the `…` opens the folded
-                // levels, and only the last segment may ellipsise. The panel
-                // is a sibling of `.nav-left` because `.nav-left` clips its
-                // own overflow — its containing block is `.nav-content`.
-                if parts.len() < 3 {
-                    format!(r#"<div class="nav-left"{fm_attr}>{}</div>"#, parts.join(separator))
-                } else {
-                    let more_label = crate::build::page::meta::escape_html_attr(
-                        crate::i18n::t(self.current_lang, "nav_hidden_levels"),
-                    );
-                    let more = island::fold_more_fragment("moss-breadcrumb-more", &more_label);
-                    format!(
-                        r#"<div class="nav-left"{fm_attr}>{}{separator}{more}{}</div><div class="moss-breadcrumb-menu" hidden></div>"#,
-                        parts[0],
-                        parts[1..].join(separator)
-                    )
-                }
-            }
-        } else {
-            self.plain_site_name_html(home_path, logo_html)
+        match self.breadcrumb_segments.as_deref() {
+            Some(segments) if !segments.is_empty() => moss_core::page::nav::trail_html(segments, &moss_core::page::nav::TrailMarkup {
+                home_path,
+                logo_html,
+                current_visible: self.breadcrumb_current_visible,
+                source_fm: self.fm_breadcrumb,
+                lang: self.current_lang,
+            }),
+            _ => self.plain_site_name_html(home_path, logo_html),
         }
     }
 }

@@ -73,10 +73,6 @@ pub(crate) struct CapturingAnnouncer {
 
 #[async_trait::async_trait]
 impl crate::build::ports::announcer::SealAnnouncer for CapturingAnnouncer {
-    fn needs_a_seal(&self) -> bool {
-        true
-    }
-
     fn promoted(&self, generation_id: &str) {
         self.inner.promoted(generation_id);
     }
@@ -140,6 +136,22 @@ fn capture_accepting(host: &mut crate::build::HostPorts, accept_removals: bool) 
     captured
 }
 
+/// The build every one-shot publish route runs before its upload: build and
+/// seal the folder, then apply what the person accepted to that seal.
+pub(crate) async fn build_for_publish(
+    folder: &std::path::Path,
+    host: crate::build::HostPorts,
+    plugins: crate::build::PluginMode,
+    overrides: &crate::deploy::push::PublishOverrides,
+    sink: &std::sync::Arc<dyn crate::deploy::progress::DeploySink>,
+) -> Result<Option<SealedManifest>, String> {
+    sink.stage(crate::deploy::progress::DeployStage::Preparing, 0, 0, "Building the site...");
+    let root = crate::vault::paths::VaultRoot::resolve(folder);
+    let sealed = build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
+    overrides.accept(folder, sealed.as_ref());
+    Ok(sealed)
+}
+
 /// One headless build and what it sealed. The hosted deploy, the plugin
 /// deploy and `moss history` all build before they act; this is the build.
 /// Each caller keeps its own session guard (the session must outlive the
@@ -169,8 +181,8 @@ pub(crate) async fn build_and_describe(
         watch: false,
         start_server: false,
         host,
-        // Pages nothing changed are carried from the last seal. The build
-        // never stops at its entry: the announcer below must receive a seal.
+        // Pages nothing changed are carried from the last seal; with nothing
+        // changed at all, the build hands that seal over from its entry.
         trigger: crate::build::BuildTrigger::Unobserved,
         reason: Some(crate::build::BuildReason::Publish),
         exits_after_build: true,
@@ -333,6 +345,79 @@ mod tests {
             plugins, false).await.unwrap()).unwrap()
     }
 
+    /// A sign-in or sign-out after the build leaves the generation behind the
+    /// account an identity tag reads; the publish's own record does not.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_account_change_after_the_build_moves_the_state() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        let built = deploy_build(dir.path()).await;
+        assert!(!built.state_moved(dir.path()), "a fresh build is current");
+        let binding = crate::plugins::manager::accounts::AccountBinding { id: "acct:1".into(), name: None, host: None };
+        crate::plugins::manager::accounts::bind_account(&folder, "social", &binding).unwrap();
+        assert!(built.state_moved(dir.path()), "a sign-in moved it");
+        let signed_in = deploy_build(dir.path()).await;
+        assert!(!signed_in.state_moved(dir.path()), "a rebuild catches up");
+        crate::plugins::manager::accounts::unbind_account(&folder, "social").unwrap();
+        assert!(signed_in.state_moved(dir.path()), "a sign-out moved it");
+        let signed_out = deploy_build(dir.path()).await;
+        assert!(!signed_out.state_moved(dir.path()));
+        let state = dir.path().join(".moss/state.toml");
+        std::fs::remove_file(&state).unwrap();
+        assert!(signed_out.state_moved(dir.path()), "a removed state file moved it");
+        std::fs::create_dir(&state).unwrap();
+        assert!(signed_out.state_moved(dir.path()), "an unreadable one moved it");
+    }
+
+    /// A publish's own record (outcome, DNS verified, CDN status) leaves the
+    /// generation current; only a sign-in moves it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_publishs_own_record_does_not_move_the_state() {
+        use crate::vault::deployment_state as record;
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        let outcome = |at: &str, url: &str| record::PublishOutcome {
+            url: url.into(),
+            deployed_at: at.into(),
+            site_url: Some("https://example.com".into()),
+            dns_target: Some(crate::config::deployment::DnsTarget {
+                records: vec![crate::config::deployment::DnsRecord { record_type: "A".into(), name: "@".into(), value: url.into(), ttl: None }],
+            }),
+            generation_id: Some("g1".into()),
+            ..Default::default()
+        };
+        record::record_publish(&folder, outcome("2026-11-01T00:00:00Z", "a.example.net")).unwrap();
+        let built = deploy_build(dir.path()).await;
+        assert!(!built.state_moved(dir.path()), "a fresh build is current");
+        record::record_publish(&folder, outcome("2026-11-02T00:00:00Z", "b.example.net")).unwrap();
+        record::record_dns_verified(&folder).unwrap();
+        record::record_cdn_status(&folder, "pending").unwrap();
+        assert!(!built.state_moved(dir.path()), "a publish's own record moved nothing a page reads");
+        let binding = crate::plugins::manager::accounts::AccountBinding { id: "acct:1".into(), name: None, host: None };
+        crate::plugins::manager::accounts::bind_account(&folder, "social", &binding).unwrap();
+        assert!(built.state_moved(dir.path()), "a sign-in moved it");
+    }
+
+    /// The build reads only whether the CDN is active, to pick www or the apex.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_an_active_cdn_moves_the_state() {
+        use crate::vault::deployment_state::record_cdn_status;
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        crate::vault::deployment_state::record_dns_verified(&folder).unwrap();
+        let built = deploy_build(dir.path()).await;
+        record_cdn_status(&folder, "pending").unwrap();
+        assert!(!built.state_moved(dir.path()), "a non-active word moved nothing");
+        record_cdn_status(&folder, "active").unwrap();
+        assert!(built.state_moved(dir.path()), "going active moved it");
+        let active = deploy_build(dir.path()).await;
+        record_cdn_status(&folder, "active").unwrap();
+        assert!(!active.state_moved(dir.path()), "a repeated active moved nothing");
+    }
+
     fn two_page_site(about: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
@@ -340,42 +425,88 @@ mod tests {
         dir
     }
 
-    /// A deploy with nothing changed since the last build renders no page,
-    /// and still seals the generation it uploads from.
+    /// Every record the publish gate reads starts empty in a new process.
+    fn forget_gate_records(folder: &str) {
+        crate::system::build_records::records().forget_folder(folder);
+    }
+
+    /// A deploy with nothing changed since the last build ends at its entry
+    /// and hands over the generation that build sealed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_deploy_with_nothing_changed_carries_every_page() {
+    async fn a_deploy_with_nothing_changed_hands_over_the_kept_seal() {
         let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = two_page_site("---\ntitle: About\n---\n\nAbout us.\n");
-        let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
+        let folder = dir.path().to_string_lossy().to_string();
+        let _session = crate::system::folder_session::register_session(&folder);
         // The first build writes files the second reads, so the second renders.
         deploy_build(dir.path()).await;
         let first = deploy_build(dir.path()).await;
+        forget_gate_records(&folder);
         let second = deploy_build(dir.path()).await;
         let counts = build_counts(dir.path());
-        assert_eq!(counts["pages_rendered"], 0, "{counts}");
-        assert!(counts["pages_carried"].as_u64().unwrap() >= 1, "{counts}");
-        assert_eq!(second.files(), first.files(), "a carried deploy uploads the same site");
+        assert_eq!(counts["unchanged_at_entry"], 1, "{counts}");
+        assert_eq!(second.generation_id(), first.generation_id());
+        assert_eq!(second.files(), first.files(), "a stopped deploy uploads the same site");
+        assert_eq!(crate::deploy::publish_refusal(&folder).map(|r| r.kind), None);
+        assert!(crate::deploy::refuse_unresolved_inputs(&second).is_ok(), "the kept seal brings its read evidence");
+        assert!(crate::deploy::refuse_foreign_inputs(&second, dir.path()).is_ok());
+        assert!(matches!(crate::system::build_records::records().build_end(&folder), Some(crate::system::build_records::BuildEnd::Publishable)));
     }
 
-    /// The publish gate reads what the deploy's own build found: a carried
-    /// page's missing picture is found again, not left to an earlier answer.
+    /// A stopped deploy refuses what the kept seal found, in a process that
+    /// never rendered the page.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_carried_deploy_still_finds_a_missing_reference() {
+    async fn a_stopped_deploy_refuses_the_missing_reference_the_kept_seal_found() {
         let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = two_page_site("---\ntitle: About\n---\n\n![Team](team.png)\n");
         let folder = dir.path().to_string_lossy().to_string();
         let _session = crate::system::folder_session::register_session(&folder);
-        let records = crate::system::build_records::records();
         deploy_build(dir.path()).await;
         deploy_build(dir.path()).await;
-        let first = records.publish_preflight(&folder).expect("the first build installs its evidence");
-        assert!(!first.missing_references.is_empty(), "fixture: team.png is missing");
+        let found = crate::system::build_records::records().publish_preflight(&folder).expect("the build installs its evidence");
+        assert!(!found.missing_references.is_empty(), "fixture: team.png is missing");
+        forget_gate_records(&folder);
         deploy_build(dir.path()).await;
-        assert!(build_counts(dir.path())["pages_carried"].as_u64().unwrap() >= 1);
-        let second = records.publish_preflight(&folder).unwrap();
-        assert!(second.build_generation > first.build_generation, "the carried build installs its own evidence");
-        assert_eq!(second.missing_references.len(), first.missing_references.len());
+        assert_eq!(build_counts(dir.path())["unchanged_at_entry"], 1);
+        let handed = crate::system::build_records::records().publish_preflight(&folder).expect("the stop installs the kept evidence");
+        assert_eq!(handed.missing_references, found.missing_references);
         assert!(matches!(crate::deploy::publish_refusal(&folder).map(|r| r.kind), Some(crate::deploy::RefusalKind::MissingReferences)));
+    }
+
+    /// A generation missing a file it names is not handed over: the deploy
+    /// builds and seals a whole one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_kept_generation_missing_a_file_is_built_again() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout us.\n");
+        let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
+        deploy_build(dir.path()).await;
+        let first = deploy_build(dir.path()).await;
+        let page = crate::moss_paths::MossPaths::new(dir.path()).generation_dir(first.generation_id()).join("about/index.html");
+        std::fs::remove_file(&page).unwrap();
+        deploy_build(dir.path()).await;
+        assert_ne!(build_counts(dir.path())["unchanged_at_entry"], 1);
+        assert!(page.exists() || crate::moss_paths::MossPaths::new(dir.path()).current_ptr().join("about/index.html").exists(), "the deploy sealed a whole generation");
+    }
+
+    /// A manifest an older moss wrote has no evidence, and is never handed over.
+    #[test]
+    fn a_manifest_without_evidence_hands_nothing_over() {
+        let inputs: crate::build::inputs::BuildInputs = serde_json::from_str(r#"{"moss":{},"env":{}}"#).unwrap();
+        assert_eq!(inputs.evidence, None);
+        let manifest = crate::types::content::SiteHashes { build_inputs: Some(inputs), ..Default::default() };
+        assert!(SealedManifest::kept(manifest).is_none());
+    }
+
+    /// A kept seal answers for the folder that sealed it, not the one it is read in.
+    #[test]
+    fn a_kept_seal_is_refused_in_another_folder() {
+        let (sealed_in, other) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let evidence = crate::build::inputs::SealEvidence { root: Some(sealed_in.path().to_path_buf()), ..Default::default() };
+        let inputs = crate::build::inputs::BuildInputs { evidence: Some(evidence), ..Default::default() };
+        let kept = SealedManifest::kept(crate::types::content::SiteHashes { build_inputs: Some(inputs), ..Default::default() }).unwrap();
+        assert!(crate::deploy::refuse_foreign_inputs(&kept, sealed_in.path()).is_ok());
+        assert!(crate::deploy::refuse_foreign_inputs(&kept, other.path()).is_err());
     }
 
     const COMMENT_TEXT: &str = "MOSS_MATTERS_TEST_PROFILE";

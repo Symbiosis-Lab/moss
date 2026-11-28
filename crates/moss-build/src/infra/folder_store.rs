@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod budget;
+pub(crate) use budget::touch_use;
+
 const RECORD: &str = "folder.json";
 
 /// The name of `folder`'s stores, the same for every spelling of the same
@@ -101,8 +104,8 @@ impl FolderStores {
     /// root, caches under the platform cache directory, both named by its
     /// identifier. A folder under the system temporary directory, and every
     /// folder a test binary opens, gets stores under the temporary directory
-    /// instead: tests build there, and a test, or the binary one spawns, must
-    /// never fill real app data.
+    /// instead. A test that runs the moss binary on a folder elsewhere gives
+    /// it its own HOME, or its stores land in real app data.
     pub fn running_for(folder: &Path) -> Option<Self> {
         let temp = std::env::temp_dir();
         if crate::infra::app_data::in_test_binary() || canonical_to_be(folder).starts_with(canonical_to_be(&temp)) {
@@ -256,29 +259,45 @@ impl FolderStores {
     /// for `grace`. A folder on an unmounted volume keeps its stores. A store
     /// set aside for a replaced folder goes once it is older than `grace`.
     pub fn collect(&self, grace: std::time::Duration) -> io::Result<usize> {
+        self.collect_within(grace, &|| false)
+    }
+
+    /// [`collect`](Self::collect), and while `short` says the disk is short of
+    /// room, a gone folder's stores go before their grace, longest unused first.
+    pub fn collect_within(&self, grace: std::time::Duration, short: &dyn Fn() -> bool) -> io::Result<usize> {
         let entries = match std::fs::read_dir(&self.record_root) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),
         };
         let old = |path: &Path| old_by(path, grace);
-        let gone = |name: &str| {
+        let gone = |name: &str, short: &dyn Fn() -> bool| {
             if name.contains(".replaced-") {
                 old(&self.record_root.join(name))
             } else {
-                self.read(name).is_some_and(|rec| old(&self.record_root.join(name).join(RECORD)) && self.folder_gone(&rec))
+                self.read(name).is_some_and(|rec| self.folder_gone(&rec) && (old(&self.record_root.join(name).join(RECORD)) || short()))
             }
         };
+        // `resolve` rewrites a record once per process, so its mtime is the store's last use.
+        let mut names: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with('.'))
+            .map(|name| (modified(&self.record_root.join(&name).join(RECORD)), name))
+            .collect();
+        names.sort();
         let mut removed = 0;
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // Judged unlocked, since every process sweeps once and most entries
-            // stay; judged again under the lock, where a resolve may have revived it.
-            if name.starts_with('.') || !gone(&name) {
+        for (_, name) in names {
+            // Asked once per store, so both judgments below see one answer.
+            let asked = std::cell::OnceCell::new();
+            let short = || *asked.get_or_init(short);
+            // Judged unlocked, since most entries stay; judged again under the
+            // lock, where a resolve may have revived it.
+            if !gone(&name, &short) {
                 continue;
             }
             let _held = self.lock()?;
-            if !gone(&name) {
+            if !gone(&name, &short) {
                 continue;
             }
             for root in [&self.cache_root, &self.record_root] {
@@ -359,7 +378,11 @@ pub(crate) fn test_folder_holding(path: &Path) -> Option<PathBuf> {
 }
 
 fn old_by(path: &Path, grace: std::time::Duration) -> bool {
-    path.symlink_metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > grace)
+    modified(path).and_then(|t| t.elapsed().ok()).is_some_and(|age| age > grace)
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    path.symlink_metadata().and_then(|m| m.modified()).ok()
 }
 
 /// `folder.json` writes by store name, for the tests that count them.
@@ -367,28 +390,48 @@ fn old_by(path: &Path, grace: std::time::Duration) -> bool {
 pub(crate) static RECORD_WRITES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
     std::sync::LazyLock::new(Default::default);
 
-/// How long a gone folder's stores wait before [`collect_gone_once`] removes
-/// them: a folder moved aside for a while keeps its facts.
+/// How long a gone folder's stores wait before [`collect_gone`] removes
+/// them while the disk has room: a folder moved aside for a while keeps its facts.
 const GONE_GRACE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 
-/// Once per process, in the background, from the first resolve: remove the
-/// stores of folders that are gone. The shared temporary root goes at once, since nothing else empties it;
-/// the app's after [`GONE_GRACE`]. A test binary never sweeps real app data.
-fn collect_gone_once() {
-    static STARTED: std::sync::Once = std::sync::Once::new();
-    STARTED.call_once(|| {
-        let _ = std::thread::Builder::new().name("folder-store-gc".into()).spawn(|| {
-            sweep_unstored(&std::env::temp_dir());
-            let mut sweeps = vec![(FolderStores::temporary(), std::time::Duration::ZERO)];
-            if !crate::infra::app_data::in_test_binary() {
-                sweeps.extend(FolderStores::app().map(|stores| (stores, GONE_GRACE)));
+/// Whether the volume holding the app's stores has less than a tenth of itself
+/// free: 25.6 GB on a 256 GB laptop.
+fn short_of_room(root: &Path) -> bool {
+    crate::build::assets::download::volume_space(root).is_ok_and(|(free, total)| free < total / 10)
+}
+
+/// In the background, from the first resolve and then from seals at most once
+/// an hour, so an app left open keeps sweeping: remove the stores of folders
+/// that are gone. The shared temporary root goes at once, since nothing else
+/// empties it; the app's after [`GONE_GRACE`], or sooner while the disk is
+/// short of room. A test binary never sweeps real app data.
+pub(crate) fn collect_gone() {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3600)) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let _ = std::thread::Builder::new().name("folder-store-gc".into()).spawn(|| {
+        sweep_unstored(&std::env::temp_dir());
+        if let Err(e) = FolderStores::temporary().collect(std::time::Duration::ZERO) {
+            log::info!("folder store sweep stopped ({e})");
+        }
+        if crate::infra::app_data::in_test_binary() {
+            return;
+        }
+        if let Some(stores) = FolderStores::app() {
+            let budget = budget::store_budget(&stores.cache_root);
+            let over = || budget.is_some_and(|budget| stores.recorded_total() > budget);
+            if let Err(e) = stores.collect_within(GONE_GRACE, &|| short_of_room(&stores.cache_root) || over()) {
+                log::info!("folder store sweep stopped ({e})");
             }
-            for (stores, grace) in sweeps {
-                if let Err(e) = stores.collect(grace) {
-                    log::info!("folder store sweep stopped ({e})");
-                }
+            if let Err(e) = budget.map_or(Ok(0), |budget| stores.trim_live(budget)) {
+                log::info!("folder store trim stopped ({e})");
             }
-        });
+        }
     });
 }
 
@@ -417,7 +460,7 @@ pub fn try_for_folder(folder: &Path) -> io::Result<FolderStore> {
         let resolved = FolderStores::running_for(canonical)
             .ok_or_else(|| io::Error::other("no app-data directory"))
             .and_then(|stores| stores.resolve(canonical));
-        collect_gone_once();
+        collect_gone();
         if let Err(e) = &resolved {
             log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
         }

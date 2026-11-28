@@ -74,7 +74,8 @@
     // landing only says which newsletter the reader joins.
     const scope = document.querySelector('#beta-form input[name="scope"]');
     if (scope) scope.value = subscriptionScope();
-    if (window.mossSubscribe) document.documentElement.dataset.signupWired = 'true';
+    // subscribe.js exports nothing: its global is declared (and so present) once the script has run.
+    if ('mossSubscribe' in window) document.documentElement.dataset.signupWired = 'true';
     // The visit counter counts a click on [data-track]; on success the button
     // only resets the form, so that click is not a sign-up.
     const form = document.querySelector('#beta-form');

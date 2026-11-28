@@ -42,7 +42,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-card-credits` | instance | The names a term kind with `cards = true` shows on a listing card, in the meta after the date and place: each field's names in the kind's `fields` order, separated by `.moss-event-sep`. Plain text, never a link. |
 | `.moss-credit` | instance | One credited name on a listing card, with its role inside. `data-term` is the term kind's key and `data-value` the slug of the name, the one its term page has in its address, so `.moss-card:has(.moss-credit[data-term="marks"][data-value="wanted"])` selects the cards that credit the term `Wanted` in the `marks` kind. |
 | `.moss-card-field` | instance | A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Never a link; a text value keeps inline emphasis (`<em>`, `<strong>`, `<code>`) and drops a markdown link's target. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself without markup, so `.moss-card:has(.moss-card-field[data-field="mark"][data-value="wanted"])` selects the cards of one value. |
-| `.moss-credit-role` | instance | The role after a credited name: the field's label, lowercased, after a comma. |
+| `.moss-credit-role` | instance | The role after a credited name: the field's label, lowercased, after a comma. A kind of one field shows none. |
 | `.moss-card-kicker` | instance | Eyebrow / overline above the title inside `.moss-card`. |
 | `.moss-card-kicker-favicon` | instance | Favicon inline before the domain, on a `[data-external]` card's kicker — emitted only when one is cached for the link. Same `ImageContext::Favicon` synthesis the retired `.link-preview-favicon` used (bare `<img>`, no manifest, no `<picture>`, no LQIP). |
 | `.moss-card-permalink` | instance | Author's-archive link mark (★, U+2605) emitted INSIDE `.moss-card-kicker` for linkblog cards (those whose child page has `external_url:`). The card title links to the external canonical (publisher); the `★` links to the local archival copy at the page's slug. Reads as part of the kicker line — "Publisher · Year ★". Semantically distinct from Daring-Fireball's linkblog ★ (which marks discussion permalink alongside commentary) — here the local copy is the same content preserved for resilience and stable bylines, not added commentary. Putting `<a>★</a>` inside the kicker is valid because linkblog cards emit `<div class="moss-card" data-linkblog>` (not `<a>`) as the outer element — see the `data-linkblog` attribute described on `.moss-card`. |
@@ -141,7 +141,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-calendar-links` | standalone | Closing line of an event page ("Add to calendar") or of a folder that holds events (its calendar file and a webcal subscribe link). |
 | `.moss-calendar-link` | instance | One calendar link: the .ics file, or the webcal:// subscription. |
 | `.moss-external-link` | standalone | The link out at the end of a page with an http(s) `external_url:`, named by that address's host. Left out when the body already links to that address. |
-| `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on series pages. |
+| `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on the pages of a folder whose home page sets `series:` (`true` or a list). Ordering the folder with `sort:` or `weight:` does not draw it. |
 | `.moss-series-nav-links` | instance | Row holding prev/next links in series nav. |
 | `.moss-series-nav-link` | instance | Individual link inside series nav. Modifiers: `moss-series-nav-prev`, `moss-series-nav-next`, `empty` (placeholder). |
 | `.empty` | instance | Co-class on a series-nav link with nowhere to go — the previous link on the first entry, the next link on the last. The element is still emitted so the pair keeps its layout. |
@@ -227,7 +227,8 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-nav-sub-toggle` | chrome | The button that opens and closes a `.moss-nav-sub` list. It is written `hidden` and shown by the site script, so without the script the list stays a plain set of links; `aria-expanded` carries its state. |
 | `.moss-nav-sub` | chrome | A header folder's submenu: the header pages inside that folder, a third level joining the same list. The site script keeps an open list inside the viewport. |
 | `.site-logo` | instance | Optional logo image inside the site-name link. Decorative by construction (`alt=""` + `aria-hidden`), because the adjacent text already names the site. A raster logo carries its intrinsic `width` and `height`, so the header does not move when it loads; an SVG logo carries neither. |
-| `.breadcrumb-label` | instance | The final, non-linked breadcrumb segment — the page you are on. `.breadcrumb-segment` is the linked form for ancestors. |
+| `.breadcrumb-label` | instance | The text inside a breadcrumb segment, the part that shortens with an ellipsis when the trail runs out of room. |
+| `.breadcrumb-current` | instance | The final, non-linked breadcrumb segment, the page you are on, drawn only where the trail must name it (a places root). `.breadcrumb-segment` is the linked form for ancestors. |
 | `.breadcrumb-separator` | instance | The `/` between breadcrumb segments, hidden from assistive technology and drawn in `--moss-border-strong` (3:1 non-text contrast). Restyle or hide this rather than trying to remove it from the markup. |
 | `.mobile-menu-button` | chrome | The hamburger. Emitted on every page and hidden by media query above the mobile breakpoint — it is not conditionally rendered, so a rule that shows it always will. While the menu is open its three strokes form a cross; its `aria-label` stays "Menu" and `aria-expanded` carries open or closed. |
 | `.nav-search-btn` | instance | Search button in the nav icon cluster. Its glyph is `.search-icon`. |
@@ -367,15 +368,16 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-form__label` | instance | A field's visible label. |
 | `.moss-form__optional` | instance | Marks a field the reader may skip, beside its label. |
 | `.moss-form__choice` | instance | One radio button or checkbox with its label. |
+| `.moss-form__other` | instance | The text field after the choice that asks for its own answer, such as "Other"; hidden until that choice is picked. |
 | `.moss-form__help` | instance | A field's help text, tied to it with `aria-describedby`. |
 | `.moss-form__error` | instance | The message for a field the service refused; filled and shown by the form script. |
 | `.moss-form__status` | instance | The one live line under the button for errors that are not about a single field. |
-| `.moss-form__hp` | instance | The honeypot: visually hidden, unreachable by keyboard, filled only by bots. |
-| `.moss-country-map` | container | A country map: inline SVG with one path per country, a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table. |
+| `.moss-country-map` | container | A country map: inline SVG with one path per country (or, under `within`, per region of one country), a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table. |
 | `.moss-country-own` | instance | The map on its own page, the page whose table it is drawn from. While script runs, the page's first table after it is clipped out of sight (kept for screen readers, shown on focus or when the search's see-the-list link targets it), so the map is the display and the rows are not repeated. |
+| `.moss-country-regions` | instance | A map of one country's regions (`within:`): it keeps the country's own shape at every width, no taller than 80% of the window, with no graticule. |
 | `.moss-country` | instance | One country's path. `data-level` (from 1, lowest) colours it; a country with no value carries none and shows the land colour. `data-box` is the area the map frames when it is chosen. Choosing it opens the panel (`is-chosen` outlines it); hovering lifts its colour (`is-lifted` does too, from the legend). |
 | `.moss-country-disputed` | instance | Land Natural Earth marks as disputed or breakaway, drawn as plain land and inert: no country is coloured over it. |
-| `.moss-country-graticule` | instance | The faint 30-degree grid under the land. |
+| `.moss-country-graticule` | instance | The faint 30-degree grid under the land, on a world map only. |
 | `.moss-country-land` | container | The group holding every country's path. |
 | `.moss-country-legend` | container | The levels in order, lowest first, each with its swatch and name, so colour is never the only carrier. |
 | `.moss-country-swatch` | instance | A level's colour chip; `data-level` picks the level. |

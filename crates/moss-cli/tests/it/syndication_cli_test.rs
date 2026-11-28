@@ -141,7 +141,7 @@ fn site(port: u16, idempotent: bool, folder_names_channel: bool) -> Site {
         ".moss/plugins/fixture/manifest.json",
         &serde_json::json!({
             "name": "fixture", "version": "0.0.1", "display_name": "Fixture", "description": "", "author": "",
-            "entry": "main.bundle.js", "global_name": "FixturePlugin", "domains": ["example.social"],
+            "entry": "main.bundle.js", "global_name": "FixturePlugin", "domains": ["example.social"], "network": {"hosts": [format!("127.0.0.1:{port}")]},
             "contributes": {"channel": {"syndication": {"forms": ["short", "thread", "teaser"], "max_chars": 300, "idempotent": idempotent}}}
         })
         .to_string(),
@@ -596,7 +596,7 @@ fn unavailable_edit_cancels_stale_work(posted: bool) {
     deploy(&s, &[]);
     assert_eq!(paths(&net), ["/publish"], "the old snapshot must not send after the impossible edit");
     let blocked = records.all().pop().unwrap();
-    assert_eq!(blocked.next_op(false), None);
+    assert_eq!(blocked.next_op(false, true), None);
     assert!(blocked.post.is_none());
     assert_eq!((&blocked.remote, &blocked.hash, &blocked.form, &blocked.parts), (&before.remote, &before.hash, &before.form, &before.parts));
     std::fs::write(s.root.join("notes/first.md"), format!("{stamped}\nFits again.\n")).unwrap();

@@ -6,7 +6,7 @@
  *   npx playwright test -c playwright/nav-current-mark.config.ts
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const THEME_MARK = ".nav-links a.active { border-block-end: 0; text-decoration: underline; }";
 

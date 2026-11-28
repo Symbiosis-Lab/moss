@@ -26,9 +26,26 @@ pub const LEGACY_FILE: &str = "plugin-approvals.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FolderAnswer {
-    /// The folder, canonical.
+    /// The folder's id on this computer, which a rename keeps and a copy does
+    /// not. A row written before folders had one carries none and is matched
+    /// by `dir` until the app next asks about that folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Where the folder was when last asked about, canonical.
     pub dir: PathBuf,
     pub trusted: bool,
+}
+
+impl FolderAnswer {
+    /// Whether this row is the folder at `dir` with `id`. A row carrying
+    /// another id is another folder, even at the same place: a copy put where
+    /// its original was. Without an id for the folder, the place decides.
+    fn is(&self, dir: &Path, id: Option<&str>) -> bool {
+        match (id, self.id.as_deref()) {
+            (Some(id), Some(own)) => id == own,
+            _ => self.dir == dir,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -38,13 +55,21 @@ pub struct TrustRecord {
 }
 
 impl TrustRecord {
-    pub fn answer(&self, folder: &Path) -> Option<bool> {
-        self.folders.iter().find(|a| a.dir == folder).map(|a| a.trusted)
+    pub fn row(&self, dir: &Path, id: Option<&str>) -> Option<&FolderAnswer> {
+        self.folders.iter().find(|a| a.is(dir, id))
     }
 
-    pub fn set(&mut self, folder: PathBuf, trusted: bool) {
-        self.folders.retain(|a| a.dir != folder);
-        self.folders.push(FolderAnswer { dir: folder, trusted });
+    pub fn answer(&self, dir: &Path, id: Option<&str>) -> Option<bool> {
+        self.row(dir, id).map(|a| a.trusted)
+    }
+
+    pub fn set(&mut self, dir: PathBuf, id: Option<String>, trusted: bool) {
+        self.forget(&dir, id.as_deref());
+        self.folders.push(FolderAnswer { id, dir, trusted });
+    }
+
+    pub fn forget(&mut self, dir: &Path, id: Option<&str>) {
+        self.folders.retain(|a| !a.is(dir, id));
     }
 }
 
@@ -179,22 +204,39 @@ mod tests {
     fn an_answer_is_per_folder_and_survives_a_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let a = PathBuf::from("/sites/a");
+        let id = Some("id-a");
 
         let mut record = load(tmp.path());
-        assert_eq!(record.answer(&a), None, "nothing is answered until asked");
+        assert_eq!(record.answer(&a, id), None, "nothing is answered until asked");
 
-        record.set(a.clone(), true);
+        record.set(a.clone(), id.map(Into::into), true);
         save(tmp.path(), &record).unwrap();
         let mut record = load(tmp.path());
-        assert_eq!(record.answer(&a), Some(true));
-        assert_eq!(record.answer(Path::new("/sites/b")), None);
+        assert_eq!(record.answer(&a, id), Some(true));
+        assert_eq!(record.answer(Path::new("/sites/b"), Some("id-b")), None);
 
-        record.set(a.clone(), false);
-        assert_eq!(record.answer(&a), Some(false), "a later answer replaces the earlier one");
+        record.set(a.clone(), id.map(Into::into), false);
+        assert_eq!(record.answer(&a, id), Some(false), "a later answer replaces the earlier one");
         assert_eq!(record.folders.len(), 1);
 
         fs::write(tmp.path().join(FILE), "{not json").unwrap();
         assert_eq!(load(tmp.path()), TrustRecord::default(), "unreadable is empty, not an error");
+    }
+
+    #[test]
+    fn an_answer_follows_the_folder_s_id_and_a_row_without_one_its_place() {
+        let (a, b) = (PathBuf::from("/sites/a"), PathBuf::from("/sites/b"));
+        let mut record: TrustRecord = serde_json::from_str(r#"{"folders":[{"dir":"/sites/a","trusted":true}]}"#).unwrap();
+        assert_eq!(record.answer(&a, Some("id-a")), Some(true), "a row from before ids answers for its place");
+
+        record.set(a.clone(), Some("id-a".into()), true);
+        assert_eq!(record.folders.len(), 1, "and is replaced, not doubled, once the folder has an id");
+        assert_eq!(record.answer(&b, Some("id-a")), Some(true), "renamed");
+        assert_eq!(record.answer(&a, Some("id-copy")), None, "a copy put where the original was");
+        assert_eq!(record.answer(&a, None), Some(true), "a folder with no id is known by its place");
+
+        record.forget(&a, None);
+        assert_eq!(record.answer(&a, Some("id-a")), None, "removed by its place, as Recents knows it");
     }
 
     #[test]

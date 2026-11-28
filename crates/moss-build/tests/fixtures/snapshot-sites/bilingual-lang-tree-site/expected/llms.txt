@@ -1,44 +1,15 @@
 # My Bilingual Site
 
----
-
-## 港口笔记
-
-来自港口的笔记。
-
----
-
-## Harbor Notes
-
-Notes from the harbor.
-
----
-
-## About
-
-About this site.
-
----
-
 ## My Bilingual Site
 
-Welcome to this site. This is the English homepage.
-
----
-
-## 关于
-
-关于这个网站。
-
----
+- [Harbor Notes](https://example.com/harbor/)
+- [About](https://example.com/about/)
+- [My Bilingual Site](https://example.com/)
 
 ## 我的双语站点
 
-欢迎来到这个网站。这是中文主页。
-
----
-
-## 最新消息
-
-最新消息。
+- [港口笔记](https://example.com/zh-hans/harbor/)
+- [关于](https://example.com/zh-hans/about/)
+- [我的双语站点](https://example.com/zh-hans/)
+- [最新消息](https://example.com/zh-hans/news/)
 

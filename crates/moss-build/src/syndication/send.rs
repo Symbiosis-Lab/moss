@@ -7,8 +7,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::job::{CopyJob, Op, PostRef, Previous, SiteRef};
-use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
+use super::job::{site_icon, CopyJob, Op, PostRef, Previous, SiteRef};
+use super::record::{Cause, CopyOutcome, CopyRecord, Edit, PublishedPost, Records, State, Stays};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
 use super::sign_ins::SignIns;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
@@ -25,6 +25,38 @@ const INTERRUPTED: &str = "the last send stopped before the network answered";
 /// How long after it was handed off a copy is looked up on its own; later, it
 /// is adopted when the author lists its address.
 const HANDOFF_LOOKUP_DAYS: i64 = 30;
+
+/// What a copy with no `update_copy` carries as its reason: set when the
+/// page change is said, cleared by the next one.
+const CANNOT_EDIT: &str = "the channel cannot edit the copy";
+
+/// What the author is told when a page changed under a copy that stays as posted.
+fn stays_posted(record: &CopyRecord, why: Stays) -> Outcome {
+    let url = record.remote.as_ref().map(|r| r.url.clone()).unwrap_or_default();
+    match why {
+        Stays::Locked => Outcome::AlreadyPosted { url },
+        Stays::Deleted => Outcome::Deleted { url },
+    }
+}
+
+/// How one attempt on a copy ended.
+enum Step {
+    Done(Option<Sent>),
+    /// The channel exports no `update_copy`: the run stops asking it.
+    NoUpdate(Option<Sent>),
+    /// The copy on the network is to be replaced: send this record as new.
+    Again(CopyRecord),
+}
+
+#[cfg(test)]
+impl Step {
+    fn sent(self) -> Option<Sent> {
+        match self {
+            Step::Done(s) | Step::NoUpdate(s) => s,
+            Step::Again(_) => None,
+        }
+    }
+}
 
 const OTHER_ACCOUNT: &str = "posted from another account. Sign in to that account.";
 
@@ -100,8 +132,11 @@ pub enum Outcome {
     Updated { url: String },
     /// The page changed but its copy would not.
     Unchanged,
-    /// The page changed and the network cannot edit a copy once posted.
-    CannotEdit,
+    /// The page changed and the copy stays as posted: the network cannot
+    /// edit it.
+    AlreadyPosted { url: String },
+    /// The page changed and the copy was deleted on the network.
+    Deleted { url: String },
     HandedOff { text: String, open_url: Option<String> },
     /// Nothing was posted; tried again next run.
     Refused { cause: Cause, reason: String },
@@ -131,6 +166,8 @@ pub enum HeldWhy {
     OtherAccount,
     /// The channel has no usable session; it waits for someone to sign in.
     SignedOut,
+    /// The page no longer names the channel; it waits for the page to name it again.
+    NotNamed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -149,7 +186,7 @@ pub struct SendOptions<'a> {
     pub site_url: &'a str,
     /// Channels whose unconfirmed copies the author asked to try again.
     pub retry: &'a [String],
-    /// Told about each copy as it starts and as it ends, in order.
+    /// Told about each copy as it starts and as it ends, each channel's in order.
     pub emit: &'a (dyn Fn(&Sent) + Sync),
     /// Only this post's copies (by its source file), and only on this channel.
     pub only_source: Option<&'a str>,
@@ -164,6 +201,23 @@ pub struct SendOptions<'a> {
     /// This computer's sign-in records, updated from each channel's answer;
     /// `None` leaves them alone.
     pub sign_ins: Option<&'a SignIns>,
+}
+
+impl SendOptions<'_> {
+    /// The author pressed retry on one post's posted copy.
+    fn presses(&self, record: &CopyRecord) -> bool {
+        record.state == State::Posted && self.only_source.is_some() && self.retry.contains(&record.channel)
+    }
+
+    /// What a send does with `record` now. The press rewrites a posted copy
+    /// in place, or posts it again where it stays as it is.
+    fn op_for(&self, record: &CopyRecord, idempotent: bool, can_update: bool) -> Option<Op> {
+        match (self.presses(record), record.stays) {
+            (true, Some(_)) => Some(Op::Publish),
+            (true, None) => Some(Op::Update),
+            (false, _) => record.next_op(idempotent, can_update),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -234,9 +288,16 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
 
 /// [`send_due`] for a caller already holding the folder's turn: a second
 /// lock on it from this process would be refused, and nothing sent.
+///
+/// Each channel sends in its own task, so a copy waiting on a person (a
+/// sign-in, an editor in the action panel) holds back only its own channel.
+/// The result keeps post order, each post's channels as its `syndicate:`
+/// names them; `opts.emit` hears each channel's copies in that order, the
+/// channels interleaved.
 async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
     let mp = crate::moss_paths::MossPaths::new(folder);
     let records = Records::in_vault(&mp);
+    let choices = super::choose::Choices::in_vault(&mp);
     let channels = manager.copy_channels();
     let by_uid = latest_by_uid(articles);
 
@@ -244,143 +305,257 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let mut due = records.all();
     due.sort_by_cached_key(|r| {
         let post = r.post.as_ref().map(|p| &p.article).or_else(|| by_uid.get(&r.uid).copied());
-        let rank = post.and_then(|p| super::Named::of_post(p, &channels)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
+        let rank = post.and_then(|p| super::Named::of_post(p, &channels, &choices)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
     let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
         Ok(config) => config,
         Err(e) => { log::warn!(target: "syndication", "copies not sent: {e}"); return Vec::new(); }
     };
-    let mut sent_per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let handoffs = handoffs_to_look_up(&due, opts.cap);
-    let mut accounts = Accounts { seen: HashMap::new(), sign_ins: opts.sign_ins };
-    let mut out = Vec::new();
-    let mut push = |s: Sent| {
-        (opts.emit)(&s);
-        out.push(s);
-    };
-    for mut record in due {
-        let now = post_now(&record, &by_uid);
-        if !asked_for(&record, now, opts) {
-            continue;
-        }
-        // The latest build is the author's latest word: a channel the post no
-        // longer names gets nothing more, and its record keeps its history.
-        if now.is_some_and(|p| !super::Named::of_post(p, &channels).is_some_and(|n| n.ids().contains(&record.channel))) {
-            continue;
-        }
-        let Some(channel) = channels.get(&record.channel) else { continue };
-        let Some(op) = record.next_op(channel.spec.idempotent) else { continue };
-        // A handed-off copy rests there: it is handed off again only when the
-        // author retries its channel for this one post.
-        let retry = opts.retry.contains(&record.channel) && (record.state != State::HandedOff || opts.only_source.is_some());
-        let rests = record.state == State::HandedOff && !retry;
-        if rests && !handoffs.contains(&(record.uid.clone(), record.channel.clone())) {
-            continue;
-        }
-        match accounts.check(manager, &mut record).await {
-            // Said once for each time the copy is held.
-            Err(held @ Outcome::Held { why: HeldWhy::OtherAccount, .. }) => {
-                if !record.held_for_account {
-                    record.held_for_account = true;
-                    let _ = records.save(&record);
-                    push(sent(&record, held));
-                }
-                continue;
-            }
-            // A handed-off copy has nothing to send, so it waits without a word.
-            Err(_) if rests => continue,
-            Err(held) => {
-                push(sent(&record, held));
-                continue;
-            }
-            Ok(()) if record.held_for_account => {
-                record.held_for_account = false;
-                let _ = records.save(&record);
-            }
-            Ok(()) => {}
-        }
-        // A record from before copies kept their post reads the latest build.
-        let published = record.post.as_deref().cloned().or_else(|| by_uid.get(&record.uid).map(|a| PublishedPost::new(a, articles)));
-        let Some(published) = published else {
-            if record.state == State::Sending {
-                mark_unconfirmed(&records, &mut record, INTERRUPTED);
-                push(sent(&record, Outcome::Unconfirmed { reason: record.reason.clone().unwrap_or_default() }));
-                continue;
-            }
-            if op == Op::Publish {
-                push(sent(&record, Outcome::Held { why: HeldWhy::NotPublished, reason: "its page is not in this publish".into() }));
-            }
-            continue;
-        };
-        let post = &published.article;
-        let shape = ShapeOptions::new(&config, folder, articles, post, &record.channel, published.lang.as_deref());
-        // An uncertain copy is looked up before anything is sent again.
-        let op = if op == Op::Find {
-            match reconcile(manager, &record, channel, post, &shape, opts).await {
-                Found::Copy(outcome) => {
-                    push(adopt(folder, &records, record, outcome));
-                    continue;
-                }
-                // A draft still waiting for the author is reported when it
-                // first becomes one, and whenever the author asks about its post.
-                Found::Waiting(handoff) => {
-                    if record.handoff.as_ref() != Some(&handoff) || opts.only_source.is_some() {
-                        record.state = State::HandedOff;
-                        record.handoff = Some(handoff.clone());
-                        record.reason = None;
-                        push(settle(&records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url }));
-                    }
-                    continue;
-                }
-                // A handoff waits for the author whatever the network says,
-                // unless they asked for it to be handed off again.
-                Found::Absent | Found::Unknown(_) if rests => continue,
-                Found::Absent => {
-                    record.discard_attempt();
-                    record.state = State::Due;
-                    Op::Publish
-                }
-                Found::Unknown(_) if retry => {
-                    if record.state == State::HandedOff {
-                        record.discard_attempt();
-                        record.state = State::Due;
-                    }
-                    Op::Publish
-                }
-                Found::Unknown(why) => {
-                    if record.state == State::Sending {
-                        mark_unconfirmed(&records, &mut record, INTERRUPTED);
-                    }
-                    let reason = [record.reason.clone().unwrap_or_default(), why].into_iter().filter(|r| !r.is_empty()).collect::<Vec<_>>().join("; ");
-                    push(sent(&record, Outcome::Unconfirmed { reason }));
-                    continue;
-                }
-            }
-        } else {
-            op
-        };
-        if op == Op::Publish {
-            let n = sent_per_channel.entry(record.channel.clone()).or_default();
-            if *n >= opts.cap {
-                push(sent(&record, Outcome::Held { why: HeldWhy::OverLimit, reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
-                continue;
-            }
-            *n += 1;
-            if opts.check_pages {
-                let page = page_url(record.site(opts.site_url), &post.url_path);
-                if !answers(&page).await {
-                    *n -= 1;
-                    push(sent(&record, Outcome::Held { why: HeldWhy::PageNotAnswering, reason: format!("its page does not answer yet at {page}") }));
-                    continue;
-                }
-            }
-        }
-        if let Some(s) = send_one(folder, manager, &records, record, channel, post, &shape, op, opts).await {
-            push(s);
+    // A channel with nothing to do takes no turn, so it never waits on another send.
+    let mut queues: BTreeMap<String, Vec<(usize, CopyRecord)>> = BTreeMap::new();
+    for (place, record) in due.into_iter().enumerate() {
+        let work = channels.get(&record.channel).is_some_and(|c| {
+            opts.op_for(&record, c.spec.idempotent, true).is_some() || matches!(record.edit(true), Edit::Stays(_)) && record.update_due
+        });
+        if work && asked_for(&record, post_now(&record, &by_uid), opts) {
+            queues.entry(record.channel.clone()).or_default().push((place, record));
         }
     }
-    out
+    // Said once per send, and only when a copy is about to be sent.
+    let icon = site_icon(folder, opts.site_url);
+    if icon.is_none() && !queues.is_empty() {
+        log::warn!(target: "syndication", "this site has no icon of its own at 256 px or more (assets/favicon.svg, or a PNG of at least 256 px), so channels that show one get none");
+    }
+    let run = Run { folder, manager, records: &records, choices: &choices, channels: &channels, by_uid: &by_uid, articles, config: &config, handoffs: &handoffs, opts, icon };
+    let out = std::sync::Mutex::new(Vec::new());
+    let push = |place: usize, s: Sent| {
+        (opts.emit)(&s);
+        out.lock().unwrap_or_else(|e| e.into_inner()).push((place, s));
+    };
+    futures::future::join_all(queues.into_iter().map(|(channel, queue)| run.channel(channel, queue, &push))).await;
+    let mut out = out.into_inner().unwrap_or_else(|e| e.into_inner());
+    out.sort_by_key(|(place, _)| *place);
+    out.into_iter().map(|(_, s)| s).collect()
+}
+
+/// What every channel's task in one send reads.
+struct Run<'a> {
+    folder: &'a Path,
+    manager: &'a PluginManager,
+    records: &'a Records,
+    choices: &'a super::choose::Choices,
+    channels: &'a BTreeMap<String, CopyChannel>,
+    by_uid: &'a HashMap<String, &'a ArticleInfo>,
+    articles: &'a ArticleMap,
+    config: &'a crate::config::ConfigFile,
+    handoffs: &'a HashSet<(String, String)>,
+    opts: &'a SendOptions<'a>,
+    /// The site's own icon, offered to every channel's jobs.
+    icon: Option<String>,
+}
+
+impl Run<'_> {
+    /// Send one channel's due copies in post order, each tagged with its
+    /// place in the whole send. Under the channel's turn, each record is
+    /// read again: another send may have settled it meanwhile.
+    async fn channel(&self, channel_id: String, queue: Vec<(usize, CopyRecord)>, push: &(dyn Fn(usize, Sent) + Sync)) {
+        let Run { folder, manager, records, choices, channels, by_uid, articles, config, handoffs, opts, .. } = *self;
+        let _turn = match records.channel_turn(&channel_id).await {
+            Ok(turn) => turn,
+            Err(e) => {
+                log::warn!(target: "syndication", "copies on {channel_id} not sent: {e}");
+                return;
+            }
+        };
+        let queue: Vec<(usize, CopyRecord)> = queue.into_iter().filter_map(|(place, r)| Some((place, records.get(&r.uid, &r.channel)?))).collect();
+        let mut sent_here = 0usize;
+        let mut accounts = Accounts { seen: HashMap::new(), sign_ins: opts.sign_ins };
+        // Whether the channel exports `update_copy`, learned from its first
+        // answer and forgotten after this run.
+        let mut can_update = true;
+        for (place, mut record) in queue {
+            let push = |s: Sent| push(place, s);
+            let now = post_now(&record, &by_uid);
+            if !asked_for(&record, now, opts) {
+                continue;
+            }
+            // The latest build is the author's latest word: a channel the post no
+            // longer names gets nothing more, and its record keeps its history.
+            if now.is_some_and(|p| !super::Named::of_post(p, &channels, choices).is_some_and(|n| n.ids().contains(&record.channel))) {
+                // Asked about this one post, the channel answers rather than staying silent.
+                if opts.only_source.is_some() {
+                    push(sent(&record, Outcome::Held { why: HeldWhy::NotNamed, reason: "its page does not name this channel".into() }));
+                }
+                continue;
+            }
+            let Some(channel) = channels.get(&record.channel) else { continue };
+            let op = opts.op_for(&record, channel.spec.idempotent, can_update);
+            let Some(op) = op else {
+                // The page changed under a copy that stays as posted: said on
+                // the run that meets the change, and again only after the next.
+                if let (Edit::Stays(why), true) = (record.edit(can_update), record.update_due) {
+                    let news = record.stays.is_some() || record.reason.is_none();
+                    if record.stays.is_some() { record.update_due = false; } else { record.reason = Some(CANNOT_EDIT.into()); }
+                    let outcome = stays_posted(&record, why);
+                    let s = settle(&records, record, outcome);
+                    if news { push(s); }
+                }
+                continue;
+            };
+            if op == Op::Publish && record.state == State::Posted {
+                record.start_over();
+            }
+            // A handed-off copy rests there until the author retries its channel
+            // for this one post. A publish of its page (this one post, or a deploy
+            // that changed it: `update_due`) rewrites the draft the network still
+            // shows with the page as it is now, never through `opts.retry`.
+            let retry = opts.retry.contains(&record.channel) && (record.state != State::HandedOff || opts.only_source.is_some());
+            let reopen = record.state == State::HandedOff && (record.update_due || opts.only_source.is_some());
+            let rests = record.state == State::HandedOff && !retry;
+            if rests && !reopen && !handoffs.contains(&(record.uid.clone(), record.channel.clone())) {
+                continue;
+            }
+            match accounts.check(manager, &mut record).await {
+                // Said once for each time the copy is held.
+                Err(held @ Outcome::Held { why: HeldWhy::OtherAccount, .. }) => {
+                    if !record.held_for_account {
+                        record.held_for_account = true;
+                        let _ = records.save(&record);
+                        push(sent(&record, held));
+                    }
+                    continue;
+                }
+                // A handed-off copy with no draft to rewrite has nothing to send, so it waits without a word.
+                Err(_) if rests && !reopen => continue,
+                Err(held) => {
+                    push(sent(&record, held));
+                    continue;
+                }
+                Ok(()) if record.held_for_account => {
+                    record.held_for_account = false;
+                    let _ = records.save(&record);
+                }
+                Ok(()) => {}
+            }
+            // A record from before copies kept their post reads the latest build.
+            let published = record.post.as_deref().cloned().or_else(|| by_uid.get(&record.uid).map(|a| PublishedPost::new(a, articles)));
+            let Some(published) = published else {
+                if record.state == State::Sending {
+                    mark_unconfirmed(&records, &mut record, INTERRUPTED);
+                    push(sent(&record, Outcome::Unconfirmed { reason: record.reason.clone().unwrap_or_default() }));
+                    continue;
+                }
+                if op == Op::Publish {
+                    push(sent(&record, Outcome::Held { why: HeldWhy::NotPublished, reason: "its page is not in this publish".into() }));
+                }
+                continue;
+            };
+            let post = &published.article;
+            let shape = ShapeOptions::new(&config, folder, articles, post, &record.channel, published.lang.as_deref());
+            // An uncertain copy is looked up before anything is sent again.
+            let op = if op == Op::Find {
+                match reconcile(manager, &record, channel, post, &shape, opts).await {
+                    Found::Copy(outcome) => {
+                        push(adopt(folder, &records, record, outcome));
+                        continue;
+                    }
+                    // A retry rewrites the draft the network holds.
+                    Found::Waiting(_) if (retry || reopen) && record.draft().is_some() => Op::Update,
+                    // A copy handed off before drafts had ids cannot be rewritten:
+                    // one new draft, made once and only on a channel that can
+                    // rewrite it, opens the editor and records its id; every
+                    // later reopen rewrites that one.
+                    Found::Waiting(_) | Found::Unknown(_) if reopen && can_update && !record.redrafted && record.draft().is_none() => {
+                        record.redrafted = true;
+                        record.discard_attempt();
+                        record.state = State::Due;
+                        Op::Publish
+                    }
+                    // A draft still waiting for the author is reported when it
+                    // first becomes one, and whenever the author asks about its post.
+                    Found::Waiting(handoff) => {
+                        if record.handoff.as_ref() != Some(&handoff) || opts.only_source.is_some() {
+                            record.state = State::HandedOff;
+                            record.handoff = Some(handoff.clone());
+                            record.reason = None;
+                            push(settle(&records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url }));
+                        }
+                        continue;
+                    }
+                    // A page publish whose lookup fails or finds no draft still reaches it: rewritten
+                    // when the network gave an id for it, else said again as it stands.
+                    Found::Unknown(_) if reopen && record.draft().is_some() => Op::Update,
+                    Found::Absent | Found::Unknown(_) if reopen && !retry => {
+                        record.update_due = false;
+                        if let Some(h) = record.handoff.clone() {
+                            push(settle(&records, record, Outcome::HandedOff { text: h.text, open_url: h.open_url }));
+                        }
+                        continue;
+                    }
+                    // A handoff waits for the author whatever the network says,
+                    // unless they asked for it to be handed off again.
+                    Found::Absent | Found::Unknown(_) if rests => continue,
+                    Found::Absent => {
+                        record.handoff = None;
+                        record.discard_attempt();
+                        record.state = State::Due;
+                        Op::Publish
+                    }
+                    Found::Unknown(_) if retry && record.draft().is_some() => Op::Update,
+                    Found::Unknown(_) if retry => {
+                        if record.state == State::HandedOff {
+                            record.discard_attempt();
+                            record.state = State::Due;
+                        }
+                        Op::Publish
+                    }
+                    Found::Unknown(why) => {
+                        if record.state == State::Sending {
+                            mark_unconfirmed(&records, &mut record, INTERRUPTED);
+                        }
+                        let reason = [record.reason.clone().unwrap_or_default(), why].into_iter().filter(|r| !r.is_empty()).collect::<Vec<_>>().join("; ");
+                        push(sent(&record, Outcome::Unconfirmed { reason }));
+                        continue;
+                    }
+                }
+            } else {
+                op
+            };
+            if op == Op::Publish {
+                if sent_here >= opts.cap {
+                    push(sent(&record, Outcome::Held { why: HeldWhy::OverLimit, reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
+                    continue;
+                }
+                sent_here += 1;
+                if opts.check_pages {
+                    let page = page_url(record.site(opts.site_url), &post.url_path);
+                    if !answers(&page).await {
+                        sent_here -= 1;
+                        push(sent(&record, Outcome::Held { why: HeldWhy::PageNotAnswering, reason: format!("its page does not answer yet at {page}") }));
+                        continue;
+                    }
+                }
+            }
+            let icon = self.icon.as_deref();
+            let mut step = send_one(folder, manager, &records, record, channel, post, &shape, op, opts, icon).await;
+            // Again comes only from an Update, and a HandedOff Update only under the
+            // per-post retry: one copy the author pressed for, on a page that already
+            // answered, so the new-copy cap and the page check do not apply.
+            if let Step::Again(fresh) = step {
+                step = send_one(folder, manager, &records, fresh, channel, post, &shape, Op::Publish, opts, icon).await;
+            }
+            match step {
+                Step::Done(s) => s.map(&push),
+                Step::NoUpdate(s) => {
+                    can_update = false;
+                    s.map(&push)
+                }
+                Step::Again(_) => None,
+            };
+        }
+    }
 }
 
 fn latest_by_uid(articles: &ArticleMap) -> HashMap<String, &ArticleInfo> {
@@ -416,25 +591,27 @@ async fn send_one(
     shape: &ShapeOptions,
     op: Op,
     opts: &SendOptions<'_>,
-) -> Option<Sent> {
+    icon: Option<&str>,
+) -> Step {
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
-    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url)) {
+    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url), icon.map(str::to_string)) {
         Ok(j) => j,
         // A copy already on the network keeps its saved record as it is.
-        Err(reason) if record.remote.is_some() => return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason })),
-        Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
+        Err(reason) if record.remote.is_some() => return Step::Done(Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason }))),
+        Err(reason) => return Step::Done(Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason }))),
     };
+    let press = opts.presses(&record);
     let had_uncertain_attempt = record.handoff.is_some()
         || matches!(record.state, State::Sending | State::Unconfirmed)
         || (record.state == State::Due && record.form.is_some());
     // The source changed but the copy would not (writing `syndicated:` back
     // is such an edit): nothing to send, nothing to say.
-    if op == Op::Update && record.hash.as_deref() == Some(hash.as_str()) {
+    if op == Op::Update && !press && record.state == State::Posted && record.hash.as_deref() == Some(hash.as_str()) {
         record.update_due = false;
         record.touch();
         let _ = records.save(&record);
-        return Some(sent(&record, Outcome::Unchanged));
+        return Step::Done(Some(sent(&record, Outcome::Unchanged)));
     }
 
     if let Some(copy) = &job.copy {
@@ -446,7 +623,7 @@ async fn send_one(
         record.state = State::Sending;
         record.touch();
         if let Err(e) = records.save(&record) {
-            return Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") }));
+            return Step::Done(Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") })));
         }
     }
 
@@ -465,7 +642,7 @@ async fn send_one(
         }
     };
 
-    Some(match manager.send_copy(&job).await {
+    Step::Done(Some(match manager.send_copy(&job).await {
         CopyCall::Answered(result) if !result.success => {
             let refusal = result.copy.and_then(|c| c.refused);
             let cause = refusal.as_ref().map(|r| r.cause).unwrap_or_default();
@@ -473,7 +650,13 @@ async fn send_one(
                 .and_then(|r| r.message)
                 .or(result.message)
                 .unwrap_or_else(|| "the network refused the copy".into());
-            if op != Op::Update && had_uncertain_attempt {
+            if op == Op::Update && cause == Cause::Locked && record.state == State::Posted {
+                if press { return again(record); }
+                record.stays = Some(Stays::Locked);
+                record.update_due = false;
+                let outcome = stays_posted(&record, Stays::Locked);
+                settle(records, record, outcome)
+            } else if op != Op::Update && had_uncertain_attempt {
                 unknown(record, reason)
             } else {
                 if op != Op::Update {
@@ -484,15 +667,26 @@ async fn send_one(
             }
         }
         CopyCall::Answered(result) => match result.copy {
+            // The network says the copy is gone: a draft is made again, a
+            // published copy only when the author presses.
+            Some(CopyOutcome { absent: true, .. }) if op == Op::Update => {
+                if press || record.state == State::HandedOff { return again(record); }
+                record.stays = Some(Stays::Deleted);
+                record.update_due = false;
+                let outcome = stays_posted(&record, Stays::Deleted);
+                settle(records, record, outcome)
+            }
             Some(CopyOutcome { handoff: Some(handoff), .. }) => {
+                record.update_due = false;
                 record.state = State::HandedOff;
                 record.hash = Some(hash);
                 record.handoff = Some(handoff.clone());
                 record.reason = None;
                 settle(records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url })
             }
-            Some(CopyOutcome { id: Some(id), url: Some(url), parts, .. }) => {
+            Some(CopyOutcome { id: Some(id), url: Some(url), parts, verify, .. }) => {
                 record.state = State::Posted;
+                record.verify = verify.or(record.verify.take());
                 record.remote = Some(super::record::RemoteRef { id, url: url.clone() });
                 if op != Op::Update || !parts.is_empty() {
                     record.parts = parts;
@@ -509,9 +703,24 @@ async fn send_one(
             }
             _ => unknown(record, format!("{} answered without the copy's id and address", op.hook())),
         },
+        // The record keeps the change: the export is read again next run.
+        CopyCall::NoExport if op == Op::Update && record.state == State::HandedOff => {
+            let again_said = (opts.only_source.is_some() || record.update_due).then(|| record.handoff.clone()).flatten();
+            if record.update_due {
+                record.update_due = false;
+                if let Err(e) = records.save(&record) {
+                    let reason = format!("its record was not saved ({e})");
+                    return Step::Done(Some(sent(&record, Outcome::Held { why: HeldWhy::Failed, reason })));
+                }
+            }
+            return Step::NoUpdate(again_said.map(|h| sent(&record, Outcome::HandedOff { text: h.text, open_url: h.open_url })));
+        }
         CopyCall::NoExport if op == Op::Update => {
-            record.update_due = false;
-            settle(records, record, Outcome::CannotEdit)
+            if press { return again(record); }
+            let news = record.reason.is_none();
+            record.reason = Some(CANNOT_EDIT.into());
+            let outcome = stays_posted(&record, Stays::Locked);
+            return Step::NoUpdate(Some(settle(records, record, outcome)).filter(|_| news));
         }
         CopyCall::NoExport if had_uncertain_attempt => unknown(record, "the channel exports no publish_copy".into()),
         CopyCall::NoExport => {
@@ -520,7 +729,13 @@ async fn send_one(
             settle(records, record, Outcome::Refused { cause: Cause::Unknown, reason: "the channel exports no publish_copy".into() })
         }
         CopyCall::Unknown(reason) => unknown(record, reason),
-    })
+    }))
+}
+
+/// Replace the copy on the network: the loop sends the record as new.
+fn again(mut record: CopyRecord) -> Step {
+    record.start_over();
+    Step::Again(record)
 }
 
 /// Whether a reader elsewhere following `url` gets the page: a few tries,
@@ -556,7 +771,7 @@ enum Found {
 
 /// Ask the channel's `find_copy` whether the copy of an uncertain send exists.
 async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, shape: &ShapeOptions, opts: &SendOptions<'_>) -> Found {
-    let (job, _) = match build_job(record, channel, post, shape, Op::Find, record.site(opts.site_url)) {
+    let (job, _) = match build_job(record, channel, post, shape, Op::Find, record.site(opts.site_url), None) {
         Ok(j) => j,
         Err(e) => return Found::Unknown(e),
     };
@@ -577,6 +792,7 @@ async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyC
 pub(super) fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
     let url = outcome.url.unwrap_or_default();
     record.state = State::Posted;
+    record.verify = outcome.verify.or(record.verify.take());
     record.remote = Some(super::record::RemoteRef { id: outcome.id.unwrap_or_default(), url: url.clone() });
     if !outcome.parts.is_empty() {
         record.parts = outcome.parts;
@@ -597,7 +813,7 @@ fn mark_unconfirmed(records: &Records, record: &mut CopyRecord, reason: &str) {
 
 
 /// The job for one copy, and the hash of the copy it carries.
-fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, options: &ShapeOptions, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
+fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, options: &ShapeOptions, op: Op, site_url: &str, icon: Option<String>) -> Result<(CopyJob, String), String> {
     let copy = match shape_record(post, &channel.spec, site_url, options, record) {
         Ok(copy) => Some(copy),
         // A lookup needs the stable identity even when changed limits prevent
@@ -613,6 +829,7 @@ fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, opt
         site: SiteRef {
             url: site_url.trim_end_matches('/').to_string(),
             name: super::shape::site_name(options, site_url).unwrap_or_else(|| site_url.to_string()),
+            icon,
         },
         post: PostRef {
             url: page_url(site_url, &post.url_path),
@@ -669,7 +886,8 @@ pub fn render(sent: &[Sent]) -> String {
     for s in sent {
         let line = match &s.outcome {
             Outcome::Sending | Outcome::Unchanged => continue,
-            Outcome::CannotEdit => format!("{} cannot edit its copy; the page changed after it was posted", s.channel),
+            Outcome::AlreadyPosted { url } => format!("already posted to {}, which cannot edit it: {url}", s.channel),
+            Outcome::Deleted { url } => format!("deleted on {}: {url}", s.channel),
             Outcome::Posted { url } => format!("posted to {}: {url}", s.channel),
             Outcome::Updated { url } => format!("updated on {}: {url}", s.channel),
             Outcome::HandedOff { text, open_url } if text.is_empty() => {
@@ -699,6 +917,18 @@ pub fn render(sent: &[Sent]) -> String {
 #[cfg(test)]
 #[path = "send_account_tests.rs"]
 mod account_tests;
+
+#[cfg(test)]
+#[path = "send_retry_tests.rs"]
+mod retry_tests;
+
+#[cfg(test)]
+#[path = "send_state_tests.rs"]
+mod state_tests;
+
+#[cfg(test)]
+#[path = "send_turn_tests.rs"]
+mod turn_tests;
 
 #[cfg(test)]
 mod tests {
@@ -742,7 +972,7 @@ mod tests {
         let records = Records::in_vault(&mp);
         let plans = plan::decide(&plan::PlanInputs {
             folder: root, articles: &map, previously_live: None, edited_sources: &Default::default(),
-            channels: &channels, config: &config, site_url: Some(site),
+            channels: &channels, config: &config, site_url: Some(site), choices: &Default::default(),
         }, &records);
         assert_eq!(plans[0].entries[0].action, plan::Action::Due);
         let options = ShapeOptions::new(&config, root, &map, &post, "one", None);
@@ -759,6 +989,34 @@ mod tests {
         let sent = send_due(root, &manager, &map, &opts).await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/formula".into() });
+    }
+
+    #[tokio::test]
+    async fn a_job_carries_the_site_icon_the_latest_build_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "one", "{ publish_copy: async function(job) {
+            if (job.site.icon !== 'https://example.org/assets/favicon-512.png') throw new Error('icon: ' + job.site.icon);
+            return { success: true, copy: { id: 'x', url: 'https://example.social/x', verify: { site_file: { path: '.well-known/site.standard.publication', body: 'at://p' } } } };
+        } }");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/favicon.svg"), "<svg/>").unwrap();
+        let served = crate::moss_paths::MossPaths::new(root).current_ptr().join("assets");
+        std::fs::create_dir_all(&served).unwrap();
+        std::fs::write(served.join("favicon-512.png"), "png").unwrap();
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        std::fs::write(root.join("page.md"), "---\nuid: aa11aa11\nsyndicate: one\n---\nHello.\n").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/", "uid": "aa11aa11", "syndicate": ["one"]})).unwrap();
+        let mut map = ArticleMap::default();
+        map.articles.insert(post.url_path.clone(), post);
+        records.save(&CopyRecord::due("aa11aa11", "one", "page.md", "page/")).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions::test("https://example.org", &emit);
+        let sent = send_due(root, &manager, &map, &opts).await;
+        assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/x".into() }, "{:?}", sent[0].outcome);
+        let kept = records.get("aa11aa11", "one").unwrap().verify.expect("the record keeps what the channel asked the site to carry");
+        assert_eq!(kept.site_file.unwrap().body, "at://p");
     }
 
     #[tokio::test]
@@ -795,7 +1053,7 @@ mod tests {
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
             let opts = SendOptions::test("https://example.org", &emit);
-            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts).await.unwrap();
+            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts, None).await.sent().unwrap();
             let saved = records.get("u", "one").unwrap();
             assert_eq!(saved.state, expected_state, "{name}");
             assert_eq!(saved.form, expected_form, "{name}");
@@ -820,7 +1078,7 @@ mod tests {
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
         let opts = SendOptions::test("https://example.org", &emit);
-        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
+        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts, None).await.sent().unwrap();
         assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
         assert_eq!(records.get("u", "one").unwrap(), before);
     }
@@ -833,10 +1091,10 @@ mod tests {
         record.part_count = Some(1);
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Longer than allowed", "url_path": "page/", "date": null })).unwrap();
-        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org", None).unwrap();
         assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
         assert!(job.copy.is_none());
-        assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org").is_err());
+        assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org", None).is_err());
     }
 
     #[test]
@@ -844,12 +1102,12 @@ mod tests {
         let record = CopyRecord::due("u", "one", "page.md", "page/");
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Hi", "url_path": "page/", "date": null })).unwrap();
-        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org/").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org/", None).unwrap();
         assert_eq!(job.site.url, "https://example.org");
         assert!(job.post.url.starts_with(&job.site.url), "the post's address is built on the same base");
         assert_eq!(job.site.name, "example.org");
         let named = ShapeOptions { site_name: Some("山居".into()), ..Default::default() };
-        let (job, _) = build_job(&record, &channel, &post, &named, Op::Publish, "https://example.org").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &named, Op::Publish, "https://example.org", None).unwrap();
         assert_eq!(job.site.name, "山居");
         let json = serde_json::to_value(&job).unwrap();
         assert_eq!(json["site"], serde_json::json!({ "url": "https://example.org", "name": "山居" }));
@@ -1257,6 +1515,231 @@ mod tests {
         let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
         assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/f-a0.md".into() });
         assert!(std::fs::read_to_string(root.join("a0.md")).unwrap().contains("f-a0.md"));
+    }
+
+    /// Two waiting drafts with ids on one channel whose `find_copy` answers
+    /// `find`; `a0.md`'s record is flagged when `a0_changed` (a deploy changed
+    /// its page). `publish_copy` throws: a new draft is never made.
+    fn waiting_drafts(root: &Path, find: &str, update_copy: bool, a0_changed: bool) -> (Records, ArticleMap) {
+        let (records, articles) = lookup_site(root, &[State::HandedOff, State::HandedOff]);
+        lookup_channel(root, "waiting");
+        let update = if update_copy {
+            ", update_copy: async function () { return { success: true, copy: { handoff: { text: 'Updated', open_url: 'https://social.example.net/new', id: 'd-1' } } }; }"
+        } else { "" };
+        let js = format!("{{ publish_copy: async function () {{ throw new Error('a second draft'); }}, find_copy: async function () {{ return {find}; }}{update} }}");
+        std::fs::write(root.join(".moss/plugins/social/main.bundle.js"), format!("window.SOCIALPlugin = {js};")).unwrap();
+        for uid in ["aaaa0000", "aaaa0001"] {
+            let mut r = records.get(uid, "social").unwrap();
+            r.handoff.as_mut().unwrap().id = Some("d-1".into());
+            r.update_due = a0_changed && uid == "aaaa0000";
+            records.save(&r).unwrap();
+        }
+        (records, articles)
+    }
+
+    /// `waiting_drafts` from before drafts had ids: no handoff carries one, and
+    /// `publish_copy` makes the new draft `d-new`, or one with no id.
+    fn waiting_without_ids(root: &Path, find: &str, new_id: bool) -> (Records, ArticleMap) {
+        let (records, articles) = waiting_drafts(root, find, true, false);
+        let bundle = root.join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace(
+            "throw new Error('a second draft');",
+            "globalThis.__publishes = (globalThis.__publishes || 0) + 1; return { success: true, copy: { handoff: { text: 'New', open_url: 'https://social.example.net/new'{} } } };",
+        ).replace("{}", if new_id { ", id: 'd-new'" } else { "" });
+        std::fs::write(&bundle, js).unwrap();
+        for uid in ["aaaa0000", "aaaa0001"] {
+            let mut r = records.get(uid, "social").unwrap();
+            r.handoff.as_mut().unwrap().id = None;
+            records.save(&r).unwrap();
+        }
+        (records, articles)
+    }
+
+    /// A copy handed off before drafts had ids gets one new draft on a page
+    /// publish, whether the lookup answers or fails; its id is kept, so the
+    /// next page publish rewrites it.
+    #[tokio::test]
+    async fn a_page_publish_of_an_idless_draft_makes_one_draft_and_keeps_its_id() {
+        for find in [WAITING, "null"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (records, articles) = waiting_without_ids(dir.path(), find, true);
+            let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+            assert!(only_a0_said(&out, "New"), "{find}: {out:?}");
+            let a = records.get("aaaa0000", "social").unwrap();
+            assert_eq!(a.draft().map(|d| d.id), Some("d-new".into()), "{find}");
+            assert!(records.get("aaaa0001", "social").unwrap().draft().is_none(), "{find}: the other draft is left");
+            let again = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+            assert!(only_a0_said(&again, "Updated"), "{find}: the second publish rewrites: {again:?}");
+        }
+    }
+
+    /// A publish that returned no draft id is not made again: the next page
+    /// publish says the draft as it stands.
+    #[tokio::test]
+    async fn a_publish_that_returned_no_draft_id_is_not_repeated() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), "null", false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "New"), "{out:?}");
+        assert!(records.get("aaaa0000", "social").unwrap().draft().is_none());
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace("return { success: true, copy: { handoff: { text: 'New'", "throw new Error('a third draft'); return { success: true, copy: { handoff: { text: 'New'");
+        std::fs::write(&bundle, js).unwrap();
+        let again = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&again, "New"), "{again:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff);
+    }
+
+    /// A channel found to have no `update_copy` earlier in the run is not
+    /// given a draft it cannot rewrite.
+    #[tokio::test]
+    async fn an_idless_draft_on_a_channel_without_update_copy_is_not_remade() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), WAITING, true);
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap();
+        let start = js.find(", update_copy").unwrap();
+        let end = js.rfind(" }").unwrap();
+        std::fs::write(&bundle, format!("{}{}", &js[..start], &js[end..])).unwrap();
+        let mut posted = records.get("aaaa0000", "social").unwrap();
+        posted.state = State::Posted;
+        posted.handoff = None;
+        posted.remote = Some(super::super::record::RemoteRef { id: "r".into(), url: "https://social.example.net/r".into() });
+        posted.update_due = true;
+        records.save(&posted).unwrap();
+        let mut a = records.get("aaaa0001", "social").unwrap();
+        a.update_due = true;
+        records.save(&a).unwrap();
+        run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+        let a = records.get("aaaa0001", "social").unwrap();
+        assert!(!a.redrafted && a.handoff.as_ref().is_some_and(|h| h.text == "Body"), "{a:?}");
+    }
+
+    /// A draft the network says is gone, with no id, is not made again.
+    #[tokio::test]
+    async fn a_page_publish_of_an_idless_absent_draft_makes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), "{ success: true, copy: { absent: true } }", true);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "still waiting, and said: {out:?}");
+        let a = records.get("aaaa0000", "social").unwrap();
+        assert!(a.state == State::HandedOff && a.draft().is_none());
+    }
+
+    const WAITING: &str = "{ success: true, copy: { handoff: { text: 'Body', open_url: 'https://social.example.net/new', id: 'd-1' } } }";
+
+    fn only_a0_said(out: &[Sent], text: &str) -> bool {
+        matches!(out, [Sent { source_path, outcome: Outcome::HandedOff { text: t, open_url: Some(_) }, .. }] if source_path == "a0.md" && t == text)
+    }
+
+    /// A one-page publish rewrites that post's waiting draft with the page as
+    /// it is now, and leaves the other waiting draft alone.
+    #[tokio::test]
+    async fn a_page_publish_rewrites_its_waiting_draft() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), WAITING, true, false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        let (a, b) = (records.get("aaaa0000", "social").unwrap(), records.get("aaaa0001", "social").unwrap());
+        assert!(a.state == State::HandedOff && a.handoff.as_ref().is_some_and(|h| h.text == "Updated" && h.id.as_deref() == Some("d-1")));
+        assert_eq!(b.handoff.as_ref().unwrap().text, "Body");
+    }
+
+    /// `waiting_drafts` on a channel that is signed out, and that fails the
+    /// test if a copy is made or rewritten.
+    fn signed_out_drafts(root: &Path, a0_changed: bool) -> ArticleMap {
+        let (_, articles) = waiting_drafts(root, WAITING, true, a0_changed);
+        let bundle = root.join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap()
+            .replace("return { success: true, copy: { handoff: { text: 'Updated'", "throw new Error('rewritten'); return { success: true, copy: { handoff: { text: 'Updated'")
+            .replace("{ publish_copy:", "{ copy_account: async function () { return { success: true, copy: { signed_out: true } }; }, publish_copy:");
+        std::fs::write(&bundle, js).unwrap();
+        articles
+    }
+
+    /// A signed-out channel says so for the draft a page publish would
+    /// rewrite, and neither makes nor rewrites a copy.
+    #[tokio::test]
+    async fn a_page_publish_of_a_draft_on_a_signed_out_channel_says_signed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let articles = signed_out_drafts(dir.path(), false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { source_path, outcome: Outcome::Held { why: HeldWhy::SignedOut, .. }, .. }] if source_path == "a0.md"), "{out:?}");
+    }
+
+    /// A draft nothing is rewriting rests without a word, signed out or not.
+    #[tokio::test]
+    async fn a_resting_draft_on_a_signed_out_channel_stays_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let articles = signed_out_drafts(dir.path(), false);
+        assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty());
+    }
+
+    /// A deploy rewrites the drafts of the pages it changed once; pages it did
+    /// not change rest, and the same deploy's second send says nothing.
+    #[tokio::test]
+    async fn a_deploy_rewrites_only_the_drafts_of_changed_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), WAITING, true, true);
+        let out = run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert!(!records.get("aaaa0000", "social").unwrap().update_due);
+        let (_, articles) = waiting_drafts(dir.path(), WAITING, true, false);
+        assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty(), "no page changed: neither update nor publish");
+    }
+
+    /// A failed lookup does not leave the draft stale: it is rewritten.
+    #[tokio::test]
+    async fn a_page_publish_rewrites_a_draft_whose_lookup_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "null", true, false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().handoff.unwrap().text, "Updated");
+    }
+
+    /// A channel installed before `update_copy` existed says the stored draft
+    /// again, once, whether its lookup answers or fails; it makes no new one.
+    #[tokio::test]
+    async fn a_channel_without_update_copy_says_its_draft_again() {
+        for find in [WAITING, "null"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (records, articles) = waiting_drafts(dir.path(), find, false, true);
+            let out = run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+            assert!(only_a0_said(&out, "Body"), "{find}: {out:?}");
+            assert!(!records.get("aaaa0000", "social").unwrap().update_due);
+            assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty(), "{find}");
+        }
+    }
+
+    /// A channel with no `find_copy` at all (LinkedIn) still has its draft
+    /// rewritten by a page publish: `update_copy` runs, `publish_copy` never.
+    #[tokio::test]
+    async fn a_channel_without_find_copy_has_its_draft_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "null", true, false);
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace("find_copy: async function () { return null; }, ", "");
+        assert!(!js.contains("find_copy"), "{js}");
+        std::fs::write(&bundle, js).unwrap();
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().handoff.unwrap().text, "Updated");
+    }
+
+    /// A draft the author already published is adopted, never overwritten; one
+    /// the author deleted is left, and no new one is made.
+    #[tokio::test]
+    async fn a_page_publish_never_overwrites_a_published_draft_or_remakes_a_deleted_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { absent: true } }", true, true);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "still waiting, and said: {out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff);
+        let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { id: 'f', url: 'https://social.example.net/f' } }", true, true);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/f".into() });
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::Posted);
     }
 
     /// Only an explicit absence lets an interrupted send go again: an empty

@@ -59,7 +59,8 @@ pub(super) fn set(
 ) -> std::result::Result<String, String> {
     let scope = keystore_caller_scope(host, "set_plugin_secret")?;
     let key = req_str(args, "key")?;
-    require_plugin_owned_key(host, &key)?;
+    // Logged as well as returned: a plugin that swallows the refusal still leaves it in the log.
+    require_plugin_owned_key(host, &key).inspect_err(|e| log::warn!(target: "plugin::custody", "{e}"))?;
     let value = req_str(args, "value")?;
     SecretStore::require("set_plugin_secret")?
         .set(&scope, &key, &value)
@@ -129,7 +130,7 @@ for a replacement."
     }
     if declared.plugin_owned_secrets.is_empty() {
         log::warn!(
-            target: "plugin",
+            target: "plugin::custody",
             "plugin '{plugin}' deposits secret '{key}' without declaring custody — \
              declare it as a hidden `secret` setting in the manifest"
         );

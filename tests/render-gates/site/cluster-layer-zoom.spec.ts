@@ -6,7 +6,7 @@
  * Run via:
  *   npx playwright test -c playwright/cluster-layer-zoom.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
 
 async function open(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -58,7 +58,7 @@ test("a page's locator shows its static credit only with its static map", async 
 
 test("a locator keeps its static credit when scripts never run", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, javaScriptEnabled: false });
-  const page = await context.newPage();
+  const page = await newPage(context);
   await page.goto(new URL("gate-morning/", test.info().project.use.baseURL).href);
   const host = page.locator(".moss-place-locator figure[data-moss-place-embed]");
   await expect(host.locator("> svg")).toBeVisible();

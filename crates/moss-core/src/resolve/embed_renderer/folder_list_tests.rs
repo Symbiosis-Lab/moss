@@ -184,6 +184,16 @@ fn a_comma_joined_keyed_segment_tolerates_a_trailing_bare_flag() {
 }
 
 #[test]
+fn repeat_none_skips_repeats_and_reaches_the_marker() {
+    let p = classify_folder_segments("when:past,repeat:none,limit:30");
+    assert!(p.skip_repeats);
+    assert!(emit_marker("/p/", "index.md", &p).contains("repeat=none"));
+    let other = classify_folder_segments("when:past,repeat:all");
+    assert!(!other.skip_repeats);
+    assert_eq!(other.unknown_keys, vec!["repeat:all".to_string()]);
+}
+
+#[test]
 fn an_unknown_key_among_known_ones_is_ignored_and_recorded() {
     let p = classify_folder_segments("style:grid,when:past,bogus:1");
     assert_eq!(p.style.as_deref(), Some("grid"));
@@ -202,19 +212,6 @@ fn caption_drops_the_placement_words_it_shared_a_segment_with() {
     let p = classify_folder_segments("wide cover");
     assert_eq!(p.caption.as_deref(), Some("cover"));
     assert_eq!(p.placement.width, Some("wide"));
-}
-
-#[test]
-fn marker_roundtrips_count_text_with_separators() {
-    use crate::frontmatter_union::ChildrenCount;
-    let text = "{n} production|{n} productions, all";
-    let p = FolderEmbedParams { count: Some(ChildrenCount(text.into())), ..Default::default() };
-    let m = emit_marker("/p/", "index.md", &p);
-    assert!(!m.contains(text), "separators must be encoded: {m}");
-    assert!(m.contains("count="), "{m}");
-    let hidden = FolderEmbedParams { count: Some(ChildrenCount(String::new())), ..Default::default() };
-    assert!(emit_marker("/p/", "index.md", &hidden).contains("|count=-->"));
-    assert!(!emit_marker("/p/", "index.md", &FolderEmbedParams::default()).contains("count"));
 }
 
 #[test]

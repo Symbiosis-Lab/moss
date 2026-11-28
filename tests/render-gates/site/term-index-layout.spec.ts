@@ -13,7 +13,7 @@
 // three sampled widths, in both engines — glyph advance for CJK differs
 // between Chromium and WebKit, and that is exactly what decides a wrap.
 //
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';

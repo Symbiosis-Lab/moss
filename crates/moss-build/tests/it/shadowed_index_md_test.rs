@@ -6,7 +6,7 @@ use crate::site;
 
 use site::{LoggedSite, Site};
 
-const CONFIG: &str = "\n[build]\npassthrough = [\"index.html\", \"fr/index.html\"]\n";
+const CONFIG: &str = "domain = \"example.com\"\n[build]\npassthrough = [\"index.html\", \"fr/index.html\"]\n";
 
 fn site() -> LoggedSite {
     LoggedSite::with_config(
@@ -40,7 +40,7 @@ fn a_shadowed_index_md_body_is_not_published_to_llms_txt() {
     let site = site();
     let llms = site.html("llms.txt");
     assert!(llms.contains("Root meta"), "metadata still serves the site: {llms}");
-    assert!(llms.contains("A propos texte."), "other pages are untouched: {llms}");
+    assert!(llms.contains("[A propos]("), "other pages are listed: {llms}");
     for body in ["zebra", "giraffe", "Old headline", "Vieux titre"] {
         assert!(!llms.contains(body), "{body} leaked: {llms}");
     }
@@ -50,13 +50,13 @@ fn a_shadowed_index_md_body_is_not_published_to_llms_txt() {
 
 #[test]
 fn an_undeclared_edition_index_html_still_wins_its_address() {
-    let site = Site::new(&[
+    let site = Site::with_config("domain = \"example.com\"\n", &[
         ("fr/index.md", "---\ntitle: Accueil\n---\n\nParagraphe giraffe.\n"),
         ("fr/index.html", "<!doctype html><title>Fr</title><p>fr html</p>"),
     ]);
     assert!(site.html("fr/index.html").contains("fr html"));
     assert!(site.html("fr/index/index.html").contains("giraffe"), "the markdown publishes at its own address");
-    assert!(site.html("llms.txt").contains("giraffe"));
+    assert!(site.html("llms.txt").contains("/fr/index/)"), "llms.txt lists the markdown at its own address");
 }
 
 #[test]

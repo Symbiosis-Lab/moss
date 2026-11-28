@@ -7,6 +7,7 @@ use super::{context_for_plugin, PluginManager};
 use crate::plugins::types::{HookResult, Plugin, PluginManifest};
 use crate::syndication::channel::{ChannelSpec, Form};
 use crate::syndication::job::{AccountQuery, CopyJob, Op};
+use crate::syndication::record::Cause;
 
 /// What a channel that takes copies declares.
 #[derive(Debug, Clone, Default)]
@@ -32,10 +33,17 @@ pub enum CopyCall {
 }
 
 /// A copy hook that returns `success: false` is answering, not failing: the
-/// network refused, and the refusal's cause is what the sender acts on. Every
-/// other hook's `success: false` stays an error.
+/// network refused, and the refusal's cause is what the sender acts on. So is
+/// `copy_account`, whose auth refusal means signed out. Every other hook's
+/// `success: false` stays an error.
 pub(super) fn refusal_is_an_answer(hook: &str) -> bool {
-    Op::ALL.iter().any(|op| op.hook() == hook)
+    hook == "copy_account" || Op::ALL.iter().any(|op| op.hook() == hook)
+}
+
+/// `name` as a person may be shown it: none when empty or when it is the
+/// account's id.
+pub(super) fn shown_name(name: Option<String>, id: Option<&str>) -> Option<String> {
+    name.filter(|n| !n.is_empty() && Some(n.as_str()) != id)
 }
 
 /// The channel's `syndication` block, when it posts through the copy contract.
@@ -90,7 +98,8 @@ pub enum Account {
     Unsaid,
     /// `id` binds copies; `name` is only shown.
     Known { id: String, name: Option<String> },
-    /// The channel answered that it has no usable session; someone signs in.
+    /// The channel answered that it has no usable session, or refused for
+    /// want of a credential; someone signs in.
     SignedOut,
     /// It exports `copy_account`, which failed.
     Unknown(String),
@@ -108,16 +117,28 @@ impl PluginManager {
         self.call_channel(&job.channel, job.op.hook(), job).await
     }
 
+    /// End `channel`'s running copy hook, as when the person closes the panel
+    /// it waits on. Its send answers at once, so the copy is recorded as
+    /// unconfirmed and the next channel's turn starts.
+    pub fn cancel_copy(&self, channel: &str) {
+        for op in Op::ALL {
+            self.engine.cancel_hook(channel, op.hook());
+        }
+    }
+
     /// Ask `channel`'s `copy_account` which account it is signed in to.
     pub async fn copy_account(&self, channel: &str) -> Account {
         let query = AccountQuery { channel: channel.to_string(), config: Default::default() };
         match self.call_channel(channel, "copy_account", &query).await {
             CopyCall::NoExport => Account::Unsaid,
-            CopyCall::Answered(r) if !r.success => Account::Unknown(r.message.unwrap_or_else(|| "copy_account failed".into())),
+            CopyCall::Answered(r) if !r.success => match r.copy.as_ref().and_then(|c| c.refused.as_ref()) {
+                Some(refused) if refused.cause == Cause::Auth => Account::SignedOut,
+                _ => Account::Unknown(r.message.unwrap_or_else(|| "copy_account failed".into())),
+            },
             CopyCall::Answered(r) => match r.copy {
                 Some(c) if c.signed_out => Account::SignedOut,
                 Some(c) => match c.account.filter(|a| !a.is_empty()) {
-                    Some(id) => Account::Known { id, name: c.name.filter(|n| !n.is_empty()) },
+                    Some(id) => Account::Known { name: shown_name(c.name, Some(&id)), id },
                     None => Account::Unsaid,
                 },
                 None => Account::Unsaid,

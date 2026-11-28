@@ -48,6 +48,7 @@ pub mod zone;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use moss_core::event::EventTime;
+use moss_core::page::site_page::SitePage as _;
 
 use crate::build::served_path::ServedPath;
 use crate::build::site_url::SiteUrl;
@@ -368,7 +369,8 @@ impl CalendarPlan {
     /// one of its events has not ended at `now`.
     pub fn embed_links_html(&self, home_url_path: &str, site_url: &SiteUrl, lang: crate::i18n::Language, now: chrono::NaiveDateTime) -> String {
         let Some(folder) = self.folders.get(home_url_path) else { return String::new() };
-        if !folder.events.iter().any(|e| crate::build::folder_embed::upcoming::span_is_upcoming(e.start, e.end, now)) {
+        let now = crate::build::folder_embed::upcoming::minute(now);
+        if !folder.events.iter().any(|e| moss_core::event::EventSpan { start: e.start, end: e.end }.is_upcoming(&now)) {
             return String::new();
         }
         links_paragraph(folder_links(&folder.path.to_relative_url(), site_url, lang))

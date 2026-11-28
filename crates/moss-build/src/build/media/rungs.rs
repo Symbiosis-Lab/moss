@@ -12,10 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::image::{
-    apply_exif_orientation, encode_webp, read_exif_orientation,
-    validate_webp_output, ImageCompressionConfig,
-};
+use super::image::{encode_webp, validate_webp_output, ImageCompressionConfig};
 
 /// One ladder rung's encode result, carried inside [`ImageConversionOutcome`].
 ///
@@ -33,12 +30,10 @@ pub struct RungOutcome {
     pub error: Option<String>,
 }
 
-/// A source picture's pixel size after EXIF orientation, from its header
-/// alone: what scan stores, without decoding.
+/// A source picture's pixel size after orientation, from its header alone:
+/// what scan stores, without decoding.
 pub(super) fn sniffed_oriented_dims(source_file: &Path) -> Option<(u32, u32)> {
-    let (w, h) = super::decode::sniff_dimensions(source_file).ok()?;
-    let swap = crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(source_file));
-    Some(if swap { (h, w) } else { (w, h) })
+    crate::build::scan::scan::extract_image_dimensions(source_file)
 }
 
 /// The cached base picture of `source_oid`: made with today's recipe, or with
@@ -172,10 +167,7 @@ pub(crate) fn rung_collision_map(
 /// see `media::decode::sniff_decode`) and apply its EXIF orientation. The
 /// shared decode front half of the base webp pass and the rung encodes.
 pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage, String> {
-    let orientation = read_exif_orientation(source_file);
-    let img = super::decode::sniff_decode(source_file)
-        .map_err(|e| format!("Failed to open image: {}", e))?;
-    Ok(apply_exif_orientation(img, orientation))
+    super::decode::sniff_decode_oriented(source_file).map_err(|e| format!("Failed to open image: {}", e))
 }
 
 /// Encode the responsive ladder rungs for one source image.

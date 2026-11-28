@@ -271,9 +271,12 @@ fn verify_ship_integrity(
 /// does not hide the rest, and a non-zero count returns `Err` so the
 /// generation is never promoted.
 ///
-/// `seeded` is the whole generation `site_dir` was cloned from, if any: an
-/// entry it still holds unchanged is not written again — see
-/// [`crate::build::store_gc::WholeGeneration::still_holds`].
+/// `seeded` is the whole generation `site_dir` was cloned from, if any, with
+/// the stats [`crate::build::store_gc::prune_to_manifest`] took of `site_dir`:
+/// an entry the base still holds unchanged is not written again — see
+/// [`crate::build::store_gc::WholeGeneration::still_holds`]. Every entry that
+/// is not skipped leaves the table, so what stays in it is untouched; without
+/// a base nothing is skipped and the table empties.
 ///
 /// `Ok` carries how many entries shipped bytes other than the ones their
 /// manifest hash names — see [`verify_ship_integrity`].
@@ -282,7 +285,7 @@ pub fn ship_phase(
     site_dir: &Path,
     sealed: &SealedManifest,
     object_store: Option<&crate::build::cache::ObjectStore>,
-    seeded: Option<&crate::build::store_gc::WholeGeneration>,
+    mut seeded: Option<(Option<&crate::build::store_gc::WholeGeneration>, &mut crate::build::store_gc::GenerationStats)>,
 ) -> std::io::Result<usize> {
     // Count per-file faults so a PARTIAL materialize reports failure (Err),
     // not success. Fix B's mat_ok gate relies on this: a partial generation
@@ -294,8 +297,11 @@ pub fn ship_phase(
     for (rel_path, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel_path);
         let site_path = site_dir.join(rel_path);
-        if seeded.is_some_and(|base| base.still_holds(rel_path, entry, &site_path)) {
-            continue;
+        if let Some((base, stats)) = seeded.as_mut() {
+            if base.is_some_and(|base| base.still_holds(rel_path, entry, &site_path, stats)) {
+                continue;
+            }
+            stats.remove(rel_path);
         }
         // The ONE source every check and read below uses. Held bytes are
         // themselves; a live `staged_oid` resolves to its immutable CAS blob;
@@ -665,21 +671,22 @@ pub(crate) fn materialize_and_promote(
         crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
             .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
     let mut drifted = 0;
+    let mut stats = crate::build::store_gc::GenerationStats::new();
     let copied = !write_lock.holds(&gen_dir, sealed.all_files());
     if copied {
         // Seeded from the last whole generation by one copy-on-write clone
         // where the platform has one, so only the entries that differ are
         // written; otherwise every entry is copied.
         let base = crate::build::lifecycle::whole_generation(mp).filter(|base| write_lock.seed_from(&gen_dir, base));
-        crate::build::io_utils::create_output_dir_all(&gen_dir)
-            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.all_files()))
+        crate::build::io_utils::create_output_dir_all(&gen_dir).map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
+        stats = crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.all_files())
             .map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
         // Ship-by-OID: read a `staged_oid` entry from its
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
         let object_store = crate::build::cache::ObjectStore::for_seal(mp);
-        drifted = match ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref()) {
+        drifted = match ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), Some((base.as_deref(), &mut stats))) {
             Ok(drifted) => drifted,
             // A newer render owns staging and may have removed a page this
             // generation names: its own generation is the one to promote.
@@ -699,14 +706,15 @@ pub(crate) fn materialize_and_promote(
     if let Some(locked_at) = locked_at {
         crate::infra::folder_lock::record_promotion(&mp.generations_dir(), sealed.generation_id(), locked_at)
             .map_err(|e| format!("Failed to record the promotion epoch: {e}"))?;
+        crate::build::lifecycle::note_own_promotion(mp, locked_at);
     }
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
     // so the next seal of this id copies it again instead of reusing it.
     if drifted == 0 {
+        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed, copied, &stats);
         write_lock.finish();
-        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed, copied);
     }
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
@@ -721,10 +729,9 @@ pub(crate) fn materialize_and_promote(
 /// nothing else, so an entry dropped here cannot reach the generation whatever
 /// staging holds; unlinking the staged bytes as well bought nothing but local
 /// disk, and bought it out of the directory the preview server is reading at
-/// that instant. `build::pipeline`'s pre-render sweep unlinks them at the next
-/// build's start, after the server has moved to `current` — and
-/// [`reclaim_staging_now`] unlinks them right after this call returns, on the
-/// one path that proves there is no next build to wait for.
+/// that instant. `build::pipeline::sweep_staging` unlinks them in the seal
+/// tail, once lifecycle licenses it, or at the next build's start when no tail
+/// could.
 ///
 /// Opt-out via `[build].prune_orphaned_images = false`. Default on: the win
 /// is upload bytes and seta quota, NOT local disk — the
@@ -807,44 +814,10 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         .filter(|k| !referenced.contains(k))
         .collect();
     verdict.extend(removed_keys.iter().cloned());
+    // A promised variant nothing references is judged too, so the next build does not make it.
+    verdict.extend(sealed.promised_variants().filter(|k| !referenced.contains(*k)).map(str::to_string));
     sealed.set_pruned_image_outputs(verdict);
     removed_keys
-}
-
-/// Reclaim `stage_dir` bytes this build orphaned, for the ONE build shape
-/// where nothing will ever sweep them: a one-shot invocation (`moss build`,
-/// `build_sync`, every snapshot-test fixture) whose caller drops the tokio
-/// runtime as soon as the seal tail returns.
-///
-/// `prune_orphaned_webp_before_ship` and `drop_absent_outputs` only ever drop
-/// entries from `sealed` — see their docs — because the preview server may
-/// still be reading `stage_dir` while the seal tail runs
-/// (see `build::pipeline::sweep_staging`'s doc for the 404 this avoids).
-/// `sweep_staging` is how those bytes are normally reclaimed, but it runs at
-/// the START of a FUTURE build in the same folder, using the manifest that
-/// build inherits. A build that is the last one in its process never gets a
-/// future build to do that, so without this call its orphaned `.webp` bytes
-/// sit in `stage_dir` forever and ship in anything that reads that tree
-/// directly — a raw copy of staging, a snapshot test comparing it
-/// byte-for-byte. Measured exactly that shape on a real site.
-///
-/// `sealed` must be the FINAL manifest — call this after every pass that can
-/// drop an entry (`degrade::repair_staged_html`), never before. The permit is
-/// `lifecycle::final_build_permit`, minted where the caller proves no server
-/// and no other build reads `stage_dir`; a second pass of the same one-shot
-/// build starts from this manifest and so loses nothing it needs.
-pub(crate) fn reclaim_staging_now(
-    stage_dir: &std::path::Path,
-    sealed: &crate::build::manifest::SealedManifest,
-    permit: &crate::build::lifecycle::SweepPermit,
-) {
-    let hashes = sealed.site_hashes_view();
-    crate::build::media::pipeline::remove_stale_files(stage_dir, hashes, "staging (final build)", permit);
-    crate::build::media::pipeline::remove_stale_dirs(
-        stage_dir,
-        &crate::build::media::pipeline::compute_expected_dirs(hashes),
-        permit,
-    );
 }
 
 /// Drop manifest entries whose output is not on disk.
@@ -875,6 +848,7 @@ pub(crate) fn drop_absent_outputs(
     stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
     object_store: Option<&crate::build::cache::ObjectStore>,
+    mut stats: crate::build::media::orphan_prune::ShipStats,
 ) -> std::collections::HashSet<String> {
     use crate::build::io_utils::Presence;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -890,7 +864,11 @@ pub(crate) fn drop_absent_outputs(
             continue; // held bytes and a ready blob are present by construction
         };
         let (mode, _) = crate::types::content::parse_entry(entry);
-        let presence = crate::build::io_utils::probe_output(&path, mode);
+        let stat = match stats.remove(rel) {
+            Some((recorded, stat)) if recorded == path => stat,
+            _ => std::fs::symlink_metadata(&path),
+        };
+        let presence = crate::build::io_utils::probe_output_stat(&path, mode, stat);
         if presence.is_present() {
             continue;
         }
@@ -1203,6 +1181,34 @@ mod tests {
             "a prune that did not run has judged nothing — recording a verdict \
              here carries the blindness into the next build's producers"
         );
+    }
+
+    /// A picture whose embed left while it waited was never encoded, so its
+    /// variants are in no output list; the verdict still names them, or the
+    /// next build encodes them. Removal stays empty: nothing was made.
+    #[test]
+    fn the_verdict_names_a_promised_variant_that_was_never_encoded() {
+        let vault = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(vault.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), br#"<img srcset="assets/kept.webp">"#).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for (url, source) in [
+            ("assets/gone.webp", "assets/gone.png"),
+            ("assets/gone.w800.webp", "assets/gone.png"),
+            ("assets/kept.webp", "assets/kept.png"),
+            ("assets/own.w800.webp", "assets/own.webp"),
+        ] {
+            pending.register_preview_original(url.to_string(), source.to_string());
+        }
+        let mut sealed = pending.seal();
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage, None);
+
+        assert!(prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan).is_empty());
+        let verdict = &sealed.site_hashes_view().pruned_image_outputs;
+        let expected: std::collections::HashSet<String> = ["assets/gone.webp", "assets/gone.w800.webp"].map(String::from).into();
+        assert_eq!(*verdict, expected);
     }
 
     /// Seal a manifest naming exactly `entries`, so a test states what the
@@ -1592,7 +1598,7 @@ mod tests {
             );
         }
         let mut sealed = pending.seal();
-        let (verdict, _) = crate::build::degrade::repair_staged_html(
+        let (verdict, _, _) = crate::build::degrade::repair_staged_html(
             &mp,
             &stage,
             &mut sealed,
@@ -1892,7 +1898,7 @@ mod tests {
 
     /// Seed `generation`, on disk, as it would be recorded for the next copy.
     fn whole(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> Option<WholeGeneration> {
-        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.all_files())
+        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.all_files(), &Default::default())
     }
 
     /// A file edited inside the seed after it finished — by a person, or by
@@ -1961,9 +1967,12 @@ mod tests {
         let Some(whole) = whole(&mp, &base) else { return };
         let kept = mp.generation_dir(base.generation_id()).join("kept.css");
         let entry = &base.files()["kept.css"];
-        assert!(whole.still_holds("kept.css", entry, &kept), "sanity: held while on disk");
+        let walk = || {
+            crate::build::store_gc::prune_to_manifest(&mp.generation_dir(base.generation_id()), base.all_files()).unwrap()
+        };
+        assert!(whole.still_holds("kept.css", entry, &kept, &walk()), "sanity: held while on disk");
         let _cloud = crate::build::icloud::pretend::evicted(&kept);
-        assert!(!whole.still_holds("kept.css", entry, &kept));
+        assert!(!whole.still_holds("kept.css", entry, &kept, &walk()));
     }
 
     /// A seed whose lock another writer holds is not waited for.
@@ -2087,6 +2096,8 @@ mod tests {
             .map(|s| s.to_string())
             .collect(),
             unreadable: vec![],
+            ship_stats: Default::default(),
+            page_links: Default::default(),
         };
 
         let strip = unregistered_referenced_variants(&scan, &sealed, stage);
@@ -2236,7 +2247,7 @@ mod tests {
         pending.apply_message(sp.as_str().to_string(), "cafefacecafeface", HashBucket::Files, Some(oid));
         let mut sealed = pending.seal();
 
-        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&object_store));
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&object_store), Default::default());
 
         assert!(dropped.is_empty(), "nothing should be dropped: {dropped:?}");
         assert!(
@@ -2265,7 +2276,7 @@ mod tests {
         let (mut sealed, oid) = blob_backed(&store, "asset.bin", b"stable bytes");
         let _second_question_says_cloud = crate::build::icloud::pretend::evicted_after(&store.blob_path(&oid), 1);
 
-        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&store));
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&store), Default::default());
 
         assert!(dropped.is_empty(), "the blob was asked about more than once: {dropped:?}");
     }
@@ -2279,13 +2290,13 @@ mod tests {
         let index = cache.path().join("verified.json");
         let first = crate::build::cache::ObjectStore::new(cache.path().to_path_buf()).remembering_verified(&index);
         let (sealed, oid) = blob_backed(&first, "asset.bin", b"stable bytes");
-        assert!(drop_absent_outputs(stage.path(), &mut sealed.clone(), Some(&first)).is_empty());
+        assert!(drop_absent_outputs(stage.path(), &mut sealed.clone(), Some(&first), Default::default()).is_empty());
         first.save_verified().unwrap();
 
         std::fs::remove_file(first.blob_path(&oid)).unwrap();
         let next = crate::build::cache::ObjectStore::new(cache.path().to_path_buf()).remembering_verified(&index);
         let mut sealed = sealed;
-        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&next));
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&next), Default::default());
 
         assert!(dropped.contains("asset.bin"), "{dropped:?}");
         assert!(!sealed.files().contains_key("asset.bin"));
@@ -2327,7 +2338,7 @@ mod tests {
         pending.register_held(&sp, b"everything".to_vec(), HashBucket::Files).unwrap();
         let mut sealed = pending.seal();
 
-        let dropped = drop_absent_outputs(stage.path(), &mut sealed, None);
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, None, Default::default());
         assert!(dropped.is_empty(), "held bytes are present by construction: {dropped:?}");
         assert!(sealed.files().contains_key("llms.txt"));
 

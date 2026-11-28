@@ -94,6 +94,20 @@ fn subscribe_legacy_body_keys_no_longer_parsed() {
 }
 
 #[test]
+fn subscribe_takes_questions_in_the_form_grammar() {
+    let md = ":::subscribe {button=\"訂閱\"}\n- 怎麼稱呼你 *\n- 電子郵件 * {type=email}\n- 從哪裡知道 *\n  - [ ] 朋友\n  - [ ] 其他\n    - 從哪裡\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Subscribe(args) => {
+            let names: Vec<_> = args.fields.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(names, ["怎麼稱呼你", "電子郵件", "從哪裡知道"]);
+            assert_eq!(args.button.as_deref(), Some("訂閱"));
+        }
+        other => panic!("expected Subscribe, got {other:?}"),
+    }
+}
+
+#[test]
 fn subscribe_inside_code_fence_is_not_extracted() {
     // Adversarial: `:::subscribe` inside a fenced code block is just
     // documentation text. The extractor must not treat it as a
@@ -2034,8 +2048,15 @@ fn a_stray_closer_warns_and_names_its_line_and_the_block_before_it() {
     let w = &result.warnings[0];
     assert!(w.contains("line 6") && w.contains("closes nothing"), "{w}");
     assert!(w.contains("closed on line 3") && w.contains("started on line 1"), "{w}");
-    // Still shown as text, as before.
-    assert!(result.markdown_with_placeholders.contains("\n:::\n"));
+    // Escaped, so it still shows as text.
+    assert!(result.markdown_with_placeholders.contains("\n\\:::\n"));
+    assert!(w.ends_with("`moss migrate --apply` deletes it."), "{w}");
+}
+
+#[test]
+fn stray_closer_lines_name_the_warned_closers_only() {
+    let md = "Para.\n:::\n\n:::grid 2\na\n+++\nb\n:::\n\n<div>\n:::\n</div>\n\nEnd.\n:::\n";
+    assert_eq!(stray_closer_lines(md), vec![1, 14]);
 }
 
 #[test]
@@ -3429,6 +3450,19 @@ fn a_buttons_line_that_is_not_a_link_is_named_in_a_warning() {
 fn two_links_on_one_buttons_line_are_named_in_a_warning() {
     let result = extract_shortcodes("::::buttons\n[a](/a/) [b](/b/)\n::::\n");
     assert!(result.warnings.iter().any(|w| w.contains("[a](/a/) [b](/b/)") && w.contains("one link per line")), "{:?}", result.warnings);
+}
+
+#[test]
+fn a_wikilink_buttons_line_is_a_button_with_its_alias_and_slugged_fragment() {
+    let result = extract_shortcodes(":::buttons\n[[訂閱|訂閱]]\n[[about#Our Team]]\n[[a]] [[b]]\n:::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => {
+            let items: Vec<_> = args.items.iter().map(|i| (i.text.as_str(), i.url.clone())).collect();
+            assert_eq!(items, [("訂閱", Url::unresolved("訂閱")), ("about#Our Team", Url::unresolved("about#our-team"))]);
+        }
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(result.warnings.iter().any(|w| w.contains("[[a]] [[b]]")), "{:?}", result.warnings);
 }
 
 mod plugin_blocks {

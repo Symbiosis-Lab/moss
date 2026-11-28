@@ -366,6 +366,30 @@ describe('openCardAt', () => {
   });
 });
 
+describe('openCardAt in read-only text', () => {
+  test('the card opens without the fields and actions that write', () => {
+    const provider: CardProvider = () => ({
+      title: 'Link', body: document.createElement('div'),
+      fields: [{ label: 'URL', value: 'https://x', commit: vi.fn() }],
+      actions: [{ label: 'Unlink', run: vi.fn() }],
+    });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'x',
+        extensions: [EditorState.readOnly.of(true), referenceCardExtension(), cardProviders.of(provider)],
+      }),
+      parent: container,
+    });
+    expect(openCardAt(view, 0)).toBe(true);
+    const dom = view.dom.querySelector('.cm-reference-card')!;
+    expect(dom.querySelector('input, button')).toBeNull();
+    view.destroy();
+    document.body.innerHTML = '';
+  });
+});
+
 describe('click-opened card dismissal', () => {
   const provider: CardProvider = () => ({ title: 'Link', body: document.createElement('div') });
   function mountOpen(): EditorView {

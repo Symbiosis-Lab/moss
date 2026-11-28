@@ -13,7 +13,7 @@ use serde_yaml::Value;
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(untagged)]
 pub enum SeriesField {
-    /// `series: true` — sequential mode, sort children by weight.
+    /// `series: true` — previous and next in the folder's own order.
     Flag(bool),
     /// `series: ["[[Ch 1]]", "[[Ch 2]]"]` — explicit wikilink order.
     Ordered(Vec<String>),
@@ -291,6 +291,9 @@ pub struct FrontMatter {
     /// from schema.org `publisher` (via `@id` ref to an `Organization` entry)
     /// or OpenGraph `og:site_name`, falling back to the URL host.
     pub publisher: Option<String>,
+    /// The line under a page's title, and under its card's.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub subtitle: Option<String>,
     /// Linkblog target: when set, internal references to this page (cards,
     /// link rewrites, canonical, sitemap) point here instead of the local URL.
     /// The page is still built locally — direct visits to its slug still
@@ -389,10 +392,8 @@ pub struct FrontMatter {
     /// Whether to render child pages below content.
     /// Accepts bool (true/false) or a wikilink/path string like "[[News]]".
     /// The lenient deserializer resolves ANY non-bool string to `Some(true)`
-    /// (= render children on); the folder reference itself is extracted into
-    /// `children_source` by `crate::frontmatter_union::normalize_children`
-    /// in the pipeline. This `Option<bool>` is the RESOLVED form the render
-    /// layer consumes — its type is unchanged so no render-layer ripple.
+    /// (= render children on); [`project_typed`] puts the folder reference
+    /// itself in `children_source`.
     #[serde(default, deserialize_with = "deserialize_children_lenient")]
     pub children: Option<bool>,
     /// Wikilink reference for targeted children rendering (e.g. "[[News]]").
@@ -554,6 +555,16 @@ pub struct FieldWarning {
 /// custom-deserializer fields the validation engine can't see (the gap that an
 /// earlier schema-driven attempt missed). Pure; no I/O.
 pub fn project_typed(values: &serde_yaml::Mapping) -> (FrontMatter, Vec<FieldWarning>) {
+    let (mut fm, warnings) = project_fields(values);
+    if let Some(children) = values.get("children") {
+        let norm = crate::frontmatter_union::normalize_children(children);
+        fm.children = Some(norm.children);
+        fm.children_source = norm.source;
+    }
+    (fm, warnings)
+}
+
+fn project_fields(values: &serde_yaml::Mapping) -> (FrontMatter, Vec<FieldWarning>) {
     // Happy path: serde_yaml coerces scalars (numeric uid/title → string) and
     // ignores unknown fields, so all coercible inputs succeed with no warnings.
     if let Ok(fm) = serde_yaml::from_value::<FrontMatter>(serde_yaml::Value::Mapping(values.clone())) {
@@ -780,11 +791,9 @@ where
 ///
 /// Accepts `bool` OR a string. A bool passes through; a string is resolved via
 /// the SHARED `crate::frontmatter_union::normalize_children` so the build
-/// pipeline and the editor agree byte-for-byte on what a value means. The folder
-/// reference carried by a string is recovered separately by calling
-/// `normalize_children` on the raw value in the pipeline (this deserializer only
-/// produces the resolved `Option<bool>`; it cannot write the sibling
-/// `children_source`).
+/// pipeline and the editor agree byte-for-byte on what a value means. A field
+/// deserializer cannot write the sibling `children_source`, so
+/// [`project_typed`] does.
 pub fn deserialize_children_lenient<'de, D>(
     deserializer: D,
 ) -> Result<Option<bool>, D::Error>
@@ -913,8 +922,11 @@ pub fn apply_sidebar_alias(fm: &mut FrontMatter) -> Option<SidebarAlias> {
     fm.children_source = Some(sidebar_ref.clone());
     fm.children_in = Some("sidebar".to_string());
     fm._from_sidebar_alias = Some(true);
+    let r = crate::contract::retired::row(crate::contract::retired::RetiredKind::FrontMatter, "sidebar");
     Some(SidebarAlias::Applied(format!(
-        "`sidebar:` was replaced in moss 0.6.5. The current spelling is `children: {sidebar_ref}` with `children_in: sidebar`."
+        "`sidebar:` was replaced {}. The current spelling is `{}: {sidebar_ref}` with `children_in: sidebar`.",
+        r.when(),
+        r.renamed_to()
     )))
 }
 

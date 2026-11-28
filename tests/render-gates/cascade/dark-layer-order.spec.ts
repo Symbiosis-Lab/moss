@@ -23,7 +23,7 @@
  * Run via:
  *   npx playwright test -c playwright/dark-layer-order.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const EXPECTED_BG = "rgb(17, 17, 17)"; // #111111 — author override wins via layer order
 

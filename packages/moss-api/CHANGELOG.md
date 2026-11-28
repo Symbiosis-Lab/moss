@@ -13,6 +13,18 @@ release heading.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-27
+
+### Added
+
+- `CopyJob.site.icon`: the absolute URL of the site's own icon as a square PNG of at least 256 px; absent when the site has none.
+- `CopyOutcome.verify` (`page_link`, `site_file`): what the site should carry so the network can tie a copy back to it. moss writes it on the next build.
+- `update_copy` may answer `absent: true` (the draft or post is gone) and refuse with `refused.cause: "locked"` (the network will not take the edit, which leaves the copy as posted). A retry on a handed-off draft now calls `update_copy` on the draft named by `previous`, instead of making a second draft.
+
+### Removed
+
+- `HookResult.offer`. moss drops it at run time, so a plugin that still returns it keeps working; a typed `HookResult` literal that sets it fails its type check from this version.
+
 ## [0.22.0] - 2026-11-22
 
 ### Added

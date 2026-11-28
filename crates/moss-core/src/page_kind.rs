@@ -37,20 +37,6 @@ pub enum PageKind {
     Folder,
 }
 
-impl PageKind {
-    /// True when pages of this kind appear in children listings at
-    /// `children_depth: all`.
-    pub fn is_listable_at_depth_all(self) -> bool {
-        matches!(self, PageKind::Article)
-    }
-
-    /// True when pages of this kind appear in children listings at
-    /// `children_depth: direct`.
-    pub fn is_listable_at_depth_direct(self) -> bool {
-        matches!(self, PageKind::Article | PageKind::Folder)
-    }
-}
-
 impl Default for PageKind {
     fn default() -> Self {
         PageKind::Article
@@ -60,18 +46,6 @@ impl Default for PageKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn listable_at_depth_all_is_article_only() {
-        assert!(PageKind::Article.is_listable_at_depth_all());
-        assert!(!PageKind::Folder.is_listable_at_depth_all());
-    }
-
-    #[test]
-    fn listable_at_depth_direct_is_article_and_folder() {
-        assert!(PageKind::Article.is_listable_at_depth_direct());
-        assert!(PageKind::Folder.is_listable_at_depth_direct());
-    }
 
     #[test]
     fn default_is_article() {

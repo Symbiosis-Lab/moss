@@ -100,6 +100,7 @@ fn folder_listing_carries_folder_detail() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
     let moss_dir = root.join(".moss");
@@ -215,6 +216,7 @@ fn folder_embed_whose_index_source_is_gone_has_nothing_to_follow() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
     let moss_dir = root.join(".moss");
@@ -414,6 +416,7 @@ fn folder_embed_with_a_synthesized_index_has_nothing_to_follow() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
     let moss_dir = root.join(".moss");

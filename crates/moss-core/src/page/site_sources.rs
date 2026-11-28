@@ -1,5 +1,6 @@
 //! Assemble page context from bytes supplied by any host, without I/O.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use crate::resolve::embeds::derived::DerivedRecord;
 use super::{BundlePlugin, SiteBundle};
 use super::listing_style::ListingStylePlan;
 use super::plugin_source::read_manifest;
@@ -12,10 +13,27 @@ pub struct SiteSources {
     #[serde(default)]
     pub texts: HashMap<String, String>,
     pub config_toml: Option<String>,
+    /// The text of `.moss/places.toml`, the gazetteer.
+    #[serde(default)]
+    pub places_toml: Option<String>,
     pub detected_lang: Option<String>,
     #[serde(default)]
     pub plugins: Vec<PluginSource>,
     pub theme_style_css: Option<String>,
+    /// The language a host's detector found in each page, by site-relative
+    /// path, with the prose it read: the folder vote's input. A host fills it
+    /// at call time from each page's current text; one with no detector
+    /// leaves it empty, and folders then take only declared languages. This
+    /// is the one intended difference between hosts.
+    #[serde(default)]
+    pub detected: BTreeMap<String, crate::i18n::vote::Detected>,
+    /// The derive cache's record for each embedded file whose current content
+    /// has been derived, keyed by its site-relative path. A host fills it at
+    /// call time: it hashes each embedded file's current bytes and reads the
+    /// synced derive cache by that hash and `derive:<plugin>/<derivation>`, so an
+    /// edited file reads as pending. Never persisted.
+    #[serde(default)]
+    pub derived: BTreeMap<String, DerivedRecord>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -68,28 +86,55 @@ pub fn declared_lang_in_text(text: &str) -> Option<String> {
     crate::home::is_known_language_code(lang).then(|| lang.to_string())
 }
 
+/// A site's language, and whether its author declared it. A declared language
+/// holds on every page; a guessed one leaves room for each folder's own guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteLang {
+    pub code: String,
+    pub declared: bool,
+}
+
+impl SiteLang {
+    /// The interface language; English where moss has no table for the code.
+    pub fn language(&self) -> crate::i18n::Language {
+        crate::i18n::Language::from_code(&self.code).unwrap_or(crate::i18n::Language::En)
+    }
+}
+
 /// Explicit configuration, home frontmatter, detected prose, then English; the
 /// first known code wins, and a later rung is read only when every earlier one fails.
 /// Lowercased because consumers compare the code as a string, though validation folds case.
-pub fn resolve_site_default_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
-    detected: impl FnOnce() -> Option<String>) -> String {
+pub fn resolve_site_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
+    detected: impl FnOnce() -> Option<String>) -> SiteLang {
     let known = |code: &str| {
         let code = code.trim();
         crate::home::is_known_language_code(code).then(|| code.to_lowercase())
     };
-    explicit.and_then(known)
-        .or_else(|| home().as_deref().and_then(known))
-        .or_else(|| detected().as_deref().and_then(known))
-        .unwrap_or_else(|| "en".to_string())
+    if let Some(code) = explicit.and_then(known).or_else(|| home().as_deref().and_then(known)) {
+        return SiteLang { code, declared: true };
+    }
+    let code = detected().as_deref().and_then(known).unwrap_or_else(|| "en".to_string());
+    SiteLang { code, declared: false }
 }
 
 pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let (config, mut warnings) = super::site_config::parse_config(sources.config_toml.as_deref().unwrap_or(""));
-    let lang = resolve_site_default_lang(config.site_lang(),
+    let site_lang = resolve_site_lang(config.site_lang(),
         || elect_home(&sources.files, &sources.texts).and_then(|p| declared_lang_in_text(sources.texts.get(&p)?)),
         || sources.detected_lang.take());
-    let (declared_name_lists, problems) = crate::terms::config::declared_name_list_fields(&config.terms_kinds());
+    let raw_kinds = config.terms_kinds();
+    // The resolver reports the same refused fields, and more.
+    let (declared_name_lists, _) = crate::terms::config::declared_name_list_fields(&raw_kinds);
+    let (mut terms, problems) = crate::terms::kinds::resolve_kinds(&raw_kinds, &site_lang.code);
     warnings.extend(problems);
+    if let Some(text) = sources.places_toml.as_deref() {
+        let (gazetteer, said) = crate::terms::places::parse_gazetteer_text(text);
+        warnings.extend(said.into_iter().filter_map(|m| match m {
+            crate::terms::places::PlaceMessage::Problem(problem) => Some(problem),
+            crate::terms::places::PlaceMessage::Note(_) => None,
+        }));
+        warnings.extend(crate::terms::places::attach_parents(&mut terms, &gazetteer));
+    }
     let mut manifests = Vec::new();
     // Folder order also makes warnings and equal-name ties independent of discovery order.
     sources.plugins.sort_by(|a, b| a.folder.cmp(&b.folder));
@@ -119,6 +164,14 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
         Some((name.as_str(), manifest.contributes.listing_styles.as_ref()?))
     }));
     warnings.extend(styles.conflicts.iter().cloned());
+    let mut derivable = BTreeMap::new();
+    for (_, manifest) in &manifests {
+        for claim in manifest.contributes.derivations.iter().flat_map(BTreeMap::values) {
+            for ext in &claim.accepts {
+                derivable.entry(ext.clone()).or_insert_with(|| claim.fragments.keys().cloned().collect());
+            }
+        }
+    }
     let plugins: Vec<_> = manifests.into_iter().map(|(name, manifest)| BundlePlugin {
         blocks: manifest.contributes.blocks.into_iter().flatten().map(|(short, _)| short).collect(),
         name, fields: manifest.contributes.frontmatter.map(|f| f.fields).unwrap_or_default(),
@@ -126,8 +179,10 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let listing_styles = styles.ids().map(str::to_string).collect();
     sources.files.sort();
     let bundle = SiteBundle {
-        files: sources.files, lang, declared_name_lists, plugins, listing_styles,
-        theme_css: sources.theme_style_css.unwrap_or_default(), ..Default::default()
+        files: sources.files, lang: site_lang.code, lang_declared: site_lang.declared, declared_name_lists, terms, plugins, listing_styles,
+        theme_css: sources.theme_style_css.unwrap_or_default(),
+        detected: sources.detected, derived: sources.derived,
+        derivable, math: Some(config.math()), passthrough: config.passthrough().to_vec(), ..Default::default()
     };
     let schemas: Vec<_> = bundle.plugins.iter().map(|p| crate::schema::PluginSchema {
         name: &p.name, fields: Some(&p.fields),

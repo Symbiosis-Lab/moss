@@ -90,6 +90,8 @@ pub struct DryRun {
     /// Scripts in a members folder that are published to everyone; `None`
     /// when no build listed them.
     pub public_scripts: Option<Vec<String>>,
+    /// Pictures from other sites whose hosts say they are gone.
+    pub remote_pictures: super::remote_pictures::RemotePictureReport,
 }
 
 impl DryRun {
@@ -114,6 +116,7 @@ impl DryRun {
             copies,
             owner,
             public_scripts,
+            remote_pictures,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -149,6 +152,7 @@ impl DryRun {
             "copies": copies,
             "owner": owner,
             "public_scripts": public_scripts,
+            "remote_pictures": remote_pictures,
         })
     }
 
@@ -191,6 +195,9 @@ impl DryRun {
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
         }
         if let Some(line) = crate::build::scan::members::public_scripts_line(self.public_scripts.as_deref()) {
+            out.push_str(&format!("{line}\n"));
+        }
+        for line in self.remote_pictures.lines() {
             out.push_str(&format!("{line}\n"));
         }
         if let Some(site) = &self.would_register {
@@ -463,7 +470,11 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
+    let page_address = |source: &str| sealed.site_url().map(|site| super::remote_pictures::page_address(site, sealed.source_to_output().get(source).map(String::as_str)));
+    let ((owner, server), remote_pictures) = tokio::join!(
+        ask_server(folder, &local, overwrite_newer),
+        super::remote_pictures::check(&folder_str, &page_address),
+    );
     use crate::deploy::Refusal;
     let local_refusal = crate::deploy::removal_gate::refuse_output_collisions(&sealed).err()
         .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
@@ -489,6 +500,7 @@ pub async fn run_dry_run(
         copies: crate::syndication::preview::for_dry_run(folder, &sealed),
         owner,
         public_scripts: crate::system::build_records::records().public_scripts(&folder_str),
+        remote_pictures,
     })
 }
 
@@ -502,8 +514,8 @@ fn kept_as_redirect(folder: &str) -> Vec<Kept> {
 }
 
 /// Describe the publish of a prebuilt folder: the folder is read as it is,
-/// with the same manifest the upload hashes and the same record and removal
-/// check the upload's gate uses. Sends and writes nothing.
+/// with the same manifest the upload hashes and the same moderation, record
+/// and removal checks the upload's gate uses. Sends and writes nothing.
 pub async fn run_prebuilt_dry_run(
     folder: &Path,
     dir: &Path,
@@ -540,7 +552,14 @@ pub async fn run_prebuilt_dry_run(
         None => (Transfer::NoRecord, None),
     };
     let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
-    let local_refusal = local.not_signed_in.map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t)).or(refusal);
+    let moderation = crate::build::features::comment::link_block::refuse_prebuilt(folder, dir)
+        .err()
+        .map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::ModerationUnverified, t));
+    let local_refusal = local
+        .not_signed_in
+        .map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t))
+        .or(moderation)
+        .or(refusal);
     let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set: ChangeSet::default(),
@@ -556,6 +575,7 @@ pub async fn run_prebuilt_dry_run(
         owner,
         // Nothing was built, so no members cascade applies.
         public_scripts: Some(Vec::new()),
+        remote_pictures: Default::default(),
     })
 }
 
@@ -589,6 +609,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         }
     }
 
@@ -636,6 +657,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         };
 
         let text = dry.render();
@@ -748,6 +770,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
@@ -875,5 +898,30 @@ mod tests {
             run(&dir, false).await;
             assert_eq!(snapshot(dir.path()), before);
         }
+    }
+
+    /// Opening a deploy writes a record on the server, so a dry run only reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_never_opens_a_deploy() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let seta = crate::seta::client::tests::StandIn::json(404, "{}").await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-open\"\n").unwrap();
+        crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("_site")).unwrap();
+        std::fs::write(dir.path().join("_site/index.html"), "home").unwrap();
+        let prev = std::env::var("MOSS_SETA_URL").ok();
+        std::env::set_var("MOSS_SETA_URL", seta.url());
+
+        let report = run_prebuilt_dry_run(dir.path(), &dir.path().join("_site"), None, false, false).await;
+
+        match prev {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        let seen = seta.requests();
+        assert!(!seen.is_empty(), "the dry run asked the server nothing: {:?}", report.err());
+        assert!(seen.iter().all(|r| r.method == "GET"), "a dry run wrote: {:?}", seen.iter().map(|r| format!("{} {}", r.method, r.path_and_query)).collect::<Vec<_>>());
     }
 }

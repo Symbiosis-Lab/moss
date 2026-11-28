@@ -33,6 +33,13 @@ pub struct IncrementalGates {
     /// Same entry-point and kill-switch rules; the difference is which changed
     /// paths it tolerates (markdown plus a parse-irrelevant allowlist).
     pub parse_cache: bool,
+    /// May the render leave a page that only shows an image whose placeholder
+    /// moved to the `ImagesSettled` build the folder's image work ends in? Only
+    /// a save beside a watcher, which runs that build once it is promised
+    /// (`media::image::promise_settled_build`). Beside a watcher the encodes
+    /// outlive the seal of the build that started them, so a save made after
+    /// they finished is still the first build to see their placeholders.
+    pub defer_image_placeholders: bool,
 }
 
 impl IncrementalGates {
@@ -47,7 +54,9 @@ impl IncrementalGates {
         if let (ChangeProof::Manifest, Some(generation)) = (&proof, seal.generation_id()) {
             crate::build::parse_cache::note_proven_seal(folder, generation);
         }
-        Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
+        let defer_image_placeholders =
+            matches!(trigger, BuildTrigger::ContentOnly(_)) && crate::ops::watch::worker::get(&folder.to_string_lossy()).is_some();
+        Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse(), defer_image_placeholders }
     }
 }
 
@@ -69,6 +78,7 @@ pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,
     moss: crate::build::inputs::Measured,
     completes: bool,
+    problems_at_entry: crate::build::cli_output::ProblemMark,
 }
 
 impl LastSeal {
@@ -78,15 +88,17 @@ impl LastSeal {
     pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>, completes: bool) -> Self {
         let _trace = crate::build::phase::PhaseTrace::start("seal_read");
         let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
-        let moss = crate::build::inputs::measure(folder, manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
-        Self { manifest, moss, completes }
+        let problems_at_entry = crate::build::cli_output::problem_mark();
+        let mut seal = Self { manifest, moss: Default::default(), completes, problems_at_entry };
+        seal.remeasure(folder, options);
+        seal
     }
 
     /// Measure `.moss/` again, against the same record, after something wrote
     /// to it; whether it still holds. A build proves from one measurement,
     /// taken after the last such write.
     pub(super) fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
-        self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
+        self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), self.generation_id().as_deref(), options);
         self.moss.holds
     }
 
@@ -94,6 +106,11 @@ impl LastSeal {
     /// `PendingManifest::set_build_inputs`.
     pub(crate) fn record(&self) -> Option<crate::build::inputs::BuildInputs> {
         self.moss.record.clone()
+    }
+
+    /// Where the process's problems stood when this build began.
+    pub(crate) fn problems_at_entry(&self) -> crate::build::cli_output::ProblemMark {
+        self.problems_at_entry
     }
 
     /// Whether `.moss/config.toml` differs from the seal's only in
@@ -122,6 +139,14 @@ impl LastSeal {
         let Some(id) = self.generation_id() else { return false };
         let paths = crate::moss_paths::MossPaths::new(folder);
         paths.current_generation_id().is_ok_and(|current| current == id) && paths.sealed_generation_dir(&id).is_some()
+    }
+
+    /// Whether a build that ends at its entry can hand this seal over: it left
+    /// its evidence, and every file it names is in the generation on disk.
+    fn hands_over(&self, folder: &Path) -> bool {
+        let Some(manifest) = self.manifest.as_ref().filter(|m| m.build_inputs.as_ref().is_some_and(|r| r.evidence.is_some())) else { return false };
+        let Some(dir) = self.generation_id().and_then(|id| crate::moss_paths::MossPaths::new(folder).sealed_generation_dir(&id)) else { return false };
+        manifest.files.keys().all(|key| crate::build::io_utils::output_present(&dir.join(key)))
     }
 
     fn generation_id(&self) -> Option<String> {
@@ -333,7 +358,8 @@ impl SinceSeal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AtEntry {
     /// Nothing the last seal read has moved, and the generation it sealed is
-    /// what `current` names: that generation is this build's output.
+    /// what `current` names, whole, with the evidence the seal left: that
+    /// generation is this build's output.
     Unchanged,
     /// Build. `comments_refreshed` when the comment refresh already ran here,
     /// so the slot pass does not ask the server a second time.
@@ -355,7 +381,7 @@ impl AtEntry {
         }
         let Ok(_lock) = crate::infra::folder_lock::acquire(folder) else { return Self::Build { comments_refreshed: false } };
         let Some(recorded) = seal.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()) else { return Self::Build { comments_refreshed: false } };
-        if !recorded.day.as_ref().is_some_and(|d| d.is_today()) || !seal.media_settled() || !seal.sealed_generation_is_current(folder) || SinceSeal::walk(folder, builder, seal) != Some(SinceSeal::Nothing) {
+        if recorded.warned || !recorded.day.as_ref().is_some_and(|d| d.is_today()) || !seal.media_settled() || !seal.sealed_generation_is_current(folder) || !seal.hands_over(folder) || SinceSeal::walk(folder, builder, seal) != Some(SinceSeal::Nothing) {
             return Self::Build { comments_refreshed: false };
         }
         let fetched = fetch();
@@ -387,32 +413,39 @@ pub(super) async fn stop_at_entry(config: &PipelineConfig, pass: Pass, seal: &mu
     if at_entry != AtEntry::Unchanged {
         return Err(at_entry);
     }
-    if !config.start_server {
-        return Ok(unchanged_at_entry(config, None));
-    }
-    serve_unchanged(config, pass, seal, port).await.ok_or(AtEntry::Build { comments_refreshed: false })
+    hand_over(config, pass, seal, port).await.ok_or(AtEntry::Build { comments_refreshed: false })
 }
 
-/// What a build that ended at its entry reports: the generation it kept.
-fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>) -> PassOutcome {
+/// What a build that ended at its entry reports: the generation it kept, and
+/// the problems its seal reported, again.
+fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>, problems: &[String]) -> PassOutcome {
+    for line in problems {
+        crate::build::cli_output::cli_warn!("{line}");
+    }
     crate::build::phase::record_value("unchanged_at_entry", 1);
     PassOutcome { message: format!("Unchanged since the last build.\n{}", super::generated_message(config, port)), owed: false, is_empty: false, port }
 }
 
-/// What a serving build that stopped at its entry still owes the open: staging
-/// shown as the seal left it, the watcher's baseline, the publish change set,
-/// the background sync and `Build complete`. `None` when staging cannot be
-/// shown as it is; the caller then builds.
-async fn serve_unchanged(config: &PipelineConfig, pass: Pass, seal: &LastSeal, port: Option<u16>) -> Option<PassOutcome> {
+/// What a build that stopped at its entry still owes its caller: the kept
+/// seal and every record the publish gate reads, the publish change set, and
+/// for a serving build, staging shown as the seal left it, the background sync
+/// and `Build complete`. `None` when staging cannot be shown as it is; the
+/// caller then builds.
+async fn hand_over(config: &PipelineConfig, pass: Pass, seal: &LastSeal, port: Option<u16>) -> Option<PassOutcome> {
     use crate::build::manifest::backfill;
-    let manifest = seal.manifest()?;
+    let sealed = crate::build::manifest::SealedManifest::kept(seal.manifest()?.clone())?;
+    let manifest = sealed.site_hashes_view();
     let paths = crate::moss_paths::MossPaths::new(config.source());
     let generation = paths.current_generation_id().ok()?;
-    crate::build::pipeline::reveal_sealed_staging(&paths, manifest, &generation, config.host.services.cancellation.protected_outputs())?;
-    config.host.services.reporter.stage_ready(&paths.staging_dir());
+    if config.start_server {
+        crate::build::pipeline::reveal_sealed_staging(&paths, manifest, &generation, config.host.services.cancellation.protected_outputs())?;
+        config.host.services.reporter.stage_ready(&paths.staging_dir());
+    }
     let folder = config.root.as_str();
     let records = crate::system::build_records::records();
     records.record_content_hashes(folder, manifest.clone());
+    let inputs = manifest.build_inputs.as_ref()?;
+    records.install_kept_seal(folder, inputs.evidence.as_ref()?);
     let removed = backfill::removed_for_seal(&paths, manifest);
     records.record_removed_addresses(folder, removed.clone());
     let verdict = backfill::for_seal(&paths, Some(manifest)).await;
@@ -420,13 +453,16 @@ async fn serve_unchanged(config: &PipelineConfig, pass: Pass, seal: &LastSeal, p
         (Some(backfill::SealVerdict::AskServer), Some(port)) => Some((port, manifest.files().into_owned(), generation)),
         _ => None,
     };
+    config.host.announcer.adopt_sealed(sealed.clone()).await;
     config.host.announcer.publish_change_set(config.source(), backfill::settle(verdict, ask, removed).await).await;
-    if !matches!(pass.plugins, crate::build::PluginMode::SlotsOnly) {
-        let domain = crate::build::site_config::get_domain_config(folder).unwrap_or_default();
-        crate::build::features::sync::start_background_sync(folder.to_string(), domain, config.host.events.clone(), &*config.host.spawner);
+    if config.start_server {
+        if !matches!(pass.plugins, crate::build::PluginMode::SlotsOnly) {
+            let domain = crate::build::site_config::get_domain_config(folder).unwrap_or_default();
+            crate::build::features::sync::start_background_sync(folder.to_string(), domain, config.host.events.clone(), &*config.host.spawner);
+        }
+        super::emit_build_complete(&config.progress, port, false, None);
     }
-    super::emit_build_complete(&config.progress, port, false, None);
-    Some(unchanged_at_entry(config, port))
+    Some(unchanged_at_entry(config, port, &inputs.problems))
 }
 
 /// The passes a stopped build still owes the site, since they read from
@@ -488,7 +524,7 @@ impl PipelineConfig {
     pub(crate) fn may_stop_at_entry(&self, pass: crate::build::media::promise::Pass) -> bool {
         use crate::build::PluginMode;
         matches!(self.trigger, BuildTrigger::Unobserved)
-            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached && !self.host.announcer.needs_a_seal()))
+            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached))
             && !pass.repeat
             && (matches!(pass.plugins, PluginMode::Skip | PluginMode::SlotsOnly) || !self.host.plugins.get_or_create(self.root.as_str()).is_ok_and(|m| m.has_process_hooks()))
     }

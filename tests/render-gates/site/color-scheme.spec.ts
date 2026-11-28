@@ -11,7 +11,7 @@
 // scheme is a light document: on a light page it stays transparent, on a dark
 // page the browser gives it an opaque white canvas so its dark text can be
 // read, whatever the OS setting.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';
@@ -46,7 +46,7 @@ for (const os of ['light', 'dark'] as const) {
   for (const theme of ['light', 'dark'] as const) {
     test(`an OS set to ${os} and a page set to ${theme}`, async ({ browser, browserName }) => {
       const ctx = await browser.newContext({ viewport: { width: 200, height: 200 }, colorScheme: os });
-      const p = await ctx.newPage();
+      const p = await newPage(ctx);
       await p.setContent(page(theme));
       expect(await p.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(theme);
 

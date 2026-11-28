@@ -26,9 +26,9 @@ use std::fs;
 use std::path::Path;
 
 use super::image::{
-    apply_exif_orientation, flatten_alpha_to_white, read_exif_orientation, ImageCompressionConfig,
+    flatten_alpha_to_white, ImageCompressionConfig,
 };
-use super::sniff::is_cmyk_jpeg;
+use super::sniff::has_cmyk_profile;
 
 /// JPEG quality for the deployed, sized raster original.
 ///
@@ -65,6 +65,12 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// email/no-WebP contexts. `.min(config.max_edge)` at the call site keeps a
 /// caller-lowered global cap authoritative.
 pub(crate) const FALLBACK_MAX_EDGE: u32 = 1200;
+
+/// The formats the deploy pass re-encodes at [`FALLBACK_MAX_EDGE`]; every other
+/// image is served verbatim at its source size. `ext` is lowercase.
+pub(crate) fn is_resized_raster(ext: &str) -> bool {
+    matches!(ext, "jpg" | "jpeg" | "png")
+}
 
 /// Encode a `DynamicImage` as a baseline JPEG byte vector at `quality`.
 ///
@@ -386,15 +392,7 @@ pub(crate) fn encode_sized_raster(
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, String> {
     super::count_encode();
-    // Content-sniffed and allocation-capped by `media::decode::sniff_decode`
-    // (same primitive the WebP decode path uses) rather than a second
-    // hand-rolled copy of that open/guess/decode sequence.
-    let orientation = read_exif_orientation(source_file);
-    let img = super::decode::sniff_decode(source_file)
-        .map_err(|e| format!("decode failed: {}", e))?;
-
-    // EXIF orientation must be applied so the sized image isn't rotated wrong.
-    let img = apply_exif_orientation(img, orientation);
+    let img = super::decode::sniff_decode_oriented(source_file).map_err(|e| format!("decode failed: {}", e))?;
 
     let (w, h) = (img.width(), img.height());
     let resized = if w.max(h) > max_edge {
@@ -435,8 +433,8 @@ pub(crate) fn encode_sized_raster(
 /// entirely.
 ///
 /// Returns `None` when the source cannot be safely sized — a decode failure
-/// (corrupt / mislabeled non-image), or a CMYK JPEG (libjpeg's CMYK→RGB is
-/// lossy; mirrors the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
+/// (corrupt / mislabeled non-image), or a JPEG with a CMYK print profile
+/// (as the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
 /// verbatim original. Never panics; never fails the build.
 ///
 /// Concurrent callers for the same source share one encode. Every build's
@@ -559,8 +557,7 @@ fn produce_sized_raster(
     }
 
     // ---- CMYK guard: keep verbatim rather than ship wrong colors. ----
-    // JPEG-only — PNG has no CMYK variant to worry about.
-    if (ext == "jpg" || ext == "jpeg") && is_cmyk_jpeg(source_file) {
+    if (ext == "jpg" || ext == "jpeg") && has_cmyk_profile(source_file) {
         log::debug!(
             "[sized-raster] {} is CMYK — keeping verbatim original",
             source_file.display()

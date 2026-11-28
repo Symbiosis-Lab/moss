@@ -1,12 +1,7 @@
 //! Header sniffers: bounded reads that classify a source file without
-//! decoding it — animated GIF/WebP, CMYK JPEG. Each reads a few KB from the
-//! head of the file and nothing more, so asking is cheap and never pulls a
-//! whole image into memory.
-//!
-//! Extracted from `build/media/image.rs` on 2026-09-05, a pure move, per
-//! MIGRATION-STATE's image.rs debt row (a feature touching that file extracts
-//! before it lands). `should_skip` and the deployed-raster fallback are the
-//! consumers.
+//! decoding it — animated GIF/WebP, a JPEG's CMYK profile. None reads more
+//! than a few KB, so asking is cheap and never pulls a whole image into
+//! memory. `should_skip` and the deployed-raster fallback are the consumers.
 
 use std::fs;
 use std::path::Path;
@@ -64,53 +59,86 @@ pub(crate) fn is_animated_webp(path: &Path) -> bool {
     buf.windows(4).any(|w| w == b"ANIM")
 }
 
-/// Detect whether a JPEG is CMYK (4-component color).
+/// Whether a JPEG embeds a CMYK colour profile. A browser colour-manages
+/// such a file through its print profile, which a plain CMYK-to-RGB decode
+/// does not match, so it ships as the original. A CMYK JPEG without one
+/// is decoded by plain inversion, as libjpeg, Chromium and Firefox draw it
+/// (Safari assumes Generic CMYK), and is encoded like any other.
 ///
-/// Reads at most 4 KB and walks JPEG markers looking for a Start-of-Frame
-/// (SOF0/SOF1/SOF2, markers 0xFFC0–0xFFC2). The byte following the marker
-/// length tells us the component count; 4 indicates CMYK (or YCCK).
-pub(crate) fn is_cmyk_jpeg(path: &Path) -> bool {
-    let buf = match read_head(path, 4096) {
-        Some(b) => b,
-        None => return false,
-    };
-    if buf.len() < 4 || buf[0] != 0xFF || buf[1] != 0xD8 {
-        return false; // Not a JPEG
+/// Walks the marker segments by seeking, since a profile segment (or EXIF)
+/// can run to hundreds of KB, and stops at the first frame or scan header,
+/// which every profile precedes.
+pub(crate) fn has_cmyk_profile(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(path) else { return false };
+    let mut byte = [0u8; 1];
+    let mut soi = [0u8; 2];
+    if file.read_exact(&mut soi).is_err() || soi != [0xFF, 0xD8] {
+        return false;
     }
-    // Walk markers starting at offset 2.
-    let mut i = 2usize;
-    while i + 3 < buf.len() {
-        if buf[i] != 0xFF {
+    loop {
+        if file.read_exact(&mut byte).is_err() || byte[0] != 0xFF {
             return false;
         }
-        let marker = buf[i + 1];
-        // Skip padding fill bytes (0xFF 0xFF...)
-        if marker == 0xFF {
-            i += 1;
-            continue;
-        }
-        // Stand-alone markers (no length): SOI, EOI, RST0–RST7.
-        if matches!(marker, 0xD0..=0xD9) {
-            i += 2;
-            continue;
-        }
-        // All other markers have a 2-byte length field after them.
-        if i + 3 >= buf.len() {
-            return false;
-        }
-        let len = ((buf[i + 2] as usize) << 8) | (buf[i + 3] as usize);
-        // SOF0 (0xC0), SOF1 (0xC1), SOF2 (0xC2) — others rare / progressive extensions.
-        if matches!(marker, 0xC0..=0xC2) {
-            // SOF layout: marker(2) + length(2) + precision(1) + height(2) + width(2) + components(1) + ...
-            let comp_idx = i + 2 + 5 + 2; // = i + 9
-            if comp_idx < buf.len() {
-                return buf[comp_idx] == 4;
+        let code = loop {
+            if file.read_exact(&mut byte).is_err() {
+                return false;
             }
+            if byte[0] != 0xFF {
+                break byte[0];
+            }
+        };
+        if matches!(code, 0x01 | 0xD0..=0xD7) {
+            continue;
+        }
+        if matches!(code, 0xC0..=0xCF | 0xD9 | 0xDA) && !matches!(code, 0xC4 | 0xC8 | 0xCC) {
             return false;
         }
-        i += 2 + len;
+        let mut len = [0u8; 2];
+        if file.read_exact(&mut len).is_err() {
+            return false;
+        }
+        let mut rest = i64::from(u16::from_be_bytes(len)) - 2;
+        // APP2 `ICC_PROFILE\0`, chunk number, chunk count, then the profile,
+        // whose first chunk holds the header with its colour space at 16.
+        let mut icc = [0u8; 34];
+        if code == 0xE2 && rest >= 34 {
+            if file.read_exact(&mut icc).is_err() {
+                return false;
+            }
+            if &icc[..12] == b"ICC_PROFILE\0" && icc[12] == 1 {
+                return &icc[30..34] == b"CMYK";
+            }
+            rest -= 34;
+        }
+        if rest < 0 || file.seek(SeekFrom::Current(rest)).is_err() {
+            return false;
+        }
     }
-    false
+}
+
+/// Whether the file is a HEIF picture (HEIC and kin), read from its `ftyp`
+/// brands rather than its extension. AVIF shares the container and often lists
+/// `mif1`/`msf1` among its compatible brands, so an `avif`/`avis` brand
+/// anywhere decides first: AVIF stays with the image crate.
+pub(crate) fn is_heif(path: &Path) -> bool {
+    let Some(head) = read_head(path, 64) else { return false };
+    heif_brands(&head)
+}
+
+fn heif_brands(head: &[u8]) -> bool {
+    if head.len() < 16 || &head[4..8] != b"ftyp" {
+        return false;
+    }
+    let size = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).min(head.len());
+    // The major brand, then the compatible brands after the minor version.
+    let brands: Vec<&[u8]> = std::iter::once(&head[8..12])
+        .chain(head.get(16..size).unwrap_or_default().chunks_exact(4))
+        .collect();
+    if brands.iter().any(|b| matches!(*b, b"avif" | b"avis")) {
+        return false;
+    }
+    brands.iter().any(|b| matches!(*b, b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1"))
 }
 
 #[cfg(test)]

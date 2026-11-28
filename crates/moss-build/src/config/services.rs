@@ -55,13 +55,23 @@ pub struct ServiceCommon {
     pub provider: Option<String>,
 }
 
-/// `[services.analytics]`. Provider today: `goatcounter`.
+/// `[services.analytics]`. Provider: `goatcounter`, or the name of a plugin in
+/// the site's folder that is an analytics service, with the site's `site_id`
+/// there.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[derive(specta::Type)]
 pub struct AnalyticsService {
     #[serde(flatten)]
     pub common: ServiceCommon,
     pub script: Option<String>,
+    pub site_id: Option<String>,
+}
+
+impl AnalyticsService {
+    /// The plugin that serves analytics, and the site's id there.
+    pub fn plugin(&self) -> Option<(&str, &str)> {
+        self.common.provider.as_deref().filter(|p| *p != "goatcounter").map(|p| (p, self.site_id.as_deref().unwrap_or_default()))
+    }
 }
 
 /// `[services.comments]`. Provider: `artalk`.
@@ -133,6 +143,15 @@ pub struct ServicesConfig {
     pub forms: Option<FormsService>,
 }
 
+/// Why a site's request forms have nowhere to post.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormsOff {
+    /// `[services.forms] enabled = false`.
+    SwitchedOff,
+    /// Off the moss host, with no `[services.forms] endpoint`.
+    NoEndpoint,
+}
+
 impl ServicesConfig {
     /// The comments service, unless it is absent or `enabled = false`: comments
     /// are opt-in on every host, and a present-but-disabled section behaves
@@ -149,6 +168,7 @@ impl ServicesConfig {
     /// Defaults when section is absent are per-kind:
     /// - Analytics: moss-hosted defaults on (platform pageview beacon).
     /// - Email:     moss-hosted defaults on (platform newsletter form).
+    /// - Forms:     moss-hosted defaults on (request forms post to seta).
     /// - Comments:  always opt-in. Comments need moderation, identity, and
     ///   provider choice; we do not silently inject a third-party widget on
     ///   every page just because the site is moss-hosted. Section absent =
@@ -165,18 +185,26 @@ impl ServicesConfig {
             Some(c) => c.enabled.unwrap_or(true),
             // Section absent: per-kind default. Comments require explicit opt-in.
             None => match kind {
-                ServiceKind::Comments | ServiceKind::Forms => false,
-                ServiceKind::Analytics | ServiceKind::Email => hosted_on_moss,
+                ServiceKind::Comments => false,
+                ServiceKind::Analytics | ServiceKind::Email | ServiceKind::Forms => hosted_on_moss,
             },
         }
     }
 
-    /// Where request forms post, without a trailing slash: `None` when the
-    /// section is absent, switched off, or has no endpoint.
-    pub fn forms_endpoint(&self) -> Option<String> {
-        let forms = self.forms.as_ref().filter(|_| self.is_enabled(ServiceKind::Forms, false))?;
-        let endpoint = forms.endpoint.as_deref()?.trim().trim_end_matches('/');
-        (!endpoint.is_empty()).then(|| endpoint.to_string())
+    /// Where request forms post, without a trailing slash: the site's own
+    /// endpoint, else seta's forms route for a site on the moss host (`hosted`
+    /// is seta's address and the site's id).
+    pub fn forms_endpoint(&self, hosted: Option<(&str, &str)>) -> Result<String, FormsOff> {
+        if !self.is_enabled(ServiceKind::Forms, hosted.is_some()) {
+            let switched_off = self.forms.as_ref().and_then(|f| f.common.enabled) == Some(false);
+            return Err(if switched_off { FormsOff::SwitchedOff } else { FormsOff::NoEndpoint });
+        }
+        let own = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()).map(|e| e.trim().trim_end_matches('/')).filter(|e| !e.is_empty());
+        match (own, hosted) {
+            (Some(endpoint), _) => Ok(endpoint.to_string()),
+            (None, Some((seta, site_id))) => Ok(format!("{seta}/sites/{}/forms", urlencoding::encode(site_id))),
+            (None, None) => Err(FormsOff::NoEndpoint),
+        }
     }
 
     /// Validate provider values and wiring coherence. Returns the first error.
@@ -216,7 +244,10 @@ impl ServicesConfig {
         }
 
         if let Some(a) = &self.analytics {
-            check("analytics", &a.common, &["goatcounter"], a.script.is_some(), hosted_on_moss)?;
+            if let Some((plugin, "")) = a.plugin() {
+                return Err(format!("[services.analytics] provider is \"{plugin}\", which needs the site's site_id there"));
+            }
+            check("analytics", &a.common, &[a.plugin().map_or("goatcounter", |(p, _)| p)], a.script.is_some() || a.plugin().is_some(), hosted_on_moss)?;
         }
         if let Some(c) = &self.comments {
             // Comments are always wired post-v4: env-derived server URL means
@@ -254,17 +285,28 @@ mod forms_tests {
     #[test]
     fn the_endpoint_is_read_and_loses_a_trailing_slash() {
         let s = parse("[services.forms]\nendpoint = \"https://forms.example/f/\"\n");
-        assert_eq!(s.forms_endpoint().as_deref(), Some("https://forms.example/f"));
+        assert_eq!(s.forms_endpoint(None).as_deref(), Ok("https://forms.example/f"));
         assert!(s.is_enabled(ServiceKind::Forms, false));
     }
 
     #[test]
     fn no_section_or_no_endpoint_or_disabled_is_no_endpoint() {
-        assert_eq!(ServicesConfig::default().forms_endpoint(), None);
-        assert_eq!(parse("[services.forms]\n").forms_endpoint(), None);
+        assert_eq!(ServicesConfig::default().forms_endpoint(None), Err(FormsOff::NoEndpoint));
+        assert_eq!(parse("[services.forms]\n").forms_endpoint(None), Err(FormsOff::NoEndpoint));
         let off = parse("[services.forms]\nendpoint = \"https://forms.example\"\nenabled = false\n");
-        assert_eq!(off.forms_endpoint(), None);
+        assert_eq!(off.forms_endpoint(None), Err(FormsOff::SwitchedOff));
         assert!(!off.is_enabled(ServiceKind::Forms, true));
+    }
+
+    const HOSTED: Option<(&str, &str)> = Some(("https://api.mosspub.com", "harbor-notes"));
+
+    #[test]
+    fn on_the_moss_host_forms_post_to_seta_unless_switched_off_or_sent_elsewhere() {
+        assert_eq!(ServicesConfig::default().forms_endpoint(HOSTED).as_deref(), Ok("https://api.mosspub.com/sites/harbor-notes/forms"));
+        assert_eq!(parse("[services.forms]\n").forms_endpoint(HOSTED).as_deref(), Ok("https://api.mosspub.com/sites/harbor-notes/forms"));
+        assert_eq!(parse("[services.forms]\nenabled = false\n").forms_endpoint(HOSTED), Err(FormsOff::SwitchedOff));
+        let own = parse("[services.forms]\nendpoint = \"https://forms.example/f\"\n");
+        assert_eq!(own.forms_endpoint(HOSTED).as_deref(), Ok("https://forms.example/f"));
     }
 
     #[test]
@@ -344,5 +386,16 @@ mod members_tests {
     fn reply_to_never_reaches_the_public_policy() {
         let members = read("[members]\njoin = \"invite\"\nreply_to = \"desk@harbor-mail.org\"\n").unwrap();
         assert_eq!(serde_json::to_string(&members).unwrap(), r#"{"join":"invite"}"#);
+    }
+}
+
+#[cfg(test)]
+mod analytics_plugin_tests {
+    #[test]
+    fn a_plugin_provider_needs_the_site_s_id() {
+        let services = |toml: &str| toml::from_str::<super::ServicesConfig>(toml).unwrap().validate(false);
+        assert_eq!(services("[analytics]\nprovider = \"cloudflare\"\nsite_id = \"t0ken\"\n"), Ok(()));
+        assert!(services("[analytics]\nprovider = \"cloudflare\"\n").unwrap_err().contains("site_id"));
+        assert_eq!(services("[analytics]\nprovider = \"goatcounter\"\nscript = \"https://x.goatcounter.com/count\"\n"), Ok(()));
     }
 }

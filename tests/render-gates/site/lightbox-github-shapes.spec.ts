@@ -25,7 +25,7 @@
  * Run via:
  *   npx playwright test -c playwright/lightbox-github-shapes.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function outlineOf(page: Page, sel: string) {
   return page.locator(sel).evaluate((el) => {

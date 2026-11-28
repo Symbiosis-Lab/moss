@@ -262,7 +262,7 @@ mod tests {
             body["data"]["endpoint"].as_str().map(str::to_string)
         };
         assert_eq!(endpoint(&unwritten, HostingEnvironment::Staging, Some("her-blog")).as_deref(), Some("https://commerce-staging.mosspub.com/sites/her-blog/catalog"));
-        assert_eq!(endpoint(&unwritten, HostingEnvironment::Production, Some("her-blog")), None, "no address where the service does not run");
+        assert_eq!(endpoint(&unwritten, HostingEnvironment::Production, Some("her-blog")).as_deref(), Some("https://commerce-staging.mosspub.com/sites/her-blog/catalog"), "a published site reaches the one commerce");
         assert_eq!(endpoint(&unwritten, HostingEnvironment::Staging, None), None, "a folder never published has no site id");
         let written = ConfigFile::parse("schema_version = 6\n[services.catalog]\nendpoint = 'https://example.com/own'\n").unwrap();
         assert_eq!(endpoint(&written, HostingEnvironment::Staging, Some("her-blog")).as_deref(), Some("https://example.com/own"));

@@ -12,7 +12,7 @@
  * Config: playwright/focus-point.config.ts. With SHOTS set to a directory, the
  * editor is photographed there in the light and dark schemes.
  */
-import { test, expect, type Frame, type Page } from '@playwright/test';
+import { test, expect, type Frame, type Page } from '../../support/browser-test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';

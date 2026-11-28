@@ -43,6 +43,8 @@
 :is(.moss-country-map, .moss-country-list) [data-level="7"] { --level: var(--moss-country-fill-7, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-7), var(--moss-country-low-now))); }
 
 .moss-country-map svg { display: block; inline-size: 100%; block-size: auto; writing-mode: horizontal-tb; }
+/* One country's regions keep the country's own shape, within the window's height. */
+.moss-country-regions svg { max-block-size: 80svh; }
 .moss-country-graticule { fill: none; stroke: var(--moss-country-graticule-now); stroke-width: 0.5; }
 /* A hairline in each shape's own fill hides the seam antialiasing leaves between neighbours; it is not a border, and no two fills differ across it. */
 .moss-country-land path { fill: var(--moss-country-land-now); stroke: var(--moss-country-land-now); stroke-width: 0.4; stroke-linejoin: round; }
@@ -128,9 +130,9 @@ a.moss-country-search { display: flex; align-items: center; min-block-size: 2.75
 
 @keyframes moss-country-sheet { from { translate: 0 100%; } }
 
-/* Under 56rem the map is a squarer box the camera opens on the world's full height, and the panel is a sheet. */
+/* Under 56rem the world map is a squarer box the camera opens on the world's full height, and the panel is a sheet. */
 @media (width < 56rem) {
-  .moss-country-map svg { aspect-ratio: 23 / 20; }
+  .moss-country-map:not(.moss-country-regions) svg { aspect-ratio: 23 / 20; }
   .moss-country-panel { position: fixed; inset: auto 0 0; z-index: 50; inline-size: auto; max-block-size: 72svh; padding-block: 1.75rem calc(var(--moss-space-md, 1rem) + env(safe-area-inset-bottom)); border-block-end: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 32px -12px rgb(0 0 0 / 0.4); }
   /* The sheet covers the bottom of the map, so the controls leave until it closes. */
   .moss-country-panel:not([hidden]) ~ .moss-places-controls { visibility: hidden; }

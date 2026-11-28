@@ -544,6 +544,15 @@ pub(in crate::resolve) fn lower_embed(
     Some(format!("<!-- {marker_prefix}:{target_path}{query} -->"))
 }
 
+/// `content` with its frontmatter's `[[wikilinks]]` resolved to source paths
+/// and its body as written: the frontmatter every page fact is read from.
+pub fn with_frontmatter_links_resolved(content: &str, graph: &ContentGraph, source_path: &str) -> String {
+    match split_frontmatter(content) {
+        (Some(fm), body) => format!("{}{}", resolve_frontmatter_wikilinks(fm, graph, source_path).content, body),
+        (None, _) => content.to_string(),
+    }
+}
+
 pub struct FrontmatterResolveResult {
     /// The frontmatter text with `[[wikilinks]]` replaced by resolved paths.
     pub content: String,
@@ -721,6 +730,12 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
         Some(span) => (Some(&content[..span.body]), &content[span.body..]),
         None => (None, content),
     }
+}
+
+/// Whether `folder` is `root` or a folder inside it. The one test for "at or
+/// under a passthrough root", shared by the listing plan and the breadcrumb.
+pub fn folder_within(root: &str, folder: &str) -> bool {
+    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// Extract the parent directory from a `/`-separated path.

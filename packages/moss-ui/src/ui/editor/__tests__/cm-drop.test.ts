@@ -13,7 +13,7 @@
  */
 
 import { describe, test, expect, vi } from 'vitest';
-import { EditorState } from '@codemirror/state';
+import { EditorState, StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { dropExtension, insertEntryEmbedsAtCoords, embedFor, type DestinationFor } from '../cm-drop';
 
@@ -224,6 +224,17 @@ describe('insertEntryEmbedsAtCoords — shared insert helper', () => {
 
     expect(inserted).toBe(true);
     expect(view.state.doc.toString()).toBe('abc![](fallback.png)\n');
+
+    view.destroy();
+  });
+
+  test('a read-only editor takes no embed and says so', async () => {
+    const view = makeView('unchanged');
+    view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
+    vi.spyOn(view, 'posAtCoords').mockReturnValue(0);
+
+    expect(await insertEntryEmbedsAtCoords(view, ['posts/a.png'], destinationFor, 4, 4)).toBe(false);
+    expect(view.state.doc.toString()).toBe('unchanged');
 
     view.destroy();
   });

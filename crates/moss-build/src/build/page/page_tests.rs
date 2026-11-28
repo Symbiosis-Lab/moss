@@ -1,5 +1,6 @@
 use super::*;
-use crate::build::folder_embed::{folder_latest_date, generate_children, resolve_children_config};
+use crate::build::folder_embed::{generate_children, resolve_children_config};
+use moss_core::page::card::folder_latest_date;
 
 /// Helper function to create a minimal ParsedDocument for testing
 fn make_test_doc(title: &str, url_path: &str) -> ParsedDocument {
@@ -80,7 +81,7 @@ fn test_generate_year_grouped_article_list_filters_index_files() {
         ..Default::default()
     };
 
-    let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
+    let result = generate_year_grouped_article_list(&docs, &project, &cards(), true, Language::En);
 
     // Should include articles but NOT any index.html files
     assert!(result.contains("Article One"), "Should include Article One");
@@ -147,7 +148,7 @@ fn test_generate_year_grouped_article_list_excludes_nav_items() {
         ..Default::default()
     };
 
-    let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
+    let result = generate_year_grouped_article_list(&docs, &project, &cards(), true, Language::En);
 
     // Should include: Hidden Page (nav:false), Blog Post (nested)
     assert!(
@@ -203,11 +204,11 @@ fn test_year_grouped_list_uses_pretty_urls() {
         ..Default::default()
     };
 
-    let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
+    let result = generate_year_grouped_article_list(&docs, &project, &cards(), true, Language::En);
 
     assert!(
-        result.contains(r#"href="blog/my-post/""#),
-        "Year-grouped list should use pretty URL 'blog/my-post/'. Got: {}",
+        result.contains(r#"href="/blog/my-post/""#),
+        "Year-grouped list should use pretty URL '/blog/my-post/'. Got: {}",
         result
     );
     assert!(
@@ -440,7 +441,7 @@ fn test_folder_latest_date() {
     let all_docs: Vec<&ParsedDocument> = vec![&folder, &child1, &child2, &unrelated];
     let project = make_project();
 
-    let result = folder_latest_date(&folder, &all_docs, &project.root_path);
+    let result = folder_latest_date(&folder, &all_docs);
     assert_eq!(result, Some("2025-06-20".to_string()));
 }
 
@@ -467,11 +468,11 @@ fn test_generate_children_pre_sorted_card_style() {
         "summary",
         "none",
         Language::En,
-        true,
+        false,
         &std::collections::HashMap::new(),
         None,
         None,
-        None,
+        Some(&weight_sort()),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -498,16 +499,20 @@ fn test_generate_children_pre_sorted_card_style() {
     );
 }
 
+fn weight_sort() -> moss_core::sort::ResolvedSort {
+    moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::Weight, explicit_order: None }
+}
+
 #[test]
-fn test_generate_children_pre_sorted_preserves_order() {
-    // Verify pre_sorted=true does NOT re-sort by date
+fn test_generate_children_keeps_a_weight_order() {
+    // A weight order is a sequence: it is not re-sorted by date
     let mut newer = make_test_doc("Newer Post", "blog/newer/index.html");
     newer.date = Some("2025-12-01".to_string());
 
     let mut older = make_test_doc("Older Post", "blog/older/index.html");
     older.date = Some("2025-01-01".to_string());
 
-    // Pass older first — with pre_sorted=true, older should stay first
+    // Pass older first — under a weight order, older stays first
     let docs = vec![&older, &newer];
     let project = make_project();
 
@@ -518,11 +523,11 @@ fn test_generate_children_pre_sorted_preserves_order() {
         "list",
         "none",
         Language::En,
-        true,
+        false,
         &std::collections::HashMap::new(),
         None,
         None,
-        None,
+        Some(&weight_sort()),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -544,7 +549,7 @@ fn test_folder_latest_date_no_children() {
     let folder = make_test_doc("Empty", "blog/empty/index.html");
     let all_docs: Vec<&ParsedDocument> = vec![&folder];
     let project = make_project();
-    let result = folder_latest_date(&folder, &all_docs, &project.root_path);
+    let result = folder_latest_date(&folder, &all_docs);
     assert_eq!(result, None);
 }
 
@@ -1240,7 +1245,7 @@ fn test_count_listable_articles_recursive() {
     let child2 = make_test_doc("Advanced Topic", "blog/tutorials/advanced/topic/index.html");
 
     let all: Vec<&ParsedDocument> = vec![&folder, &child1, &child2];
-    let count = crate::build::page::page::count_listable_articles(
+    let count = moss_core::page::card::count_listable_articles::<ParsedDocument, _>(
         &all,
         "blog/tutorials/",
         "blog/tutorials/index.html",
@@ -1270,7 +1275,7 @@ fn test_count_listable_articles_excludes_index_pages() {
 
     let all: Vec<&ParsedDocument> = vec![&folder, &subfolder, &leaf, &leaf2];
     let count =
-        crate::build::page::page::count_listable_articles(&all, "blog/", "blog/index.html");
+        moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&all, "blog/", "blog/index.html");
 
     // subfolder is_index=true so excluded; leaf and leaf2 counted
     assert_eq!(
@@ -1290,7 +1295,7 @@ fn test_count_listable_articles_excludes_self() {
 
     let all: Vec<&ParsedDocument> = vec![&folder, &leaf];
     let count =
-        crate::build::page::page::count_listable_articles(&all, "blog/", "blog/index.html");
+        moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&all, "blog/", "blog/index.html");
 
     assert_eq!(count, 1, "Should exclude self_url from count");
 }
@@ -1306,7 +1311,7 @@ fn test_count_listable_articles_works_with_owned_slice() {
 
     let owned: Vec<ParsedDocument> = vec![folder, leaf1, leaf2];
     let count =
-        crate::build::page::page::count_listable_articles(&owned, "blog/", "blog/index.html");
+        moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&owned, "blog/", "blog/index.html");
 
     assert_eq!(count, 2, "Should work with &[ParsedDocument] slice");
 }
@@ -1315,7 +1320,7 @@ fn test_count_listable_articles_works_with_owned_slice() {
 fn test_count_listable_articles_empty() {
     let all: Vec<&ParsedDocument> = vec![];
     let count =
-        crate::build::page::page::count_listable_articles(&all, "blog/", "blog/index.html");
+        moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&all, "blog/", "blog/index.html");
     assert_eq!(count, 0, "Empty docs should return 0");
 }
 
@@ -1326,7 +1331,7 @@ fn test_count_listable_articles_ignores_unrelated_prefix() {
 
     let all: Vec<&ParsedDocument> = vec![&leaf_blog, &leaf_about];
     let count =
-        crate::build::page::page::count_listable_articles(&all, "blog/", "blog/index.html");
+        moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&all, "blog/", "blog/index.html");
     assert_eq!(count, 1, "Should not count docs outside prefix");
 }
 
@@ -1336,7 +1341,7 @@ fn test_count_listable_articles_folder_style_self_url() {
     let folder_self = make_test_doc("Blog", "blog/");
 
     let all: Vec<&ParsedDocument> = vec![&leaf1, &folder_self];
-    let count = crate::build::page::page::count_listable_articles(&all, "blog/", "blog/");
+    let count = moss_core::page::card::count_listable_articles::<ParsedDocument, _>(&all, "blog/", "blog/");
     assert_eq!(
         count, 1,
         "Should exclude folder-style self_url and count only leaf"
@@ -1356,10 +1361,15 @@ fn test_count_listable_articles_childless_folder_note_counts_zero() {
     sub.kind = PageKind::Folder;
 
     let all: Vec<&ParsedDocument> = vec![&parent, &sub];
-    let count = crate::build::page::page::count_listable_articles(
+    let count = moss_core::page::card::count_listable_articles::<ParsedDocument, _>(
         &all,
         "cards/dust/",
         "cards/dust/index.html",
     );
     assert_eq!(count, 0, "a sub-folder is not an article");
+}
+
+fn cards() -> crate::build::components::child_list::BuildCards<'static> {
+    static NO_OVERRIDES: std::sync::LazyLock<std::collections::HashMap<String, String>> = std::sync::LazyLock::new(Default::default);
+    crate::build::components::child_list::BuildCards::new(&NO_OVERRIDES, None, chrono::NaiveDateTime::default())
 }

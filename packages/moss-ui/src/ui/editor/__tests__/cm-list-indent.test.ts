@@ -4,7 +4,7 @@ import { GFM } from '@lezer/markdown';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { forceParsing } from '@codemirror/language';
 import { formatKeysExtension } from '../cm-format-keys';
 
 let view: EditorView;
@@ -21,7 +21,7 @@ function mount(src: string): void {
     parent,
     state: EditorState.create({ doc, selection: sel, extensions: [markdown({ extensions: [GFM] }), history(), formatKeysExtension()] }),
   });
-  ensureSyntaxTree(view.state, doc.length, 1000);
+  forceParsing(view, doc.length, 1e9);
 }
 const press = (shift = false): boolean =>
   runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, bubbles: true, cancelable: true }), 'editor');

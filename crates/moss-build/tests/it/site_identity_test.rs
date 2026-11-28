@@ -104,6 +104,12 @@ const SOCIAL_PLUGIN: &str = r#"{"name":"tootle","version":"1.0.0","contributes":
     {"link":"me","href":"https://{account.host}/@{account.user}"},
     {"meta":"fediverse:creator","content":"@{account.user}@{account.host}"}]}}"#;
 
+const SIGNED_IN_PLUGIN: &str = r#"{"name":"tootle","version":"1.0.0","contributes":{
+  "site_settings":{"settings":[{"key":"account","type":"acct","label":"Account","from":"account"}]},
+  "identity":[
+    {"link":"me","href":"https://{account.host}/@{account.user}"},
+    {"meta":"fediverse:creator","content":"@{account.user}@{account.host}"}]}}"#;
+
 const NAMES_PLUGIN: &str = r#"{"name":"relaynames","version":"1.0.0","contributes":{
   "site_settings":{"settings":[{"key":"pubkey","type":"string","label":"Public key"}]},
   "identity":[{"file":".well-known/nostr.json","body":"{\"names\":{\"_\":\"{pubkey}\"}}"}]}}"#;
@@ -189,4 +195,67 @@ fn a_proof_that_goes_away_is_named_by_the_next_build() {
     let logged = site.rebuild_logged().logged;
     assert!(!site.output(".well-known/atproto-did").exists());
     assert!(logged.iter().any(|l| l.contains("identity: .well-known/atproto-did removed")), "{logged:?}");
+}
+
+const SIGNED_IN: &str = "[accounts.tootle]\nid = \"7\"\nname = \"@ana@social.example\"\nhost = \"social.example\"\n";
+const SIGNED_OUT: &str = "[accounts]\ntootle = \"signed-out\"\n";
+
+fn creator(html: &str) -> bool {
+    head_of(html).contains("<meta name=\"fediverse:creator\" content=\"@ana@social.example\">")
+}
+
+#[test]
+fn a_signed_in_account_writes_the_identity_tags_and_signing_out_takes_them_away() {
+    let site = site_with("", &[("tootle", SIGNED_IN_PLUGIN)]);
+    assert!(!creator(&site.html("index.html")), "no account, no tag");
+
+    site.write(".moss/state.toml", SIGNED_IN);
+    site.rebuild();
+    assert_eq!(me_links(&site.html("index.html")), ["https://social.example/@ana"]);
+    assert!(creator(&site.html("index.html")));
+    assert!(creator(&site.html("notes/index.html")));
+
+    site.write(".moss/state.toml", SIGNED_OUT);
+    site.rebuild();
+    assert!(me_links(&site.html("index.html")).is_empty());
+    assert!(!creator(&site.html("index.html")));
+}
+
+#[test]
+fn a_clean_build_of_a_signed_in_folder_writes_the_tags() {
+    let mut files: Vec<(String, &str)> = PAGES.iter().map(|(p, b)| (p.to_string(), *b)).collect();
+    files.extend(with_plugin(SIGNED_IN_PLUGIN, "tootle"));
+    files.push((".moss/state.toml".into(), SIGNED_IN));
+    let borrowed: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), *b)).collect();
+    let site = Site::unbuilt("en", "", &borrowed);
+    site.rebuild();
+    assert!(creator(&site.html("index.html")));
+}
+
+#[test]
+fn an_account_written_in_the_services_table_wins_over_the_signed_in_one() {
+    let site = site_with("\n[services.tootle]\naccount = \"@bo@other.example\"\n", &[("tootle", SIGNED_IN_PLUGIN)]);
+    site.write(".moss/state.toml", SIGNED_IN);
+    site.rebuild();
+    assert_eq!(me_links(&site.html("index.html")), ["https://other.example/@bo"]);
+    assert!(!creator(&site.html("index.html")));
+}
+
+#[test]
+fn an_acct_setting_sign_in_does_not_fill_is_left_to_its_table() {
+    let site = site_with("", &[("tootle", SOCIAL_PLUGIN)]);
+    site.write(".moss/state.toml", SIGNED_IN);
+    site.rebuild();
+    assert!(me_links(&site.html("index.html")).is_empty());
+    assert!(!creator(&site.html("index.html")));
+}
+
+#[test]
+fn an_account_name_on_another_server_than_its_host_is_skipped_with_a_sentence() {
+    let state = "[accounts.tootle]\nid = \"7\"\nname = \"@ana@elsewhere.example\"\nhost = \"social.example\"\n";
+    let site = site_with("", &[("tootle", SIGNED_IN_PLUGIN)]);
+    site.write(".moss/state.toml", state);
+    let logged = site.rebuild_logged().logged;
+    assert!(me_links(&site.html("index.html")).is_empty());
+    assert!(logged.iter().any(|l| l.contains("[services.tootle] `account`")), "{logged:?}");
 }

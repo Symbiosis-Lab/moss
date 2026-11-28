@@ -383,7 +383,11 @@ pub struct SiteResult {
     /// while this is non-empty.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub missing_references: Vec<crate::build::types::ReferenceOccurrence>,
+    /// Pictures the pages show from other sites, for the publish to probe.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub remote_pictures: Vec<crate::build::types::ReferenceOccurrence>,
     /// The terms this build derived, for passes that run after render (a
     /// plugin-drawn listing links names to their term pages).
     #[serde(skip)]
@@ -399,6 +403,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub places_data: Option<String>,
+    /// The render left pages showing an older image placeholder to the
+    /// settled build, so the generation is not complete.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub placeholders_deferred: bool,
 }
 
 /// Hash map of generated site files for change detection.
@@ -612,6 +621,16 @@ impl SiteHashes {
     /// Create a new empty hash map
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether any output bucket names `key`.
+    pub fn names(&self, key: &str) -> bool {
+        self.files.contains_key(key) || self.video_outputs.contains(key) || self.image_outputs.contains(key) || self.notebook_outputs.contains(key)
+    }
+
+    /// Every output path a bucket names.
+    pub fn output_keys(&self) -> impl Iterator<Item = &String> {
+        self.files.keys().chain(&self.video_outputs).chain(&self.image_outputs).chain(&self.notebook_outputs)
     }
 
     /// Whether this build may have served `source` under `uid`. A manifest

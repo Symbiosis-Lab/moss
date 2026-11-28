@@ -103,7 +103,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "copy_account",
-            description: "Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`.",
+            description: "Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` (or a refusal with cause `auth`) when its session or credential was read and holds none or the service refused it; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`.",
             arity: "multiple",
             context: "AccountQuery",
         },
@@ -335,7 +335,7 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         entry: "endpoint = \"https://forms.example/f\"",
         description: "Where the site's `:::form` blocks post: a form named `booking` posts to `<endpoint>/booking`. With no endpoint the build warns, published pages do not show the forms, and the preview shows them with sending simulated.",
         rules: vec![
-            "A post is application/x-www-form-urlencoded, with `_next` (the form's next= path) and an empty honeypot `_hp`.",
+            "A post is application/x-www-form-urlencoded, with `_next` (the form's next= path).",
             "The build writes the site's forms to /_moss/commerce.json whenever the site has a form or this table.",
             "`enabled = false` turns the table off.",
         ],
@@ -360,6 +360,15 @@ fn config_tables() -> Vec<ConfigTableInfo> {
             "Each page is a path on the site, starting with a single `/`, that the build must write.",
             "When an installed plugin named `booking` declares `public_data`, the table is the plugin's: moss writes no `booking` object and checks none of these rules.",
             "`enabled = false` turns the table off.",
+        ],
+    },
+    ConfigTableInfo {
+        name: "channels.email",
+        entry: "provider = \"sendgrid\"",
+        description: "The newsletter. `provider` names a mailing-list service the site's subscribers and their answers to the subscribe form also go to, published as `subscribe.newsletter` of /_moss/commerce.json for the moss host to deliver; unset or empty, subscribers go to no other service.",
+        rules: vec![
+            "A name with no plugin in the folder warns with `moss plugin install <name>`. A value that is not a name, a plugin that is not a newsletter provider, or the line on a site the moss host does not serve, is a build problem. Each is left out of commerce.json until it is fixed, and the build goes on; only --strict fails it.",
+            "The service's API key never goes in the folder: it is given to the moss host.",
         ],
     }]
 }
@@ -482,8 +491,10 @@ mod tests {
 
         let mut files = Vec::new();
         walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
-        let mut listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
-        listed.extend(crate::config::site_settings::UNLISTED_SITE_KEYS);
+        // The union the unknown-key note reads: a retired key such as `domain` is still read.
+        let retired = moss_core::contract::retired::RETIRED.iter().filter(|r| r.kind == moss_core::contract::retired::RetiredKind::ConfigKey);
+        let listed: Vec<String> = crate::config::site_settings::config_keys().chain(retired.map(|r| r.name.to_string())).collect();
+        let listed: Vec<&str> = listed.iter().filter_map(|k| k.strip_prefix("site.")).collect();
 
         let mut missing = Vec::new();
         for file in &files {

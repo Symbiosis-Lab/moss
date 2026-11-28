@@ -31,6 +31,10 @@ pub struct SiteConfig {
     /// the render path maps it to a `Language` and falls back to English
     /// itself, where the fallback means "no translation table".
     pub lang: String,
+    /// Whether the author declared `lang` (`[site] lang` or the home page's
+    /// `lang:`). A declared language holds on every page; only a guessed one
+    /// lets each folder's prose decide its own.
+    pub lang_declared: bool,
     pub typesetting: Option<String>,
     pub content_width: Option<String>,
     pub comments: Option<bool>,
@@ -111,6 +115,8 @@ pub struct SiteConfig {
     pub header: crate::build::components::nav::HeaderMode,
     /// `[site].header_scroll` — resolved (`HeaderScroll::from_config`).
     pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].share_cover` — resolved (`ShareCover::from_config`).
+    pub share_cover: crate::build::page::cover::ShareCover,
     /// `[site].color_scheme` — automatic reader choice or a fixed palette.
     pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
@@ -146,17 +152,25 @@ pub struct SiteConfig {
     /// The `[fields.<name>]` declarations, read once per build; the markdown
     /// pipeline checks each page's frontmatter against them.
     pub field_decls: Vec<moss_core::fields::FieldDecl>,
-    /// `[services.forms] endpoint`, without a trailing slash: where request
-    /// forms post. `None` leaves forms pending.
-    pub forms_endpoint: Option<String>,
+    /// Where request forms post, without a trailing slash: `[services.forms]
+    /// endpoint`, else seta on the moss host; with neither, forms are pending.
+    pub forms: Result<String, crate::config::services::FormsOff>,
+    /// The seta this build's subscribe and request forms post to.
+    pub seta: crate::build::site_config::SetaSite,
+    /// `[channels.email]` is installed: every page carries the subscribe form's script.
+    pub email_installed: bool,
     /// The blocks the enabled plugins declare, resolved once per build.
     pub blocks: std::sync::Arc<crate::plugins::contributions::blocks::BlockPlan>,
     /// The settings the enabled plugins publish.
     pub public_data: Vec<crate::plugins::contributions::public_data::PublicFile>,
     /// `[services.booking]` as read: the offer, or why it could not be read.
     pub booking: Option<Result<crate::config::services::BookingService, String>>,
+    /// `[channels.email] provider` as read: the newsletter service, or why it is refused.
+    pub newsletter: Option<Result<String, String>>,
     /// Who may subscribe, which is what opens members pages.
     pub members: crate::config::services::MembersConfig,
+    /// The folder's moderation as the build reads it; `None` with comments off.
+    pub comment_moderation: Option<crate::build::features::comment::link_block::CommentModeration>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -182,7 +196,7 @@ impl SiteConfig {
             typesetting: self.typesetting.as_deref(),
             fields: &self.field_decls,
             lang: &self.lang,
-            forms_endpoint: self.forms_endpoint.as_deref(),
+            forms_endpoint: self.forms.as_deref().ok(),
             blocks: Some(&self.blocks),
         }
     }
@@ -196,6 +210,7 @@ impl Default for SiteConfig {
     fn default() -> Self {
         Self {
             lang: "en".to_string(),
+            lang_declared: false,
             // Every other field keeps the derived zero it has always had —
             // written out rather than `..Default::default()` (which cannot
             // recurse) so a new field is a compile error here, not a silent
@@ -217,6 +232,7 @@ impl Default for SiteConfig {
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             header_scroll: crate::build::components::nav::HeaderScroll::Static,
+            share_cover: Default::default(),
             site_url_override: None,
             declared_redirects: Vec::new(),
             ai: Default::default(),
@@ -225,9 +241,13 @@ impl Default for SiteConfig {
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
             field_decls: Vec::new(),
-            forms_endpoint: None,
+            forms: Err(crate::config::services::FormsOff::NoEndpoint),
+            seta: Default::default(),
+            email_installed: false,
             booking: None,
+            newsletter: None,
             members: Default::default(),
+            comment_moderation: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

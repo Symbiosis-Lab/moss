@@ -7,15 +7,12 @@ import {
   type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
-import { StateEffect, Text, type Extension } from "@codemirror/state";
-import { editorInfoField } from "obsidian";
-import type { EditorDiagnostic, MossSite } from "./core";
+import { Text, type Extension } from "@codemirror/state";
+import type { EditorDiagnostic } from "./core";
 import { editorFieldSpans } from "./core";
 import type { MossSchema } from "./schema";
+import { contextChanged, type NoteOf, type SiteNote } from "./site-context";
 
-export type SchemaProvider = () => MossSchema;
-export type SiteProvider = () => MossSite;
-export const contextChanged = StateEffect.define<void>();
 
 export function diagnosticRanges(text: string, diagnostics: EditorDiagnostic[]) {
   const doc = Text.of(text.split("\n"));
@@ -42,12 +39,11 @@ export function diagnosticsToDecorations(text: string, diagnostics: EditorDiagno
   }), true);
 }
 
-function check(view: EditorView, site: MossSite): EditorDiagnostic[] {
-  const path = view.state.field(editorInfoField, false)?.file?.path;
-  return path ? JSON.parse(site.check(path, view.state.doc.toString())) : [];
+function check(view: EditorView, note: SiteNote | null): EditorDiagnostic[] {
+  return note ? JSON.parse(note.site.check(note.path, view.state.doc.toString())) : [];
 }
 
-function lintPlugin(getSite: SiteProvider) {
+function lintPlugin(noteOf: NoteOf) {
   return ViewPlugin.fromClass(class {
     decorations: DecorationSet;
     constructor(view: EditorView) { this.decorations = this.build(view); }
@@ -56,7 +52,7 @@ function lintPlugin(getSite: SiteProvider) {
         tr.effects.some((effect) => effect.is(contextChanged)))) this.decorations = this.build(update.view);
     }
     private build(view: EditorView): DecorationSet {
-      return diagnosticsToDecorations(view.state.doc.toString(), check(view, getSite()));
+      return diagnosticsToDecorations(view.state.doc.toString(), check(view, noteOf(view.state)));
     }
   }, { decorations: (plugin) => plugin.decorations });
 }
@@ -71,11 +67,13 @@ export function fieldInfoText(schema: MossSchema, name: string): string | null {
   return null;
 }
 
-function buildHover(getSchema: SchemaProvider, getSite: SiteProvider) {
+function buildHover(noteOf: NoteOf) {
   return hoverTooltip((view, pos): Tooltip | null => {
+    const note = noteOf(view.state);
+    if (!note) return null;
     const doc = view.state.doc.toString();
     const fields = editorFieldSpans(doc);
-    const diags = diagnosticRanges(doc, check(view, getSite()));
+    const diags = diagnosticRanges(doc, check(view, note));
     // A diagnostic under the pointer wins over the plain field explanation.
     const hit = diags.find((d) => pos >= d.from && pos <= d.to);
     const field = fields.find(
@@ -86,7 +84,7 @@ function buildHover(getSchema: SchemaProvider, getSite: SiteProvider) {
     const lines: string[] = [];
     if (hit) lines.push(hit.diagnostic.message);
     if (field) {
-      const info = fieldInfoText(getSchema(), field.key);
+      const info = fieldInfoText(note.schema, field.key);
       if (info) lines.push(info);
     }
     if (lines.length === 0) return null;
@@ -145,6 +143,6 @@ export function fieldCompletions(schema: MossSchema, doc: string, prefix: string
 }
 
 /** The complete frontmatter knowledge extension (lint + hover). */
-export function frontmatterExtension(getSchema: SchemaProvider, getSite: SiteProvider): Extension {
-  return [lintPlugin(getSite), buildHover(getSchema, getSite)];
+export function frontmatterExtension(noteOf: NoteOf): Extension {
+  return [lintPlugin(noteOf), buildHover(noteOf)];
 }

@@ -34,6 +34,7 @@ fn article(own: Option<&[String]>, folders: &[String], listed: &[String]) -> Art
         uid: Some(UID.into()),
         syndicate: Some(own.unwrap_or(folders).to_vec()),
         untitled: false,
+        hidden_from_search_engines: false,
     }
 }
 
@@ -66,7 +67,11 @@ fn a_chip_reads_on_exactly_when_a_publish_would_act_or_a_copy_stands() {
                 for state in states {
                     for listed in [&none, &address] {
                         for edited in [false, true] {
+                          for choice in [None, Some(true), Some(false)] {
                             let dir = tempfile::tempdir().unwrap();
+                            let mp = MossPaths::new(dir.path());
+                            record_choice(&mp, UID, "bluesky", choice).unwrap();
+                            let choices = Choices::in_vault(&mp);
                             let records = Records::at(dir.path().join("copies"));
                             record(&records, state);
                             let post = article(own.map(Vec::as_slice), folders, listed);
@@ -78,23 +83,26 @@ fn a_chip_reads_on_exactly_when_a_publish_would_act_or_a_copy_stands() {
                                 articles: &map,
                                 previously_live: live.then_some(&before[..]),
                                 edited_sources: if edited { &sources } else { &HashSet::new() },
-                                channels: &channels,
+                                channels: &channels, choices: &choices,
                             };
                             let plans = decide(&inputs, &records);
                             let acts = plans.iter().flat_map(|p| &p.entries).any(|e| matches!(e.action, Action::Due | Action::Update | Action::Adopt { .. }));
 
-                            let list = own.map(Vec::as_slice).unwrap_or(folders);
+                            let named = |l: &Vec<String>| super::super::Named::of(l, &channels);
+                            let asked = super::super::Asked::new(false, own.map(named), Some(named(folders)), UID, &choices);
+                            let list = asked.list.unwrap_or_default();
+                            let list = list.ids();
                             let view = PostView {
-                                facts: PostFacts { uid: UID, own: own.map(Vec::as_slice).unwrap_or_default(), listed, already_live: live },
+                                facts: PostFacts { uid: UID, own: asked.own.ids(), listed, already_live: live },
                                 list,
                                 folders,
-                                has_own: own.is_some(),
                                 live: if live { Live::Yes } else { Live::No },
                                 records: Records::at(dir.path().join("copies")),
                             };
                             let named = list.iter().any(|c| c == "bluesky");
                             let got = chip(&view, info);
-                            assert_eq!(got.on, acts || (named && state.is_some()), "own {own:?} folders {folders:?} live {live} state {state:?} listed {listed:?} edited {edited} -> {got:?}");
+                            assert_eq!(got.on, acts || (named && state.is_some()), "own {own:?} folders {folders:?} live {live} state {state:?} listed {listed:?} edited {edited} choice {choice:?} -> {got:?}");
+                          }
                         }
                     }
                 }
@@ -114,7 +122,6 @@ fn a_copy_of_a_channel_the_list_no_longer_names_reads_off() {
         facts: PostFacts { uid: UID, own: &own, listed: &[], already_live: true },
         list: &own,
         folders: &folders,
-        has_own: true,
         live: Live::Yes,
         records,
     };
@@ -129,7 +136,6 @@ fn an_unreadable_baseline_says_unknown_unless_a_copy_stands() {
         facts: PostFacts { uid: UID, own: &list, listed: &[], already_live: true },
         list: &list,
         folders: &[],
-        has_own: true,
         live: Live::Unknown,
         records,
     };
@@ -200,15 +206,6 @@ fn a_channel_that_cannot_take_the_page_reads_unavailable_with_the_reason() {
 
 fn page_of(dir: &tempfile::TempDir, rel: &str) -> String {
     std::fs::read_to_string(dir.path().join(rel)).unwrap()
-}
-
-#[test]
-fn leaving_a_new_post_out_writes_false_and_taking_it_back_removes_the_key() {
-    let dir = site("---\ntitle: A\n---\n\nBody stays.\n");
-    set_post(dir.path(), SOURCE, "bluesky", false).unwrap();
-    assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\nsyndicate: false\n---\n\nBody stays.\n");
-    set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
-    assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\n---\n\nBody stays.\n");
 }
 
 const COPY_URL: &str = "https://bsky.app/profile/a/post/1";
@@ -473,4 +470,81 @@ fn a_name_two_channels_go_by_turns_no_chip_on_and_a_write_keeps_it() {
     assert_eq!(page_of(&dir, SOURCE), page, "reading writes nothing");
     set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
     assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\nsyndicate:\n  - bluesky\n  - x\n---\n\nBody stays.\n");
+}
+
+fn chips_on(dir: &tempfile::TempDir) -> Vec<String> {
+    read_post(dir.path(), SOURCE).unwrap().into_iter().filter(|c| c.on).map(|c| c.channel).collect()
+}
+
+/// What the plan and the send are told the post asks for.
+fn sends(dir: &tempfile::TempDir) -> Vec<String> {
+    let map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    let choices = Choices::in_vault(&MossPaths::new(dir.path()));
+    let named = super::super::Named::of_post(&map.articles[URL], &super::super::landing::channels(dir.path()), &choices);
+    named.map(|n| n.ids().to_vec()).unwrap_or_default()
+}
+
+fn choice_files(dir: &tempfile::TempDir) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(choices_dir(&MossPaths::new(dir.path()))) else { return Vec::new() };
+    let mut names: Vec<String> = entries.filter_map(Result::ok).filter_map(|e| e.file_name().into_string().ok()).collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_click_on_a_post_without_its_own_line_leaves_the_page_byte_identical() {
+    let page = "---\ntitle: A\n---\n\nBody stays.\n";
+    let dir = site_with_x(page);
+    set_post(dir.path(), SOURCE, "xcom", true).unwrap();
+    set_post(dir.path(), SOURCE, "bluesky", false).unwrap();
+    assert_eq!(page_of(&dir, SOURCE), page);
+    assert_eq!(chips_on(&dir), strings(&["xcom"]));
+    assert_eq!(sends(&dir), strings(&["xcom"]), "the plan and the send read the same choices as the chips");
+    set_post(dir.path(), SOURCE, "xcom", false).unwrap();
+    set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
+    assert_eq!(page_of(&dir, SOURCE), page);
+    assert_eq!(sends(&dir), strings(&["bluesky"]));
+    assert!(choice_files(&dir).is_empty(), "a choice equal to the folder's list is removed: {:?}", choice_files(&dir));
+}
+
+#[test]
+fn a_choice_is_never_applied_to_a_post_with_its_own_line_and_the_next_click_removes_it() {
+    let dir = site_with_x("---\ntitle: A\n---\n\nBody stays.\n");
+    set_post(dir.path(), SOURCE, "xcom", true).unwrap();
+    assert_eq!(choice_files(&dir), vec![format!("{UID}.xcom")]);
+    std::fs::write(dir.path().join(SOURCE), "---\ntitle: A\nsyndicate: [bluesky]\n---\n\nBody stays.\n").unwrap();
+    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    let post = map.articles.get_mut(URL).unwrap();
+    post.frontmatter.insert("syndicate".into(), serde_json::json!(["bluesky"]));
+    map.save(&dir.path().join(".moss")).unwrap();
+    assert_eq!(chips_on(&dir), strings(&["bluesky"]));
+    assert_eq!(sends(&dir), strings(&["bluesky"]));
+    set_post(dir.path(), SOURCE, "xcom", false).unwrap();
+    assert!(choice_files(&dir).is_empty(), "{:?}", choice_files(&dir));
+}
+
+#[test]
+fn a_click_on_turns_a_waiting_channel_on_for_a_live_post() {
+    let dir = site_with_x("---\ntitle: A\nuid: aa11aa11\n---\n\nBody stays.\n");
+    let mp = MossPaths::new(dir.path());
+    std::fs::create_dir_all(mp.deploy_dir()).unwrap();
+    std::fs::copy(mp.article_map(), mp.deployed_article_map()).unwrap();
+    let chips = set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
+    assert!(chips.iter().any(|c| c.channel == "bluesky" && c.on), "{chips:?}");
+}
+
+#[test]
+fn a_choice_never_sends_a_page_reached_only_by_its_link() {
+    let dir = site_with_x("---\ntitle: A\n---\n\nBody stays.\n");
+    set_post(dir.path(), SOURCE, "xcom", true).unwrap();
+    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    let post = map.articles.get_mut(URL).unwrap();
+    post.hidden_from_search_engines = true;
+    post.syndicate = Some(Vec::new());
+    map.save(&dir.path().join(".moss")).unwrap();
+    assert_eq!(sends(&dir), Vec::<String>::new());
+    let chips = read_post(dir.path(), SOURCE).unwrap();
+    assert!(chips.iter().all(|c| c.origin == ChoiceOrigin::Unavailable && c.reason.as_deref() == Some(HIDDEN)), "{chips:?}");
+    assert_eq!(set_post(dir.path(), SOURCE, "bluesky", true), Err(HIDDEN.to_string()));
+    assert_eq!(choice_files(&dir), vec![format!("{UID}.xcom")], "a refused click records nothing");
 }

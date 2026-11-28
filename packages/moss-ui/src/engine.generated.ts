@@ -187,26 +187,7 @@ what: string;
 /**
  * The recovery affordance, expressed as data.
  */
-action: Action; 
-/**
- * How long the app keeps it.
- */
-lifetime?: AdvisoryLifetime }
-
-/**
- * How long the app keeps an advisory once raised.
- */
-export type AdvisoryLifetime = 
-/**
- * A condition of this build: the next build start clears it.
- */
-"Build" | 
-/**
- * Kept across build starts until its own task's next tick, for an
- * advisory that a rebuild not running its task cannot speak for (a
- * plugin's Sync offer: save-rebuilds run no process hook).
- */
-"UntilTaskRestates"
+action: Action }
 
 /**
  * The quantity a Job reports on success: "142 pages", "3 posts". Present iff
@@ -245,11 +226,7 @@ export type AppOp =
 /**
  * Download a command-line tool moss needs, after the user asked for it; `args` is `{"tool": "ffmpeg"|"git"}`.
  */
-"DownloadTool" | 
-/**
- * Run a plugin's process hook as the person's own act, which may write the folder; `args` is `{"plugin": "<id>"}`, and the app names the plugin from its manifest.
- */
-"RunPluginProcess"
+"DownloadTool"
 
 /**
  * One condition under which a field takes effect.
@@ -1310,7 +1287,11 @@ export type ListDirectoryArgs = { path: VaultPath; showInternal: boolean }
  */
 export type ListTreeArgs = { showInternal: boolean }
 
-export type ListVersionsArgs = { scope: string; path: string | null }
+export type ListVersionsArgs = { scope: VersionScope; 
+/**
+ * A site or folder version's id: its drill-down instead of the timeline.
+ */
+version: string | null }
 
 /**
  * The reason the login browser-panel triggered the failure view.
@@ -1344,28 +1325,6 @@ export type LoginFailureReason =
  */
 export type LoginKind = "matters" | "ghost"
 
-/**
- * Physical-source evidence for a missing authored asset.
- */
-export type MissingReferenceOccurrence = { 
-/**
- * Markdown file holding the reference, relative to the site root.
- */
-source_path: string; 
-/**
- * SHA-256 of the exact source bytes this occurrence was extracted from.
- */
-source_revision: SourceRevision; 
-/**
- * The reference exactly as the author typed it.
- */
-reference: string; 
-/**
- * Exact destination bytes in the physical source, never a post-resolution
- * or transclusion coordinate.
- */
-source_span: SourceSpan }
-
 export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgress } | { kind: "AssetReady"; payload: AssetReady } | 
 /**
  * Post-seal sweep of materialized image/video variants (page-agnostic
@@ -1383,7 +1342,7 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * not the same instant, and the gap between them is where a UI can
  * truthfully-but-wrongly report a change as live — see `SitePromoted`.
  */
-{ kind: "SitePromoted"; payload: SitePromoted } | { kind: "PluginProgress"; payload: PluginProgressEvent } | { kind: "FileChanged"; payload: FileChangeEvent } | { kind: "DeployWaitingForBuild" } | 
+{ kind: "SitePromoted"; payload: SitePromoted } | { kind: "PluginProgress"; payload: PluginProgressEvent } | { kind: "FileChanged"; payload: FileChangeEvent } | 
 /**
  * What publishing right now would change on the live site, recomputed at
  * every seal and once more when a deploy discovers there is no local
@@ -1538,6 +1497,12 @@ folder_path: string } } |
  * Design: C3.
  */
 { kind: "LoginBrowserFailed"; payload: { reason: LoginFailureReason } } | 
+/**
+ * A sign-in worked; `panel` names the panel showing it. The page stays in
+ * view while the shell dries the drop over it, then closes that panel.
+ * Routed via `emit_to("main", …)` — NOT broadcast.
+ */
+{ kind: "SignInClosing"; payload: { panel: number } } | 
 /**
  * A plugin whose process hook needs its account has none bound for this
  * folder, and the person has not dismissed the prompt. Emitted before
@@ -1710,6 +1675,33 @@ export type NewFile = { dir: string; name: string; frontmatter: { [key in string
  * A command that takes no arguments. Extra keys a caller sends are ignored.
  */
 export type NoArgs = Record<string, never>
+
+/**
+ * One comment under its page, for its owner to hide, show or mark as spam.
+ */
+export type PageComment = { source: string; id: string; author: string; 
+/**
+ * The host of the writer's website field.
+ */
+website: string | null; createdAt: string; 
+/**
+ * Plain text, markup stripped, cut at a few hundred characters.
+ */
+text: string; 
+/**
+ * Not shown on the site, by its own hide, a hidden parent or a blocked host.
+ */
+hidden: boolean; 
+/**
+ * Hidden by its own hide or a blocked host, not only a hidden parent, so Show brings it back.
+ */
+directlyHidden: boolean }
+
+export type PageComments = { 
+/**
+ * Newest first.
+ */
+comments: PageComment[] }
 
 /**
  * What the last build knows about one source file, for an editor's add list:
@@ -2027,7 +2019,7 @@ export type PublishPreflightProjection = {
  * Ordered at build admission, so a later build cannot be overwritten by
  * an older build that happens to complete after it.
  */
-build_generation: number; missing_references: MissingReferenceOccurrence[]; 
+build_generation: number; missing_references: ReferenceOccurrence[]; 
 /**
  * Required inputs this attempt could not read. A clean later attempt
  * replaces this list, even while an older complete seal remains selected.
@@ -2036,7 +2028,12 @@ unresolved_inputs?: string[];
 /**
  * Links from published pages to drafts, which would be dead on the live site.
  */
-drafts_linked?: DraftLinkOccurrence[] }
+drafts_linked?: DraftLinkOccurrence[]; 
+/**
+ * Pictures the pages show from other sites: candidates the publish
+ * probes, never a verdict.
+ */
+remote_pictures?: ReferenceOccurrence[] }
 
 /**
  * The single record a finished publish hands to the frontend, replacing
@@ -2242,6 +2239,29 @@ export type ReferenceKind = { kind: "link"; data: { anchor: string | null } } | 
 { kind: "moved"; data: { canonical: string } }
 
 /**
+ * Physical-source evidence for one authored reference: a missing asset, or a
+ * picture from another site.
+ */
+export type ReferenceOccurrence = { 
+/**
+ * Markdown file holding the reference, relative to the site root.
+ */
+source_path: string; 
+/**
+ * SHA-256 of the exact source bytes this occurrence was extracted from.
+ */
+source_revision: SourceRevision; 
+/**
+ * The reference exactly as the author typed it.
+ */
+reference: string; 
+/**
+ * Exact destination bytes in the physical source, never a post-resolution
+ * or transclusion coordinate.
+ */
+source_span: SourceSpan }
+
+/**
  * Why a public address that was live is not in this build.
  */
 export type RemovalReason = 
@@ -2358,6 +2378,20 @@ offers_original: boolean }
 export type RestoreFailure = { path: string; error: string }
 
 /**
+ * Where a restored page's bytes go.
+ */
+export type RestoreMode = 
+/**
+ * Overwrite the file at its current vault path.
+ */
+"in_place" | 
+/**
+ * Write beside the current file as `<stem> (<date>).<ext>`, leaving the
+ * present content untouched.
+ */
+"as_copy"
+
+/**
  * [`restore_version`]'s answer, unified across the page and site forms (design
  * rule 4, "best-effort with an honest count"): a page restore reports itself
  * as a one-entry `restored`/`failed`, matching the shape a site restore's
@@ -2372,7 +2406,7 @@ export type RestoreFailure = { path: string; error: string }
  */
 export type RestoreReport = { restored: string[]; failed: RestoreFailure[]; trashed: string[]; undo_id: string | null }
 
-export type RestoreVersionArgs = { id: string; path: string | null; mode: string }
+export type RestoreVersionArgs = { id: string; scope: VersionScope; mode: RestoreMode }
 
 /**
  * String-shape classification of the opened root, wire form. Mirrors
@@ -2638,6 +2672,23 @@ line: number }
  * operation for the current candidate instead of accepting cached entries.
  */
 export type SourceStructureOutcome = "Ready" | "Failed"
+
+/**
+ * What Spam did, for the line or toast that names it and for Undo.
+ */
+export type SpamOutcome = { 
+/**
+ * `(source, id)` of each comment this call hid; one already hidden is not here.
+ */
+hidden: ([string, string])[]; blocked: string[]; 
+/**
+ * Hosts left unblocked because a comment the owner unhid links to them.
+ */
+notBlocked: string[]; 
+/**
+ * Other comments the new blocks hide.
+ */
+alsoHidden: number }
 
 /**
  * A file's role on the site, beyond being a page or an asset. The editor
@@ -3190,13 +3241,11 @@ export type Verb = string
 export type VersionContent = { kept: boolean; text: string | null }
 
 /**
- * [`list_versions`]'s answer. `rows` is the day-grouped list the panel renders
- * for either scope ("This page" → `page_timeline`, "Whole site" with no
- * `path` → `site_timeline`); `changed_since`/`unchanged` are populated ONLY
- * for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
- * — the "A site version" sub-view's Changed-since/Unchanged groups — and
- * `rows` is empty in that mode. One command rather than two: the drill-down
- * reuses [`HistoryStore::site_version_pages`] in the same body as the list.
+ * [`list_versions`]'s answer. Without a `version`, `rows` is the scope's
+ * timeline. With one (site or folder scope), `rows` is empty and
+ * `changed_since`/`unchanged`/`to_trash` describe that version's pages in
+ * scope against the disk now: the drill-down screen and its restore's
+ * confirmation.
  */
 export type VersionList = { rows: VersionRow[]; 
 /**
@@ -3208,16 +3257,21 @@ live_id: string | null; has_multiple_targets: boolean;
 /**
  * "Show in Finder" footer target.
  */
-store_dir: string; changed_since: ChangedPage[]; unchanged: string[] }
+store_dir: string; changed_since: ChangedPage[]; unchanged: string[]; to_trash: string[] }
 
 /**
  * One row in the Versions list — a publish, a manual save, a pre-restore
  * save, or a kept outside edit of one page. `trigger` is
- * `"publish" | "manual" | "restore" | "displaced"`, the same flattened-
- * string convention [`restore_version`]'s `mode` argument uses, so the
- * frontend never imports a second enum shape for the same words.
+ * `"publish" | "manual" | "restore" | "displaced"`.
  */
 export type VersionRow = { id: string; published_at: string; target: string; trigger: string; label: string | null; changed: number; added: number; removed: number }
+
+/**
+ * What a Versions request is about: the whole site, everything under one
+ * folder, or one page. A path is a key into a version's records, never
+ * joined onto the folder.
+ */
+export type VersionScope = { kind: "site" } | { kind: "folder"; path: string } | { kind: "page"; path: string }
 
 /**
  * Fine-grained video conversion progress for real-time UI updates.
@@ -3325,6 +3379,7 @@ export type EngineCommands = {
 	compute_heading_state: { args: HeadingStateArgs; out: HeadingState };
 	describe_source_role: { args: FileArgs; out: SourceRole };
 	page_facts: { args: FileArgs; out: PageFacts };
+	page_comments: { args: FileArgs; out: PageComments };
 	resolve_url_for_file: { args: FileArgs; out: string | null };
 	validate_content: { args: FileArgs; out: EditorDiagnostic[] };
 	get_publish_preflight: { args: FolderArgs; out: PublishPreflightProjection | null };
@@ -3387,6 +3442,7 @@ export const ENGINE_TIER = {
 	compute_heading_state: "session_read",
 	describe_source_role: "session_read",
 	page_facts: "session_read",
+	page_comments: "session_read",
 	resolve_url_for_file: "session_read",
 	validate_content: "session_read",
 	get_publish_preflight: "session_read",
@@ -3449,12 +3505,13 @@ export type EngineParams = {
 	compute_heading_state: [filePath: VaultPath, frontmatter: JsonValue, body: string];
 	describe_source_role: [filePath: VaultPath];
 	page_facts: [filePath: VaultPath];
+	page_comments: [filePath: VaultPath];
 	resolve_url_for_file: [filePath: VaultPath];
 	validate_content: [filePath: VaultPath];
 	get_publish_preflight: [folderPath: string];
 	list_vault_terms: [];
 	get_cloud_unavailable_files: [folderPath: string];
-	list_versions: [scope: string, path: string | null];
+	list_versions: [scope: VersionScope, version: string | null];
 	read_version: [id: string, path: string];
 	reveal_history_store: [];
 	resolve_attachment_dir: [pageRelativePath: VaultPath];
@@ -3483,7 +3540,7 @@ export type EngineParams = {
 	clean_references_and_delete: [paths: VaultPath[]];
 	undo_rename: [undoId: string];
 	save_editor_content: [filePath: VaultPath, frontmatter: JsonValue, body: string, expectedHash: string, keepDisplaced?: boolean];
-	restore_version: [id: string, path: string | null, mode: string];
+	restore_version: [id: string, scope: VersionScope, mode: RestoreMode];
 	save_version: [label: string | null];
 	write_editor_file_binary: [relativePath: VaultPath, dataBase64: string];
 	expand_derived: [pagePath: VaultPath, content: string];
@@ -3509,12 +3566,13 @@ export const ENGINE_PARAMS = {
 	compute_heading_state: ["filePath", "frontmatter", "body"],
 	describe_source_role: ["filePath"],
 	page_facts: ["filePath"],
+	page_comments: ["filePath"],
 	resolve_url_for_file: ["filePath"],
 	validate_content: ["filePath"],
 	get_publish_preflight: ["folderPath"],
 	list_vault_terms: [],
 	get_cloud_unavailable_files: ["folderPath"],
-	list_versions: ["scope", "path"],
+	list_versions: ["scope", "version"],
 	read_version: ["id", "path"],
 	reveal_history_store: [],
 	resolve_attachment_dir: ["pageRelativePath"],
@@ -3543,7 +3601,7 @@ export const ENGINE_PARAMS = {
 	clean_references_and_delete: ["paths"],
 	undo_rename: ["undoId"],
 	save_editor_content: ["filePath", "frontmatter", "body", "expectedHash", "keepDisplaced"],
-	restore_version: ["id", "path", "mode"],
+	restore_version: ["id", "scope", "mode"],
 	save_version: ["label"],
 	write_editor_file_binary: ["relativePath", "dataBase64"],
 	expand_derived: ["pagePath", "content"],

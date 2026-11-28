@@ -532,20 +532,11 @@ fn register_existing_ladders_excludes_a_surplus_rung_left_by_a_bigger_ladder() {
     let found = register_existing_ladders(staging.path(), &registry);
     assert_eq!(found, 1);
 
-    let registered = registry.assets.read().unwrap();
-    assert!(
-        !registered.contains_key("videos/clip.hls/v4.m3u8"),
-        "surplus playlist must not be registered: {:?}",
-        registered.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        !registered.contains_key("videos/clip.hls/v4.m4s"),
-        "surplus segment must not be registered: {:?}",
-        registered.keys().collect::<Vec<_>>()
-    );
+    assert!(!registry.is_registered("videos/clip.hls/v4.m3u8"), "surplus playlist must not be registered");
+    assert!(!registry.is_registered("videos/clip.hls/v4.m4s"), "surplus segment must not be registered");
     for name in &today {
         let key = format!("videos/clip.hls/{name}");
-        assert!(registered.contains_key(&key), "{key} must be registered: {:?}", registered.keys().collect::<Vec<_>>());
+        assert!(registry.is_registered(&key), "{key} must be registered");
     }
 }
 

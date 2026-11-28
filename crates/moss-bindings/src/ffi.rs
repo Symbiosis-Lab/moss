@@ -54,6 +54,14 @@ impl MossSite {
         self.site().set_notes(&notes_json).map_err(|message| MossError::InvalidJson { message })
     }
 
+    pub fn set_texts(&self, texts_json: String, root_name: String) -> Result<(), MossError> {
+        self.site().set_texts(&texts_json, &root_name).map_err(|message| MossError::InvalidJson { message })
+    }
+
+    pub fn stylesheet(&self) -> String {
+        self.site().stylesheet().to_owned()
+    }
+
     pub fn preview(&self, path: String, text: String, base_href: String) -> String {
         self.site().preview(&path, &text, &base_href)
     }

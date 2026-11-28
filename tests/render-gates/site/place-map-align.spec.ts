@@ -12,7 +12,7 @@
  * Run via:
  *   npx playwright test -c playwright/place-map-align.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const LOCATOR = ".moss-place-locator";
 const MAP = ".moss-place-map";

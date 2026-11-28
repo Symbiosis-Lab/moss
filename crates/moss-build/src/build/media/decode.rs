@@ -59,8 +59,77 @@ pub(crate) fn sniff_dimensions(path: &Path) -> image::ImageResult<(u32, u32)> {
 /// `encode_sized_raster`) apply it themselves right after, since not every
 /// caller does (LQIP/dominant-color extraction never has).
 pub(crate) fn sniff_decode(path: &Path) -> image::ImageResult<image::DynamicImage> {
+    if super::sniff::is_heif(path) {
+        return decode_heif(path).map(|(img, _)| img);
+    }
     decode_capped(open_sniffed(path).map_err(image::ImageError::IoError)?)
 }
+
+/// [`sniff_decode`], turned upright. A HEIF's turn comes from its own `irot`
+/// as ImageIO reads it; its EXIF repeats the same turn, so EXIF is read only
+/// for every other format.
+pub(crate) fn sniff_decode_oriented(path: &Path) -> image::ImageResult<image::DynamicImage> {
+    use super::image::{apply_exif_orientation, read_exif_orientation};
+    if super::sniff::is_heif(path) {
+        let (img, orientation) = decode_heif(path)?;
+        return Ok(apply_exif_orientation(img, orientation));
+    }
+    let orientation = read_exif_orientation(path);
+    Ok(apply_exif_orientation(sniff_decode(path)?, orientation))
+}
+
+/// Whether this computer can turn the HEIF picture at `path` into pixels:
+/// ImageIO on Apple platforms, nothing elsewhere. Tests switch it off per path
+/// ([`no_heif_decoder`]) to build as a computer without one.
+pub(crate) fn decodes_heif(path: &Path) -> bool {
+    #[cfg(test)]
+    if no_heif_decoder::marked(path) {
+        return false;
+    }
+    let _ = path;
+    cfg!(target_vendor = "apple")
+}
+
+fn decode_heif(path: &Path) -> image::ImageResult<(image::DynamicImage, u32)> {
+    if decodes_heif(path) {
+        #[cfg(target_vendor = "apple")]
+        return image_io::decode(path, DECODE_ALLOC_CEILING);
+    }
+    let heif = || image::error::ImageFormatHint::Name("HEIF".into());
+    Err(image::ImageError::Unsupported(image::error::UnsupportedError::from_format_and_kind(
+        heif(),
+        image::error::UnsupportedErrorKind::Format(heif()),
+    )))
+}
+
+/// Paths a test builds as a computer with no HEIF decoder would.
+#[cfg(test)]
+pub(crate) mod no_heif_decoder {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static MARKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) struct Guard(PathBuf);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            MARKED.lock().unwrap().retain(|p| p != &self.0);
+        }
+    }
+
+    pub(crate) fn at(path: &Path) -> Guard {
+        MARKED.lock().unwrap().push(path.to_path_buf());
+        Guard(path.to_path_buf())
+    }
+
+    pub(super) fn marked(path: &Path) -> bool {
+        MARKED.lock().unwrap().iter().any(|p| p == path)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+mod image_io;
 
 /// [`sniff_decode`] for bytes already in memory, such as a download. The same
 /// content sniffing and the same [`DECODE_ALLOC_CEILING`].
@@ -108,3 +177,7 @@ fn warn_on_format_mismatch(
         sniffed
     );
 }
+
+#[cfg(test)]
+#[path = "decode_tests.rs"]
+mod tests;

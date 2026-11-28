@@ -3,7 +3,7 @@
 //! The frontmatter holds the fact; this module decides how it reads for a
 //! language and precision, so an author never writes a format. Pure: no I/O.
 
-use crate::build::components::date::format_display_date;
+use moss_core::i18n::dates::format_display_date;
 use crate::i18n::{t, Language};
 use moss_core::date::{EdtfDate, Precision, Qualifier};
 use moss_core::fields::{DecimalMark, TypedValue};

@@ -8,6 +8,7 @@
  * gate on, and nothing is replaced).
  */
 
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -24,7 +25,7 @@ function makeState(doc: string, selection?: { anchor: number }) {
   return EditorState.create({
     doc,
     selection,
-    extensions: [markdown({ extensions: [wikilinkConfig] })],
+    extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
   });
 }
 
@@ -279,7 +280,7 @@ describe('a picture inside a `:::` fence is drawn small below its line', () => {
   function fenceDecos(doc: string, selection?: { anchor: number }) {
     let state = EditorState.create({
       doc, selection,
-      extensions: [markdown({ extensions: [wikilinkConfig, shortcodeBlockConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig, shortcodeBlockConfig] }), shortcodeBlockExtension()],
     });
     // The 20ms/3000-char initial parse budget can hand back a partial tree with
     // no view attached; without the full tree there is no fence to be inside.

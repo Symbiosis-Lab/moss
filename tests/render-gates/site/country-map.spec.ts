@@ -9,7 +9,7 @@
  * Run via:
  *   npx playwright test -c playwright/country-map.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 /** Relative luminance of a painted fill. A colour mix computes to `oklch(...)` in some engines, so the browser's own canvas converts it to sRGB first. */
 async function luminanceOf(page: Page, selector: string): Promise<number> {

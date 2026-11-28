@@ -189,6 +189,31 @@ pub fn try_acquire_named(folder: &Path, name: &str) -> Result<Option<Held>, Stri
     hold(&lock_path_named(folder, name)?, |_| Ok(false))
 }
 
+const PUBLISH_PIN: &str = "pin-";
+
+/// A lock held for as long as one publish keeps a generation of `folder`
+/// pinned. Each publish takes a name of its own, so publishes never wait on
+/// one another, and [`publish_pinned`] sees them all.
+pub fn hold_publish_pin(folder: &Path) -> Result<Held, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("{PUBLISH_PIN}{}-{n}", std::process::id());
+    try_acquire_named(folder, &name)?.ok_or_else(|| format!("the {name} lock is already held"))
+}
+
+/// Whether a publish, in any process, holds a generation of `folder` pinned.
+/// A pin file nobody holds, left by a killed publish, is taken and so removed.
+pub fn publish_pinned(folder: &Path) -> bool {
+    let Ok(lock) = lock_path_named(folder, PUBLISH_PIN) else { return false };
+    let (Some(dir), Some(prefix)) = (lock.parent(), lock.file_name().and_then(|n| n.to_str())) else { return false };
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    entries.flatten().any(|e| {
+        let name = e.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix(prefix)) else { return false };
+        !matches!(try_acquire_named(folder, &format!("{PUBLISH_PIN}{rest}")), Ok(Some(_)))
+    })
+}
+
 /// Opens and locks `path` until the file it locked is still the one at
 /// `path`. When another holder has the lock, `contended` either waits for it
 /// (`true`) or gives up (`false`, so `None`).

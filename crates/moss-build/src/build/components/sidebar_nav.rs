@@ -24,9 +24,11 @@ pub fn render(articles: &[ArticleListItemProps], more_url: Option<&str>, lang: c
         .iter()
         .map(|article| {
             let (open, close) = super::child_list::link_or_box(article.url.as_deref(), "span", r#" class="moss-prefix-link""#);
+            // The row's `date_display` is `<time>` markup for the listing
+            // cards; the rail shows the plain `YYYY · MM` form of its date.
             format!(
                 r#"<li>{open}<span class="moss-prefix-link-prefix">{}</span><span class="moss-prefix-link-title">{}</span>{close}</li>"#,
-                html_escape(&article.date_display),
+                html_escape(&article.date_raw.as_deref().map(moss_core::i18n::dates::format_date_string).unwrap_or_default()),
                 html_escape(&article.title)
             )
         })

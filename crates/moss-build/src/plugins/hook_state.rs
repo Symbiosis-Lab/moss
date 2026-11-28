@@ -150,6 +150,8 @@ pub struct PluginHookState {
     /// person-wait. One per plugin: a second page replaces the first in the
     /// same panel.
     windows: Arc<Mutex<HashMap<String, PersonWaitGuard>>>,
+    /// Each plugin's sign-in through the person's browser.
+    pub sign_ins: crate::plugins::runtime::browser_sign_in::SignIns,
 }
 
 /// Who asked for a hook run, which decides where in the folder it may write.
@@ -194,6 +196,7 @@ impl PluginHookState {
             runs: Arc::new(Mutex::new(HashMap::new())),
             run_ended: Arc::new(tokio::sync::Notify::new()),
             windows: Arc::new(Mutex::new(HashMap::new())),
+            sign_ins: Default::default(),
         }
     }
 
@@ -383,11 +386,12 @@ impl PluginHookState {
     /// falling back to `hook_name` when nothing is registered (out-of-hook
     /// callers). Anything that wants to reach the watchdog's key resolves here.
     fn executing_hook_key(&self, plugin_name: &str, hook_name: &str) -> String {
-        self.executing_hooks
-            .lock()
-            .ok()
-            .and_then(|map| map.get(plugin_name).cloned())
-            .unwrap_or_else(|| hook_name.to_string())
+        self.executing_hook(plugin_name).unwrap_or_else(|| hook_name.to_string())
+    }
+
+    /// The hook `plugin_name` is running, if any.
+    pub fn executing_hook(&self, plugin_name: &str) -> Option<String> {
+        self.executing_hooks.lock().ok().and_then(|map| map.get(plugin_name).cloned())
     }
 
     /// Mark the plugin as blocked on a host-function call until the returned
@@ -484,12 +488,7 @@ impl PluginHookState {
     /// Restamp the clock under the hook the watchdog keys on. Nothing executing
     /// means nothing to restamp.
     fn restart_activity_clock(&self, plugin_name: &str) {
-        let hook = self
-            .executing_hooks
-            .lock()
-            .ok()
-            .and_then(|map| map.get(plugin_name).cloned());
-        if let Some(hook) = hook {
+        if let Some(hook) = self.executing_hook(plugin_name) {
             self.update_activity(plugin_name, &hook);
         }
     }

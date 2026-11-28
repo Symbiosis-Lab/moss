@@ -203,12 +203,13 @@ fn malformed_ancestor_members_never_expose_descendant_bodies() {
         ("library/article.md", &article),
         ("library/free.md", "---\ntitle: Free article\ndate: 2026-02-02\nmembers: public\n---\nPublic override preview.\n<!--members-only-->\nExplicit public body."),
     ]);
-    for path in ["library/article/index.html", "rss.xml", "llms.txt", "_moss/source/library/article.md"] {
+    assert!(!site.html("llms.txt").contains(SECRET), "private body leaked into llms.txt");
+    for path in ["library/article/index.html", "rss.xml", "_moss/source/library/article.md"] {
         let output = site.html(path);
         assert!(!output.contains(SECRET), "private body leaked into {path}");
         assert!(output.contains("Visible inherited preview."), "missing public preview in {path}");
     }
-    for path in ["library/free/index.html", "rss.xml", "llms.txt", "_moss/source/library/free.md"] {
+    for path in ["library/free/index.html", "rss.xml", "_moss/source/library/free.md"] {
         assert!(site.html(path).contains("Explicit public body."), "missing public override in {path}");
     }
     assert_public(&site);
@@ -254,6 +255,33 @@ fn members_notices_keep_unique_ids_where_a_page_shows_several() {
         }
     }
     assert_public(&site);
+}
+
+/// Two subscribe blocks that ask the same questions (one at the top, one at
+/// the foot) keep their own element ids, through the language section re-render.
+#[test]
+fn identical_question_forms_keep_their_own_ids() {
+    let form = ":::subscribe\n- Your name\n- Where\n  - [ ] A friend\n  - [ ] Other\n    - Where else\n:::\n";
+    let site = site::Site::new(&[
+        (".moss/config.toml", CONFIG),
+        ("index.md", "---\ntitle: Journal\n---\nWelcome."),
+        ("join.md", &format!("---\ntitle: Join\n---\n{form}\nBetween.\n\n{form}")),
+        ("zh-hans/index.md", "---\ntitle: 日志\n---\n欢迎。"),
+    ]);
+    let html = site.html("join/index.html");
+    let values = |attr: &str| -> Vec<String> {
+        html.split(&format!(" {attr}=\"")).skip(1).filter_map(|rest| rest.split('"').next()).map(str::to_string).collect()
+    };
+    let ids = values("id");
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(ids.len(), unique.len(), "{ids:?}");
+    let labels = values("for");
+    assert!(labels.iter().filter(|f| f.contains("moss-subscribe")).count() >= 8, "{labels:?}");
+    for target in labels {
+        assert!(ids.contains(&target), "label for {target} names no element");
+    }
 }
 
 /// A site with language sections re-renders each inline form with its

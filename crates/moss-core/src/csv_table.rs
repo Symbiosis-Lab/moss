@@ -323,9 +323,9 @@ mod tests {
         assert_eq!(item("Wiki", "https://w.example/a_(b)"), "\n\n- [Wiki](<https://w.example/a_(b)>)\n\n");
         // And a markdown parser reads each as one link whose text is the title.
         for (title, text) in [("A] B", "A] B"), ("[Draft] notes", "[Draft] notes"), ("C:\\", "C:\\")] {
-            use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+            use pulldown_cmark::{Event, Tag, TagEnd};
             let md = item(title, "https://a.example/");
-            let events: Vec<Event> = Parser::new(&md).collect();
+            let events: Vec<Event> = crate::ast::pulldown(&md, pulldown_cmark::Options::empty()).collect();
             let links = events.iter().filter(|e| matches!(e, Event::Start(Tag::Link { .. }))).count();
             let open = events.iter().position(|e| matches!(e, Event::Start(Tag::Link { .. }))).unwrap_or(0);
             let close = events.iter().position(|e| matches!(e, Event::End(TagEnd::Link))).unwrap_or(0);

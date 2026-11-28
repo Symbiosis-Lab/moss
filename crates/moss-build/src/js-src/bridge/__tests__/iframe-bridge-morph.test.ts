@@ -629,10 +629,10 @@ describe.runIf(bundleExists)("shipped bridge finds the shell by its preview fram
 // Drive the shipped handler rather than mirroring its acknowledgement logic.
 describe("shipped morph failure correlation", () => {
   it.each(["script-change", "fetch-error"])("echoes the request generation on %s", async (failure) => {
-    const { w, replies, start } = await framedPage('<!doctype html><html><head><script src="old.js"></script></head><body></body></html>');
+    const { w, replies, start } = await framedPage('<!doctype html><html><head><script src="/_moss/js/old.js"></script></head><body></body></html>');
     (w as any).fetch = async () => failure === "fetch-error"
       ? { ok: false, status: 404 }
-      : { ok: true, text: async () => '<html><head><script src="new.js"></script></head><body></body></html>' };
+      : { ok: true, text: async () => '<html><head><script src="/_moss/js/new.js"></script></head><body></body></html>' };
     try {
       start();
       w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 42 } }));
@@ -642,6 +642,41 @@ describe("shipped morph failure correlation", () => {
   });
 });
 
+// What a theme's script drew (a map) must not vanish while the frame it hid comes back.
+describe("shipped morph on a page that runs the site's own script", () => {
+  const page = (script: string) => `<html><head></head><body><main><div class="frame" hidden></div></main>${script.startsWith("<") ? script : `<script src="${script}"></script>`}</body></html>`;
+  const morph = async (src: string) => {
+    const { w, replies, start } = await framedPage(page(src));
+    let fetches = 0;
+    (w as any).fetch = async () => (fetches++, { ok: true, text: async () => page(src) });
+    start();
+    w.document.querySelector("main")!.append(Object.assign(w.document.createElement("figure"), { className: "drawn" }));
+    w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 9 } }));
+    await vi.waitFor(() => expect(replies.some((r) => r?.gen === 9)).toBe(true));
+    return { w, fetches, reply: replies.find((r) => r?.gen === 9) };
+  };
+
+  it.each(["/_moss/theme/script.0a1b.js", "/notes/essay.js"])("reloads rather than erase what %s drew", async (src) => {
+    const { w, fetches, reply } = await morph(src);
+    try {
+      expect(fetches).toBe(0);
+      expect(reply).toEqual(expect.objectContaining({ type: "moss-morph-declined", scripts: [`src:${src}`] }));
+      expect(w.document.querySelector("figure.drawn")).not.toBeNull();
+      expect(w.document.querySelector(".frame")!.hasAttribute("hidden")).toBe(true);
+    } finally { w.close(); }
+  });
+
+  it.each([
+    ["moss's own script", "/_moss/js/theme.0a1b.js"],
+    ["a cross-origin tag", "https://stats.example.com/tag.js"],
+    ["an inline script", "<script>window.x = 1;</script>"],
+  ])("still morphs a page whose only script is %s", async (_, script) => {
+    const { w, reply } = await morph(script);
+    try {
+      expect(reply?.type).toBe("moss-morph-applied");
+    } finally { w.close(); }
+  });
+});
 
 describe("shipped morph color scheme policy", () => {
   it.each(["light", "dark"])("keeps fixed %s → auto → fixed across rebuilds", async (fixed) => {

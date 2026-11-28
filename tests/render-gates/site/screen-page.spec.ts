@@ -10,7 +10,7 @@
 // Only an engine can say whether the rung it picks covers the box the CSS
 // draws: the pictures here are eager, which is also how an engine without
 // `sizes=auto` reads every picture.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,7 +98,7 @@ for (const [name, body, contentWidth] of BLOCKS) {
     for (const scale of [1, 2]) {
       test(`a picture in ${name} at ${vw}x${vh}@${scale}x fetches a rung covering its drawn width`, async ({ browser }) => {
         const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: scale });
-        const { picked, need } = await fetchVsBox(await ctx.newPage(), body, contentWidth);
+        const { picked, need } = await fetchVsBox(await newPage(ctx), body, contentWidth);
         await ctx.close();
         expect(picked).toBeGreaterThanOrEqual(need - STEP);
         // An unparsed value falls back to `100vw`, which a grid cell overshoots.
@@ -123,7 +123,7 @@ const SHORT: Array<[string, string, number, string?]> = [
 for (const [name, body, vw, contentWidth] of SHORT) {
   test(`${name} falls short at ${vw}`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: vw, height: 1080 } });
-    const { picked, need } = await fetchVsBox(await ctx.newPage(), body, contentWidth);
+    const { picked, need } = await fetchVsBox(await newPage(ctx), body, contentWidth);
     await ctx.close();
     expect(picked).toBeLessThan(need - STEP);
   });
@@ -131,7 +131,7 @@ for (const [name, body, vw, contentWidth] of SHORT) {
 
 test('a small collage tile does not fetch a file as wide as the band', async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
-  const { picked, need } = await fetchVsBox(await ctx.newPage(), collage(GOLDEN.grid2, 1));
+  const { picked, need } = await fetchVsBox(await newPage(ctx), collage(GOLDEN.grid2, 1));
   await ctx.close();
   expect(picked).toBeGreaterThanOrEqual(need - STEP);
   expect(picked).toBeLessThanOrEqual(1920 / 2 + STEP);
@@ -153,7 +153,7 @@ async function edges(p: Page, theme: string) {
 for (const vw of [1280, 390]) {
   test(`the nav's edges are the band's at ${vw}`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: vw, height: 800 } });
-    const { nav, band } = await edges(await ctx.newPage(), '');
+    const { nav, band } = await edges(await newPage(ctx), '');
     await ctx.close();
     expect(nav).toEqual(band);
   });
@@ -161,7 +161,7 @@ for (const vw of [1280, 390]) {
 
 test('--moss-nav-width alone sets the nav\'s width', async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  const { navBox } = await edges(await ctx.newPage(), ':root { --moss-nav-width: 60rem; }');
+  const { navBox } = await edges(await newPage(ctx), ':root { --moss-nav-width: 60rem; }');
   await ctx.close();
   expect(navBox.right - navBox.left).toBe(960);
 });

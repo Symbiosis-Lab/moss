@@ -161,13 +161,13 @@ pub fn moss_requirement(cfg: &ConfigFile, plugins_dir: &Path) -> Option<Unmet> {
 
 /// Each plugin manifest's `min_moss_version`, read without loading the
 /// plugin: a refused plugin's floor still counts, since the site may not work
-/// without it. A manifest that cannot be read or parsed contributes nothing.
+/// without it. A manifest that cannot be read or is not JSON contributes nothing.
 fn plugin_floors(plugins_dir: &Path) -> Vec<(String, NeededBy)> {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else { return Vec::new() };
     entries
         .flatten()
         .filter_map(|entry| {
-            let manifest = crate::plugins::bundled::read_installed_manifest(&entry.path())?;
+            let manifest = crate::plugins::bundled::read_installed_floor(&entry.path())?;
             let name = moss_core::untrusted_text::bounded(&manifest.name, moss_core::untrusted_text::MAX_NAME);
             Some((manifest.min_moss_version?, NeededBy::Plugin(name)))
         })
@@ -399,6 +399,35 @@ pub fn site_id_for_folder(folder: &Path) -> Result<String, String> {
     config
         .site_id
         .ok_or_else(|| "no site_id — deploy this folder first (moss deploy <folder>)".to_string())
+}
+
+/// The seta a build's forms post to, and the site's id there when it is on the moss host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetaSite {
+    pub url: &'static str,
+    /// `None` unpublished, or published elsewhere: forms that post to seta render pending.
+    pub site_id: Option<String>,
+}
+
+impl Default for SetaSite {
+    fn default() -> Self {
+        SetaSite { url: HostingEnvironment::Production.seta_url(), site_id: None }
+    }
+}
+
+impl SetaSite {
+    /// Read once per build, for the subscribe and request forms alike.
+    pub fn read(project_path: &str) -> Self {
+        let deploy = get_domain_config(project_path).unwrap_or_default();
+        SetaSite {
+            url: resolve_environment(project_path).seta_url(),
+            site_id: crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string),
+        }
+    }
+
+    pub fn hosted(&self) -> Option<(&str, &str)> {
+        self.site_id.as_deref().map(|id| (self.url, id))
+    }
 }
 
 /// Resolve the hosting environment for a project.
@@ -645,6 +674,16 @@ mod version_ahead_guard_tests {
         );
         assert_eq!(requirement("min_moss_version = \"98.0.0\"\n", &[("research", &plugin("98.0.0"))]), needs("98.0.0", NeededBy::Site));
         assert_eq!(requirement("", &[("broken", "{ not json")]), None);
+    }
+
+    #[test]
+    fn a_manifest_from_a_newer_moss_still_names_its_floor() {
+        let newer = r#"{"name":"social","version":"2.0.0","entry":"main.js","min_moss_version":"98.0.0",
+            "contributes":{"site_settings":{"settings":[{"key":"account","type":"a-type-from-the-future"}]}}}"#;
+        assert_eq!(
+            requirement("", &[("social", newer)]),
+            Some(Unmet::Needs { version: "98.0.0".into(), by: NeededBy::Plugin("social".into()) })
+        );
     }
 
     #[test]

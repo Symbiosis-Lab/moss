@@ -29,13 +29,7 @@ use moss_core::asset_paths::published_paths;
 
 use crate::types::content::ProjectStructure;
 
-/// Two names in composed (NFC) order, falling back to their bytes when they
-/// compose alike. Every walk and list whose order reaches the output sorts by
-/// this, so a folder reads in one order on every machine whatever its disk
-/// lists first and however its sync client spelled the names.
-pub(crate) fn nfc_order(a: &str, b: &str) -> Ordering {
-    a.nfc().cmp(b.nfc()).then_with(|| a.cmp(b))
-}
+pub(crate) use moss_core::slug::nfc_order;
 
 /// [`nfc_order`] for a directory walk: `WalkDir::new(dir).sort_by(nfc_name_order)`.
 pub(crate) fn nfc_name_order(a: &walkdir::DirEntry, b: &walkdir::DirEntry) -> Ordering {
@@ -70,7 +64,9 @@ impl Spellings {
         let stored = |p: &Path| moss_core::slug::normalize_separators(&p.strip_prefix(root).unwrap_or(p).to_string_lossy());
         let mut groups: Vec<_> = by_logical.into_iter().filter(|(_, files)| files.len() > 1).collect();
         groups.sort_by(|a, b| a.0.cmp(&b.0));
-        for (logical, files) in groups {
+        for (logical, mut files) in groups {
+            // The walk's order is the file system's; `files[0]` must not depend on it.
+            files.sort();
             let read = on_disk(root, &logical);
             let kept = files.iter().copied().find(|f| *f == read).unwrap_or(files[0]);
             for other in files.into_iter().filter(|f| *f != kept) {

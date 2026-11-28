@@ -15,7 +15,7 @@
  *       the only two tasks that count pages into the compiling stage
  *     - icloud-sync (cloud provider downloads) — feeds the download
  *       readout (downloaded/total) while the build is materializing
- *     - DeployWaitingForBuild / deploy-progress — advances publish stage,
+ *     - deploy-progress — advances publish stage,
  *       feeds uploading current/total
  *
  *   If no, SECONDARY-TASK — its own bg:<id> row, independent of the
@@ -48,7 +48,6 @@ import {
   groupNotices,
   noticeGroupKey,
   isAcknowledge,
-  outlivesBuildStart,
   noticeTier,
   compilingLabelInput,
   nextPageProgress,
@@ -565,8 +564,6 @@ export class ProgressPanel {
         // this build: each goes through the same swap as AssetReady, and this
         // is the signal that fires after the background .webp encode lands.
         AssetsSettled: (e) => e.payload.changed.forEach((asset) => this.handleAssetReady(asset)),
-        // Deploy waits for background tasks: "Preparing…" on the primary bar.
-        DeployWaitingForBuild: () => this.advancePublishStage({ kind: "waiting" }),
       }),
       host.engine.on("scan-progress", (p: { found: number; evicted: number }) => p && this.onScanProgress(p)),
       host.engine.on("scan-complete", (p: { total_files: number; evicted_count: number; cloud_provider: string | null }) => p && this.onScanComplete(p)),
@@ -652,7 +649,6 @@ export class ProgressPanel {
           // re-derives it, so the sweep below must not wipe it
           // the moment the author saves an unrelated file.
           sticky: isAcknowledge(adv.action),
-          lifetime: adv.lifetime,
         });
         if (!refreshed) {
           refreshed = new Set();
@@ -2360,7 +2356,7 @@ export class ProgressPanel {
    */
   private clearBuildAdvisories(): void {
     for (const [key, entry] of this.advisories) {
-      if (!outlivesBuildStart(entry)) this.deleteAdvisory(key);
+      if (!entry.sticky) this.deleteAdvisory(key);
     }
   }
 
@@ -2478,7 +2474,7 @@ export class ProgressPanel {
     // calling nextPublishStage, so the stage machine starts from a clean slate.
     if (
       this.currentPublishStage === "failed" &&
-      (event.kind === "waiting" || event.kind === "progress")
+      event.kind === "progress"
     ) {
       // A fresh publish supersedes the previous failure, all three recordings.
       this.lastFailure = null;

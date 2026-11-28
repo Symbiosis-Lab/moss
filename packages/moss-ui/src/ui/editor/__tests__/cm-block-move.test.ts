@@ -3,9 +3,9 @@ import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { forceParsing } from '@codemirror/language';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
-import { formatKeysExtension, blockUnitAt } from '../cm-format-keys';
+import { formatKeysExtension, blockUnitAt, moveToGap, siblingsAt } from '../cm-format-keys';
 
 // jsdom implements no layout; CM6's deferred measure pass calls Range.getClientRects after a test and needs a harmless answer, not a throw.
 beforeAll(() => {
@@ -28,7 +28,7 @@ function mount(src: string): void {
     parent,
     state: EditorState.create({ doc, selection: sel, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), formatKeysExtension()] }),
   });
-  ensureSyntaxTree(view.state, doc.length, 1000);
+  forceParsing(view, doc.length, 1e9);
 }
 const press = (key: 'ArrowUp' | 'ArrowDown'): boolean =>
   runScopeHandlers(view, new KeyboardEvent('keydown', { key, altKey: true, bubbles: true, cancelable: true }), 'editor');
@@ -49,6 +49,11 @@ describe('blockUnitAt: the innermost block, as whole lines', () => {
     ['a caret on a continuation line', '- a\n  wrap¦ped\n- b', '- a\n  wrapped'],
     ['a fence, fence to fence', 'intro\n\n```js\nlet a¦;\n\nlet b;\n```\n\nouter', '```js\nlet a;\n\nlet b;\n```'],
     ['a $$ block', 'p\n\n$$\nx¦^2\n$$\n\nq', '$$\nx^2\n$$'],
+    ['a shortcode block, from its opening fence line', 'p\n\n:::grid 2:1¦\nA\n+++\nB\n:::\n\nq', ':::grid 2:1\nA\n+++\nB\n:::'],
+    ['a shortcode block, from its closing fence line', 'p\n\n:::hero\n# T\n\nwords\n:::¦\n\nq', ':::hero\n# T\n\nwords\n:::'],
+    ['a block in a shortcode body is a unit of that body', 'p\n\n:::callout\nbo¦dy\n\nmore\n:::\n\nq', 'body'],
+    ['a nested shortcode block is its own unit', 'p\n\n:::grid\nA\n\n::::buttons¦\n[a](b)\n::::\n:::\n\nq', '::::buttons\n[a](b)\n::::'],
+    ['a heading in a shortcode body ends its section at the fence', ':::hero\n# T¦\n\nwords\n:::\n\nafter', '# T\n\nwords'],
     ['a quote, all its > lines', 'p\n\n> one\n> tw¦o\n\nq', '> one\n> two'],
     ['a callout', 'p\n\n> [!note]\n> bo¦dy\n\nq', '> [!note]\n> body'],
     ['a table, all its rows', 'p\n\n| a | b |\n|---|---|\n| 1 | 2¦ |\n\nq', '| a | b |\n|---|---|\n| 1 | 2 |'],
@@ -95,6 +100,28 @@ describe('Alt-ArrowDown / Alt-ArrowUp', () => {
     mount('para\n\n```\nco¦de\n```');
     press('ArrowUp');
     expect(doc()).toBe('```\ncode\n```\n\npara');
+  });
+
+  test('a shortcode block moves whole from its opening fence line', () => {
+    mount('para\n\n:::grid 2:1¦\nA\n+++\nB\n:::');
+    press('ArrowUp');
+    expect(doc()).toBe(':::grid 2:1\nA\n+++\nB\n:::\n\npara');
+  });
+
+  test('a shortcode block moves whole from its closing fence line, past a heading section\'s blocks only', () => {
+    mount('# A\n\n:::hero\nwords\n:::¦\n\nafter\n\n# B');
+    press('ArrowDown');
+    expect(doc()).toBe('# A\n\nafter\n\n:::hero\nwords\n:::\n\n# B');
+    press('ArrowDown');
+    expect(doc()).toBe('# A\n\nafter\n\n:::hero\nwords\n:::\n\n# B');
+  });
+
+  test('a block in a shortcode body stays inside the fences', () => {
+    mount(':::callout\none\n\ntw¦o\n:::\n\nafter');
+    press('ArrowDown');
+    expect(doc()).toBe(':::callout\none\n\ntwo\n:::\n\nafter');
+    press('ArrowUp');
+    expect(doc()).toBe(':::callout\ntwo\n\none\n:::\n\nafter');
   });
 
   test('a table moves past a `$$` block', () => {
@@ -189,5 +216,72 @@ describe('Alt-ArrowDown / Alt-ArrowUp', () => {
     expect(doc()).toBe('- b\n- a\n- c');
     undo(view);
     expect(doc()).toBe('- a\n- b\n- c');
+  });
+});
+
+/** Move the unit holding the line that starts with `lead` to gap `gap` of its siblings. */
+function moveTo(src: string, lead: string, gap: number): boolean {
+  mount('¦' + src);
+  const from = view.state.doc.toString().indexOf(lead);
+  const level = siblingsAt(view.state, view.state.doc.lineAt(from).from)!;
+  return moveToGap(view, level.siblings, level.at, level.at, gap);
+}
+
+describe('moveToGap: drag and Alt-arrow share one move', () => {
+  test('a block goes past several siblings in one step, one undo restores it', () => {
+    const src = 'a\n\nb\n\nc\n\nd';
+    expect(moveTo(src, 'a', 3)).toBe(true);
+    expect(doc()).toBe('b\n\nc\n\na\n\nd');
+    undo(view);
+    expect(doc()).toBe(src);
+  });
+
+  test('to the front and to the end, with no final newline', () => {
+    expect(moveTo('a\n\nb\n\nc', 'c', 0)).toBe(true);
+    expect(doc()).toBe('c\n\na\n\nb');
+    expect(moveTo('a\n\nb\n\nc', 'a', 3)).toBe(true);
+    expect(doc()).toBe('b\n\nc\n\na');
+  });
+
+  test('a section moves whole, sub-headings included', () => {
+    expect(moveTo('# A\n\ntext\n\n## A1\n\nsub\n\n# B\n\nmore\n\n# C', '# A', 2)).toBe(true);
+    expect(doc()).toBe('# B\n\nmore\n\n# A\n\ntext\n\n## A1\n\nsub\n\n# C');
+  });
+
+  test('a nested block stays inside its :::grid', () => {
+    const src = ':::grid\nA\n\n::::buttons\n[a](b)\n::::\n\nC\n:::\n\nafter';
+    expect(moveTo(src, '::::buttons', 3)).toBe(true);
+    expect(doc()).toBe(':::grid\nA\n\nC\n\n::::buttons\n[a](b)\n::::\n:::\n\nafter');
+    expect(moveTo(src, '::::buttons', 4)).toBe(false); // there is no gap past the body's last block
+    expect(doc()).toBe(src);
+  });
+
+  test('a block does not cross a heading or a fence: its gaps are its own section only', () => {
+    const src = '# A\n\np\n\nq\n\n# B\n\n:::x\nin\n:::';
+    expect(moveTo(src, 'p', 3)).toBe(false);
+    expect(moveTo(src, 'p', 0)).toBe(false);
+    expect(doc()).toBe(src);
+    expect(moveTo(src, 'p', 2)).toBe(true);
+    expect(doc()).toBe('# A\n\nq\n\np\n\n# B\n\n:::x\nin\n:::');
+  });
+
+  test('its own gaps are a no-op with no history entry', () => {
+    const src = 'a\n\nb\n\nc';
+    expect(moveTo(src, 'b', 1)).toBe(false);
+    expect(moveTo(src, 'b', 2)).toBe(false);
+    expect(doc()).toBe(src);
+    expect(undo(view)).toBe(false);
+  });
+
+  test('siblings with no blank line between them keep their single newline', () => {
+    expect(moveTo(':::a\nx\n:::\n:::b\ny\n:::', ':::a', 2)).toBe(true);
+    expect(doc()).toBe(':::b\ny\n:::\n:::a\nx\n:::');
+  });
+
+  test('the caret moves with its block', () => {
+    mount('a\n\nb¦x\n\nc');
+    const level = siblingsAt(view.state, view.state.doc.line(3).from)!;
+    moveToGap(view, level.siblings, level.at, level.at, 0);
+    expect(withCaret()).toBe('b¦x\n\na\n\nc');
   });
 });

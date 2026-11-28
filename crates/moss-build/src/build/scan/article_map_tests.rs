@@ -20,6 +20,7 @@ fn test_article_map_is_article() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -55,6 +56,7 @@ fn test_article_map_save_and_load() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -182,6 +184,7 @@ fn test_is_article_matches_pretty_url_directory_style() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -207,6 +210,7 @@ fn test_is_article_matches_pretty_url_file_style() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -362,6 +366,7 @@ fn test_article_map_html_content_roundtrips_through_json() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -430,6 +435,7 @@ fn test_article_map_uid_serialization() {
             uid: Some("a7b3c9d2".to_string()),
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 
@@ -462,6 +468,7 @@ fn test_article_map_uid_none_omitted_from_json() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 

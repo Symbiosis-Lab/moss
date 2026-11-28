@@ -3,49 +3,7 @@
 //! preview without waiting for the whole batch.
 
 use crate::served_child::*;
-use std::io::Write;
 use std::time::Duration;
-
-/// A PNG of `side`×`side` noise, stored uncompressed: slow to decode and encode,
-/// quick to write.
-fn noise_png(path: &std::path::Path, side: u32, seed: u32) {
-    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-        out.extend((data.len() as u32).to_be_bytes());
-        let start = out.len();
-        out.extend(kind);
-        out.extend(data);
-        let crc = out[start..].iter().fold(!0u32, |mut c, &b| {
-            c ^= u32::from(b);
-            for _ in 0..8 {
-                c = if c & 1 == 1 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-            }
-            c
-        });
-        out.extend((!crc).to_be_bytes());
-    }
-    let mut state = seed | 1;
-    let mut raw = Vec::with_capacity((side * (side * 3 + 1)) as usize);
-    for _ in 0..side {
-        raw.push(0);
-        for _ in 0..side * 3 {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            raw.push(state as u8);
-        }
-    }
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
-    z.write_all(&raw).unwrap();
-    let mut header = Vec::new();
-    header.extend(side.to_be_bytes());
-    header.extend(side.to_be_bytes());
-    header.extend([8, 2, 0, 0, 0]);
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    chunk(&mut png, b"IHDR", &header);
-    chunk(&mut png, b"IDAT", &z.finish().unwrap());
-    chunk(&mut png, b"IEND", &[]);
-    std::fs::write(path, png).unwrap();
-}
 
 #[test]
 fn the_watcher_starts_while_the_first_builds_pictures_still_encode() {
@@ -68,4 +26,41 @@ fn the_watcher_starts_while_the_first_builds_pictures_still_encode() {
         "the watcher started only after the picture batch; stderr:\n{}",
         joined(&watched.stderr)
     );
+}
+
+/// A save while the pictures encode reads their size from the scan's own
+/// record and leaves colour and blur to the background, as the app's watcher
+/// does: decoding every picture again in front of the save is the cost a
+/// served watch exists to avoid.
+#[test]
+fn a_save_during_the_picture_batch_decodes_no_picture() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let site = std::fs::canonicalize(root.path()).unwrap().join("site");
+    std::fs::create_dir_all(site.join("media")).unwrap();
+    let mut body = String::from("# Home\n\n");
+    for i in 0..4 {
+        noise_png(&site.join(format!("media/n{i}.png")), 2000, 0x85EB_CA6B + i);
+        body.push_str(&format!("![n{i}](media/n{i}.png)\n\n"));
+    }
+    std::fs::write(site.join("index.md"), &body).unwrap();
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_moss-cli"));
+    command.arg("build").arg(&site).args(["--serve", "--watch", "--no-plugins"]).env("MOSS_LOG_LEVEL", "debug");
+    let watched = spawn_piped(command, moss_home.path());
+    wait_for_line(&watched.stderr, "File watcher active", Duration::from_secs(300))
+        .unwrap_or_else(|| panic!("the watcher never started; stderr:\n{}", joined(&watched.stderr)));
+    let opened = watched.stderr_len();
+    std::fs::write(site.join("index.md"), format!("{body}Saved.\n")).unwrap();
+    wait_for_line(&watched.stderr, "trigger=content", Duration::from_secs(120))
+        .unwrap_or_else(|| panic!("the save never rebuilt; stderr:\n{}", joined(&watched.stderr)));
+
+    let lines = watched.stderr.lock().unwrap()[opened..].to_vec();
+    let save = lines.iter().position(|line| line.contains("trigger=content")).unwrap();
+    assert!(
+        !lines[..save].iter().any(|line| line.contains("Image conversion complete")),
+        "the batch ended before the save; nothing was tested"
+    );
+    let decoded: Vec<_> = lines[..save].iter().filter(|line| line.contains("Media meta cache miss for")).collect();
+    assert!(decoded.is_empty(), "the save decoded pictures the background is encoding: {decoded:?}");
 }

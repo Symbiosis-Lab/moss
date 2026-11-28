@@ -287,6 +287,41 @@ fn the_collector_removes_a_gone_folders_stores_and_keeps_the_rest() {
 }
 
 #[test]
+fn a_disk_short_of_room_takes_gone_stores_before_their_grace_longest_unused_first() {
+    let w = World::new();
+    let stores = w.stores(volume_a);
+    let (a, b, kept) = (w.folder("a"), w.folder("b"), w.folder("kept"));
+    let [a_store, b_store, kept_store] = [&a, &b, &kept].map(|f| stores.resolve(f).unwrap());
+    for store in [&a_store, &b_store, &kept_store] {
+        mark(store);
+    }
+    // The store the listing gives last is the one unused longest, so the order
+    // cannot come from the listing.
+    let listed: Vec<_> = std::fs::read_dir(&stores.record_root).unwrap().flatten().map(|e| e.path()).collect();
+    let (older, newer) = if listed.iter().position(|p| *p == a_store.record_dir) > listed.iter().position(|p| *p == b_store.record_dir) {
+        (&a_store, &b_store)
+    } else {
+        (&b_store, &a_store)
+    };
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::open(older.record_dir.join(RECORD)).unwrap().set_modified(hour_ago).unwrap();
+    std::fs::remove_dir_all(&a).unwrap();
+    std::fs::remove_dir_all(&b).unwrap();
+    let grace = std::time::Duration::from_secs(30 * 24 * 3600);
+
+    assert_eq!(stores.collect_within(grace, &|| false).unwrap(), 0, "with room, a gone store waits out its grace");
+    let room_after = std::cell::Cell::new(1u32);
+    let short = || room_after.replace(room_after.get().saturating_sub(1)) > 0;
+    assert_eq!(stores.collect_within(grace, &short).unwrap(), 1, "the sweep stops once there is room");
+    assert!(!older.cache_dir.exists(), "the store unused longest goes first");
+    assert!(marked(newer));
+
+    assert_eq!(stores.collect_within(grace, &|| true).unwrap(), 1);
+    assert!(!newer.cache_dir.exists());
+    assert!(marked(&kept_store), "a folder that is still there keeps its store however short the disk");
+}
+
+#[test]
 fn a_cache_written_for_a_folder_that_never_came_goes_after_a_day() {
     let w = World::new();
     let stores = w.stores(volume_a);
@@ -411,4 +446,113 @@ fn a_known_folder_answers_while_another_folder_is_still_resolving() {
     release.send(()).unwrap();
     assert!(slow.join().unwrap().is_ok());
     assert_eq!(answered, Some(known_store.record_dir), "the known folder waited for another folder's resolve");
+}
+
+/// `store`'s build output with generations `ids`, each one 1000-byte file, the
+/// last of them current, staging present, and the size a seal would record.
+fn sealed_store(store: &FolderStore, ids: &[&str]) {
+    let build = store.cache_dir.join("build");
+    let gens = build.join("generations");
+    for id in ids {
+        let dir = gens.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), vec![b'x'; 1000]).unwrap();
+        let files = std::collections::HashMap::from([("index.html".to_string(), "100644:x".to_string())]);
+        crate::build::store_gc::WholeGeneration::record(&dir, id, &files, &Default::default()).unwrap().save(&gens);
+    }
+    std::fs::write(build.join("current.generation"), ids.last().unwrap()).unwrap();
+    std::fs::create_dir_all(build.join("staging")).unwrap();
+    std::fs::write(build.join("staging").join("index.html"), "x").unwrap();
+    crate::build::store_gc::record_store_size(&build);
+}
+
+fn generations(store: &FolderStore) -> Vec<String> {
+    let mut ids = crate::build::store_gc::list_generations(&store.cache_dir.join("build").join("generations"));
+    ids.sort();
+    ids
+}
+
+#[test]
+fn over_budget_a_live_store_keeps_only_its_current_generation_and_stage() {
+    let w = World::new();
+    let _home = crate::infra::home::thread_moss_home(&w.tmp.path().join("home"));
+    let stores = w.stores(volume_a);
+    let store = stores.resolve(&w.folder("live")).unwrap();
+    sealed_store(&store, &["a", "b", "c"]);
+
+    assert_eq!(stores.trim_live(10_000).unwrap(), 0, "under budget nothing goes");
+    assert_eq!(generations(&store), ["a", "b", "c"]);
+    assert_eq!(stores.trim_live(1).unwrap(), 1);
+    assert_eq!(generations(&store), ["c"]);
+    assert!(store.cache_dir.join("build/staging/index.html").exists());
+    assert_eq!(crate::build::store_gc::recorded_store_size(&store.cache_dir.join("build")), Some(2000), "the size is recorded again");
+}
+
+#[test]
+fn a_store_whose_folder_is_building_keeps_its_generations() {
+    let w = World::new();
+    let _home = crate::infra::home::thread_moss_home(&w.tmp.path().join("home"));
+    let stores = w.stores(volume_a);
+    let folder = w.folder("building");
+    let store = stores.resolve(&folder).unwrap();
+    sealed_store(&store, &["a", "b"]);
+
+    let build = crate::infra::folder_lock::try_acquire_named(&folder, "build").unwrap().unwrap();
+    assert_eq!(stores.trim_live(1).unwrap(), 0);
+    assert_eq!(generations(&store), ["a", "b"]);
+    drop(build);
+    assert_eq!(stores.trim_live(1).unwrap(), 1);
+}
+
+#[test]
+fn a_store_a_publish_has_pinned_keeps_its_generations() {
+    let w = World::new();
+    let _home = crate::infra::home::thread_moss_home(&w.tmp.path().join("home"));
+    let stores = w.stores(volume_a);
+    let folder = w.folder("publishing");
+    let store = stores.resolve(&folder).unwrap();
+    sealed_store(&store, &["a", "b"]);
+
+    let pin = crate::infra::folder_lock::hold_publish_pin(&folder).unwrap();
+    assert_eq!(stores.trim_live(1).unwrap(), 0);
+    assert_eq!(generations(&store), ["a", "b"]);
+    drop(pin);
+    assert_eq!(stores.trim_live(1).unwrap(), 1);
+}
+
+#[test]
+fn a_store_whose_folder_has_a_serve_owner_is_not_evicted() {
+    let w = World::new();
+    let _home = crate::infra::home::thread_moss_home(&w.tmp.path().join("home"));
+    let stores = w.stores(volume_a);
+    let folder = w.folder("served");
+    let store = stores.resolve(&folder).unwrap();
+    sealed_store(&store, &["a", "b"]);
+
+    let owner = crate::infra::folder_lock::lock_path_named(&folder, "owner").unwrap();
+    std::fs::create_dir_all(owner.parent().unwrap()).unwrap();
+    std::fs::write(&owner, "").unwrap();
+    assert_eq!(stores.trim_live(1).unwrap(), 0);
+    assert_eq!(generations(&store), ["a", "b"]);
+}
+
+#[test]
+fn the_store_unused_longest_is_trimmed_before_a_more_recent_one() {
+    let w = World::new();
+    let _home = crate::infra::home::thread_moss_home(&w.tmp.path().join("home"));
+    let stores = w.stores(volume_a);
+    let (x, y) = (stores.resolve(&w.folder("x")).unwrap(), stores.resolve(&w.folder("y")).unwrap());
+    for store in [&x, &y] {
+        sealed_store(store, &["a", "b", "c"]);
+    }
+    // The listing gives the older one last, so the order cannot come from it.
+    let listed: Vec<_> = std::fs::read_dir(&stores.record_root).unwrap().flatten().map(|e| e.path()).collect();
+    let (older, newer) = if listed.iter().position(|p| *p == x.record_dir) > listed.iter().position(|p| *p == y.record_dir) { (&x, &y) } else { (&y, &x) };
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::open(older.record_dir.join(RECORD)).unwrap().set_modified(hour_ago).unwrap();
+
+    // 8000 recorded; one store trimmed leaves 6000.
+    assert_eq!(stores.trim_live(6000).unwrap(), 1);
+    assert_eq!(generations(older), ["c"]);
+    assert_eq!(generations(newer), ["a", "b", "c"]);
 }

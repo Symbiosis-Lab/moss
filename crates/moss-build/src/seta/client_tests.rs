@@ -150,10 +150,6 @@ impl Received {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 
-    pub(crate) fn body_json(&self) -> serde_json::Value {
-        serde_json::from_slice(&self.body).unwrap_or_else(|e| panic!("{} {}: body is not JSON: {e}", self.method, self.path_and_query))
-    }
-
     /// The key that signed this request, checked as seta's middleware checks
     /// it: a v2 header whose signature covers the method, path and query, and
     /// body this server received. Panics with the reason when it does not.
@@ -1245,17 +1241,17 @@ fn unknown_403_bodies_are_not_site_limit_reached() {
 const CAP_SENTENCE: &str = "This folder is over the 1 GB limit. Remove some files and try again.";
 const SUPERSEDED_SENTENCE: &str = "Another publish of this site started after this one. Publish again.";
 
-async fn failed_sync(status: usize, body: &'static str) -> SetaError {
+async fn failed_open(status: usize, body: &'static str) -> SetaError {
     let server = StandIn::json(status, body).await;
     MossSetaClient::with_identity_and_url(&test_identity(), &server.url())
-        .sync_manifest("s1", &Default::default(), &Default::default(), "g1")
+        .open_deploy("s1", &Default::default(), &Default::default(), false)
         .await
         .expect_err("a refusal is an error")
 }
 
 #[tokio::test]
 async fn a_storage_cap_413_is_storage_cap_exceeded_and_shows_the_server_sentence() {
-    let err = failed_sync(
+    let err = failed_open(
         413,
         r#"{"code":"storage_cap_exceeded","error":"This folder is over the 1 GB limit. Remove some files and try again.","cap_bytes":1073741824,"site_bytes":1586736868}"#,
     )
@@ -1281,7 +1277,7 @@ const UPDATE_BODY: &str = r#"{"code":"update_required","min_version":"0.16.0","m
 
 #[tokio::test]
 async fn a_410_update_required_is_typed_with_its_version_and_shows_both() {
-    let err = failed_sync(410, UPDATE_BODY).await;
+    let err = failed_open(410, UPDATE_BODY).await;
     assert!(
         matches!(&err, SetaError::UpdateRequired { min_version: Some(v), message } if v == "0.16.0" && message == "Update moss to publish."),
         "{err:?}"
@@ -1292,14 +1288,14 @@ async fn a_410_update_required_is_typed_with_its_version_and_shows_both() {
 #[tokio::test]
 async fn a_410_without_the_update_code_stays_an_api_error() {
     for body in [r#"{"code":"gone","message":"Gone."}"#, "", r#"{"message":"Update moss to publish."}"#] {
-        let err = failed_sync(410, body).await;
+        let err = failed_open(410, body).await;
         assert!(matches!(err, SetaError::Api { status: 410, .. }), "{body}: {err:?}");
     }
 }
 
 #[tokio::test]
 async fn an_update_required_code_on_another_status_stays_an_api_error() {
-    let err = failed_sync(400, UPDATE_BODY).await;
+    let err = failed_open(400, UPDATE_BODY).await;
     assert!(matches!(err, SetaError::Api { status: 400, .. }), "{err:?}");
 }
 
@@ -1311,7 +1307,7 @@ fn update_required_without_a_version_shows_only_the_message() {
 
 #[tokio::test]
 async fn a_superseded_409_is_deploy_superseded_and_shows_the_server_sentence() {
-    let err = failed_sync(
+    let err = failed_open(
         409,
         r#"{"code":"deploy_superseded","error":"Another publish of this site started after this one. Publish again."}"#,
     )
@@ -1324,9 +1320,9 @@ async fn a_superseded_409_is_deploy_superseded_and_shows_the_server_sentence() {
 /// chunked upload's offset-resync 409 keeps its own handling.
 #[tokio::test]
 async fn an_uncoded_413_or_409_stays_an_api_error() {
-    let err = failed_sync(413, r#"{"error":"Payload too large"}"#).await;
+    let err = failed_open(413, r#"{"error":"Payload too large"}"#).await;
     assert!(matches!(&err, SetaError::Api { status: 413, .. }), "{err:?}");
-    let err = failed_sync(409, r#"{"error":"offset mismatch"}"#).await;
+    let err = failed_open(409, r#"{"error":"offset mismatch"}"#).await;
     assert!(matches!(&err, SetaError::Api { status: 409, .. }), "{err:?}");
     assert!(parse_coded_refusal(409, r#"{"code":"storage_cap_exceeded","error":"x","cap_bytes":1}"#).is_none());
 }
@@ -1504,15 +1500,18 @@ signed_call! {
     assign_domain_is_signed: "PUT" "/api/domains/example.com/assign" => |c| c.assign_domain("example.com", "s1");
     get_domain_status_is_signed: "GET" "/api/domains/example.com/status" => |c| c.get_domain_status_for_host("example.com");
     register_site_is_signed: "POST" "/api/sites" => |c| c.register_site("s1");
-    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), &[("a.html".to_string(), 1)].into(), "g1");
-    upload_file_is_signed: "PUT" "/api/sites/s1/files/docs%2Fa%20b.html" => |c| c.upload_file("s1", "docs/a b.html", b"<p>".to_vec(), "g1", None);
+    open_deploy_is_signed: "POST" "/api/sites/s1/deploys" => |c| c.open_deploy("s1", &[("a.html".to_string(), "h".to_string())].into(), &[("a.html".to_string(), 1)].into(), false);
+    send_to_deploy_is_signed: "POST" "/api/sites/s1/deploys/d%2F1/files" => |c| c.send_to_deploy("s1", "d/1", &[("h".to_string(), b"<p>".to_vec())]);
+    commit_deploy_is_signed: "POST" "/api/sites/s1/deploys/d1/commit" => |c| c.commit_deploy("s1", "d1");
     upload_symlink_is_signed: "PUT" "/api/sites/s1/files/latest" => |c| c.upload_symlink("s1", "latest", "v2".into(), "g1");
     list_upload_sessions_is_signed: "GET" "/api/sites/s1/uploads?generation_id=g1" => |c| c.list_upload_sessions("s1", "g1");
-    commit_sync_is_signed: "POST" "/api/sites/s1/commit" => |c| c.commit_sync("s1", &[("a.html".to_string(), "h".to_string())].into(), "g1");
     live_generation_is_signed: "GET" "/api/sites/s1/generation" => |c| c.live_generation("s1");
     list_site_domains_is_signed: "GET" "/api/sites/s1/domains" => |c| c.list_site_domains("s1");
     pull_site_data_is_signed: "GET" "/api/sites/s1/data" => |c| c.pull_site_data("s1");
     pull_events_is_signed: "GET" "/api/sites/s1/events?since=5&limit=10" => |c| c.pull_events("s1", 5, 10);
+    pull_subscriber_events_is_signed: "GET" "/api/sites/s1/subscriber-events?since=5&limit=10" => |c| c.pull_subscriber_events("s1", 5, 10);
+    pull_comment_records_is_signed: "GET" "/api/sites/s1/comment-records?since=5&limit=10&pending=3,4" => |c| c.pull_comment_records("s1", 5, 10, &[3, 4]);
+    pull_bookings_is_signed: "GET" "/sites/s1/bookings?since=5&limit=10" => |c| c.pull_bookings("s1", 5, 10);
 }
 
 /// A JSON body is signed as the bytes sent, so seta reads the same document.
@@ -1586,4 +1585,16 @@ fn an_error_with_a_detail_keeps_it() {
     let body = r#"{"error":"key_shared","detail":"this folder's key also publishes second-site"}"#;
     assert_eq!(extract_api_error_message(body), "key_shared: this folder's key also publishes second-site");
     assert_eq!(extract_api_error_message(r#"{"error":"forbidden"}"#), "forbidden");
+}
+
+#[tokio::test]
+async fn delete_json_sends_a_signed_delete_and_reads_the_answer() {
+    let server = StandIn::json(200, r#"{"removed":true}"#).await;
+    let identity = test_identity();
+    let client = MossSetaClient::with_identity_and_url(&identity, &server.url());
+    let answer: serde_json::Value = client.delete_json("/api/sites/s1/newsletter/connection").await.unwrap();
+    assert_eq!(answer["removed"], true);
+    let seen = server.requests();
+    assert_eq!((seen[0].method.as_str(), seen[0].path_and_query.as_str()), ("DELETE", "/api/sites/s1/newsletter/connection"));
+    assert_eq!(seen[0].signer(), identity.pubkey);
 }

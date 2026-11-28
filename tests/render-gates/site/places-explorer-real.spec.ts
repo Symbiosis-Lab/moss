@@ -6,7 +6,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-real.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function gotoReady(page: Page, search = "", viewport: { width: number; height: number } = { width: 1280, height: 800 }): Promise<void> {
   await page.setViewportSize(viewport);
@@ -152,15 +152,18 @@ test("the breadcrumb legibility floor targets the last ancestor segment, on the 
   await gotoReady(page);
   const current = page.locator("header .breadcrumb-current");
   await expect(current).toHaveCount(1);
-  const currentShrink = await current.evaluate((el) => getComputedStyle(el).flexShrink);
-  expect(currentShrink, "the forced-visible current crumb must not get the ancestor's legibility floor").not.toBe("1");
+  // The parent rule's factor in site.css; engines serialize it as "1e+06" or "1000000".
+  const PARENT_SHRINK = 1e6;
+  const shrink = (el: Element) => Number(getComputedStyle(el).flexShrink);
+  const currentShrink = await current.evaluate(shrink);
+  expect(currentShrink, "the forced-visible current crumb must not get the ancestor's legibility floor").not.toBe(PARENT_SHRINK);
 
   await page.goto("places/kyoto/", { waitUntil: "domcontentloaded" });
   const ancestors = page.locator("header a.breadcrumb-segment");
   const count = await ancestors.count();
   expect(count, "a nested page keeps at least one ancestor crumb").toBeGreaterThan(0);
   const lastAncestor = ancestors.nth(count - 1);
-  expect(await lastAncestor.evaluate((el) => getComputedStyle(el).flexShrink)).toBe("1");
+  expect(await lastAncestor.evaluate(shrink)).toBe(PARENT_SHRINK);
   expect(await lastAncestor.evaluate((el) => getComputedStyle(el).minInlineSize)).not.toBe("0px");
 });
 

@@ -42,6 +42,7 @@ function fakePreview() {
     getActivePage: vi.fn(() => ({ url: 'http://x/a/', sourceFile: 'a.md' })),
     getCurrentUrl: vi.fn(() => 'http://x/a/'),
     navigateToPage: vi.fn(),
+    isNavigationPending: vi.fn(() => false),
     markPendingEcho: vi.fn(),
     armNewPageWait: vi.fn(),
     claimScrollForEditor: vi.fn(),
@@ -171,6 +172,20 @@ describe('EditorLink', () => {
     await vi.waitFor(() => expect(emitted).toEqual([['editor:load-source', { sourcePath: '/site/a.md', isRoot: false, takeover: null, pending: null }]]));
     expect(l.openNode()).toEqual({ sourcePath: '/site/a.md', isRoot: false, takeover: null });
     expect(engine.resolvePageSource).toHaveBeenCalledOnce();
+  });
+
+  test("the editor's echo of the preview's page leaves a load the preview started since; any other follow navigates", () => {
+    const { preview } = link();
+    preview.isNavigationPending.mockReturnValue(true);
+    host.bus.emit('editor:navigate-preview', { urlPath: '/', echo: true });
+    expect(preview.markPendingEcho).not.toHaveBeenCalled();
+    expect(preview.navigateToPage).not.toHaveBeenCalled();
+
+    host.bus.emit('editor:navigate-preview', { urlPath: '/b/' });
+    expect(preview.navigateToPage).toHaveBeenLastCalledWith('/b/');
+    preview.isNavigationPending.mockReturnValue(false);
+    host.bus.emit('editor:navigate-preview', { urlPath: '/', echo: true });
+    expect(preview.navigateToPage).toHaveBeenLastCalledWith('/');
   });
 
   test('a double click on another file opens it even with the editor closed', () => {

@@ -56,6 +56,11 @@ pub enum Load {
     /// Fetched by a runtime `import()`. The URL is published to the runtime on
     /// a `data-` attribute, since the source cannot know the content hash.
     Lazy,
+    /// Written into the page as an inline `<script>` at the end of `<header>`,
+    /// with no file: it runs before the first paint, once the stylesheets in
+    /// `<head>` have arrived, and before anything below the masthead is parsed.
+    /// [`ScriptAssets::inline_tags`] builds the block.
+    Inline,
 }
 
 /// One runtime script and the fact that turns it on.
@@ -92,6 +97,15 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
     // <head> on the way out (`preview::iframe_bridge::inject_placeholder_into_head`),
     // so the placeholder is a local working state and a stranger never sees one.
     // It replaced `thumb-swap`, which did have a row here.
+    // Whether the theme lays the masthead out itself, decided before the float
+    // layout in site.css can paint under it. theme.js re-reads it on every layout.
+    SiteScript {
+        name: "nav-owned",
+        dev_path: "src/assets/js/nav-owned.js",
+        source: || include_str!("../../assets/js/nav-owned.js"),
+        gate: |_| true,
+        load: Load::Inline,
+    },
     SiteScript {
         name: "preview",
         dev_path: "src/assets/js/preview.js",
@@ -136,10 +150,10 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         load: Load::Shell { defer: false },
     },
     SiteScript {
-        name: "hero-ends",
-        dev_path: "src/assets/js/hero/hero-ends.js",
-        source: || include_str!("../../assets/js/hero/hero-ends.js"),
-        gate: |a| a.hero_ends,
+        name: "event-ends",
+        dev_path: "src/assets/js/event-ends.js",
+        source: || include_str!("../../assets/js/event-ends.js"),
+        gate: |a| a.event_ends,
         load: Load::Shell { defer: false },
     },
     SiteScript {
@@ -167,7 +181,7 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         name: "forms",
         dev_path: "src/assets/js/forms.js",
         source: || include_str!("../../assets/js/forms.js"),
-        gate: |a| a.forms,
+        gate: |a| a.forms || a.subscribe,
         load: Load::Shell { defer: false },
     },
     SiteScript {
@@ -273,6 +287,7 @@ impl ScriptAssets {
             "'{name}' is a lazy chunk — it reaches the browser through the runtime's \
              import(), never a <script src>"
         );
+        assert!(row.0.load != Load::Inline, "'{name}' is inline and has no file for a <script src>");
         tag_for(row.0, &row.2, assets, resolver)
     }
 
@@ -292,6 +307,16 @@ impl ScriptAssets {
             .iter()
             .filter(|(script, _, _)| matches!(script.load, Load::Shell { .. }))
             .map(|(script, _, hash)| tag_for(script, hash, assets, resolver))
+            .collect()
+    }
+
+    /// The inline `<script>`s the shell places at the end of `<header>`, in
+    /// table order.
+    pub fn inline_tags(&self, assets: &SiteAssets) -> String {
+        self.resolved
+            .iter()
+            .filter(|(script, _, _)| script.load == Load::Inline && (script.gate)(assets))
+            .map(|(_, bytes, _)| format!("<script>{}</script>", String::from_utf8_lossy(bytes).trim_end()))
             .collect()
     }
 
@@ -336,7 +361,7 @@ impl ScriptAssets {
         use crate::build::context::BuildContext;
         use crate::build::manifest::HashBucket;
         for (script, bytes, hash) in &self.resolved {
-            if !(script.gate)(assets) {
+            if script.load == Load::Inline || !(script.gate)(assets) {
                 continue;
             }
             BuildContext::for_render(output_dir, pending)

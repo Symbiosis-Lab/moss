@@ -1,5 +1,9 @@
 use super::*;
 
+fn sorted_by(axis: moss_core::sort::SortAxis) -> moss_core::sort::ResolvedSort {
+    moss_core::sort::ResolvedSort { axis, explicit_order: None }
+}
+
 fn make_doc(url_path: &str, label: &str, date: Option<&str>) -> ParsedDocument {
     ParsedDocument {
         url_path: url_path.to_string(),
@@ -22,7 +26,6 @@ pub(crate) fn make_folder_doc(url_path: &str, label: &str) -> ParsedDocument {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     }
@@ -331,7 +334,6 @@ fn explicit_order_listing_omits_card_dates() {
     folder.direct_children_sort = Some(ResolvedSort {
         axis: SortAxis::Date,
         explicit_order: Some(vec!["b".to_string(), "a".to_string()]),
-        series_default: true,
     });
     let a = make_doc("journal/a.html", "A", Some("2025-01-01"));
     let b = make_doc("journal/b.html", "B", Some("2025-03-01"));
@@ -373,7 +375,6 @@ fn explicit_order_listing_omits_card_dates() {
     docs_ctl[0].direct_children_sort = Some(ResolvedSort {
         axis: SortAxis::Date,
         explicit_order: None,
-        series_default: false,
     });
     let out_ctl = resolve_markers(
         &marker,
@@ -1985,7 +1986,6 @@ fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     };
@@ -2075,14 +2075,14 @@ fn children_style_list_always_emits_data_layout_minimal() {
 }
 
 /// BUG 7 — an explicit `children_group: year` must produce year sections
-/// even under a non-Date sort axis (skip_resort=true), which is what the
+/// even under a non-Date sort axis (no date resort), which is what the
 /// flattened home infers when section-leaf articles carry `weight:`. The
 /// items are NOT pre-sorted by year, so buckets must be stable
 /// (find-or-append, first-appearance order) — one section per year, no
 /// re-sort — and each item must render via `child_list::render` (which
 /// emits the `title`-classed span the minimal CSS needs), not render_child.
 #[test]
-fn year_groups_under_non_date_axis_skip_resort() {
+fn year_groups_under_a_non_date_order() {
     // Incoming order deliberately interleaves years (2024, 2025, 2024) to
     // prove a single 2024 section (not fragmented) and first-appearance
     // ordering (2024 before 2025), NOT date-descending.
@@ -2101,11 +2101,11 @@ fn year_groups_under_non_date_axis_skip_resort() {
         "minimal",
         "year",
         crate::i18n::Language::En,
-        true, // skip_resort — non-Date axis
+        false, // a non-date sort keeps the arrival order on its own
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::Weight),
+        Some(&sorted_by(moss_core::sort::SortAxis::Weight)),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -2164,7 +2164,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
 /// sequence of lectures) — the year-grouped listing leads with the oldest
 /// year, and rows within a year also run oldest-first, the reverse of
 /// `date`'s default. `DateAsc.shows_date()` still triggers the resort
-/// (skip_resort=false), same as plain `Date`.
+/// (the date resort runs), same as plain `Date`.
 #[test]
 fn date_asc_year_groups_lead_with_the_oldest_year() {
     let alpha = make_doc("alpha.html", "Alpha", Some("1924-05-01"));
@@ -2186,7 +2186,7 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::DateAsc),
+        Some(&sorted_by(moss_core::sort::SortAxis::DateAsc)),
         true, &Default::default(), crate::build::inputs::now(),
     );
 
@@ -2282,7 +2282,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::DateAsc),
+        Some(&sorted_by(moss_core::sort::SortAxis::DateAsc)),
         true, &Default::default(), crate::build::inputs::now(),
     );
 
@@ -2302,10 +2302,10 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
     );
 }
 
-/// BUG 7 regression — folders always render FLAT above the year sections
-/// under group=="year" skip_resort; they are never bucketed into a year.
+/// Under group=="year" on a non-date order, folders render flat above the
+/// year sections; they are never bucketed into a year.
 #[test]
-fn year_groups_skip_resort_keeps_folders_flat_above() {
+fn year_groups_under_a_non_date_order_keep_folders_flat_above() {
     let folder = make_folder_doc("sub/index.html", "SubFolder");
     let sub_child = make_doc("sub/child.html", "SubChild", Some("2023-01-01"));
     let alpha = make_doc("alpha.html", "Alpha", Some("2024-05-01"));
@@ -2326,11 +2326,11 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         "minimal",
         "year",
         crate::i18n::Language::En,
-        true,
+        false,
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::Weight),
+        Some(&sorted_by(moss_core::sort::SortAxis::Weight)),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -2355,11 +2355,10 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
     );
 }
 
-/// BUG 7 regression — group=="none" under skip_resort stays a flat list
-/// with NO year-group section wrappers (the new branch is gated on
-/// group=="year").
+/// group=="none" on a non-date order stays a flat list with no year-group
+/// section wrappers.
 #[test]
-fn no_group_skip_resort_stays_flat() {
+fn no_group_under_a_non_date_order_stays_flat() {
     let alpha = make_doc("alpha.html", "Alpha", Some("2024-05-01"));
     let bravo = make_doc("bravo.html", "Bravo", Some("2025-03-01"));
     // Year-only date — the flat path must not lose the "the fix must also
@@ -2377,11 +2376,11 @@ fn no_group_skip_resort_stays_flat() {
         "minimal",
         "none",
         crate::i18n::Language::En,
-        true,
+        false,
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::Weight),
+        Some(&sorted_by(moss_core::sort::SortAxis::Weight)),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -2418,7 +2417,7 @@ fn no_group_skip_resort_stays_flat() {
 
 /// The actual bug this fix exists for (a real site's `Writings/` folder,
 /// 2026-09-14): a `children_style: summary`
-/// folder with an author-chosen `weight:` order (skip_resort=true, axis
+/// folder with an author-chosen `weight:` order (no date resort, axis
 /// Weight, group != "year") interleaved folders and articles before this
 /// fix, because the folder/article partition was only applied on the
 /// Date-axis branch. It must still separate folders above articles with the
@@ -2426,7 +2425,7 @@ fn no_group_skip_resort_stays_flat() {
 /// (folder-before-folder, article-before-article), even though the two are
 /// interleaved in the input.
 #[test]
-fn skip_resort_summary_still_separates_folders_from_articles() {
+fn non_date_summary_still_separates_folders_from_articles() {
     let sub_a = make_folder_doc("collected/index.html", "Collected");
     let sub_b = make_folder_doc("illuminated/index.html", "Illuminated");
     let article_a = make_doc("songs.html", "Songs", Some("1794-01-01"));
@@ -2454,11 +2453,11 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         "summary",
         "none",
         crate::i18n::Language::En,
-        true, // skip_resort — author's weight order
+        false, // a weight sort keeps the arrival order on its own
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::Weight),
+        Some(&sorted_by(moss_core::sort::SortAxis::Weight)),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -2469,7 +2468,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
     let pos_marriage = out.find("Marriage").expect("Marriage missing");
     assert!(
         pos_collected.max(pos_illuminated) < pos_songs.min(pos_marriage),
-        "folders must render above articles even under a weight-sorted skip_resort listing; got: {}",
+        "folders must render above articles even under a weight-sorted listing; got: {}",
         out
     );
     // The caller's weight order survives WITHIN each partition: Collected
@@ -2492,17 +2491,12 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
     );
 }
 
-/// The combination the partition fix quietly repaired on its way past:
-/// `children_style: summary` + `children_group: year` under a non-Date axis
-/// (skip_resort). Before the fix the summary year branch was reachable only
-/// from the Date-sorted arm, so a weight-ordered summary listing that asked
-/// for year sections got none — the articles fell through to the flat,
-/// "already sorted, leave it alone" path and the author's `children_group`
-/// was silently ignored. Buckets are find-or-append, so an interleaved
-/// input yields one section per year in first-appearance order, NOT
+/// `children_style: summary` with `children_group: year` on a weight order
+/// still draws year sections. Buckets are find-or-append, so an interleaved
+/// input yields one section per year in first-appearance order, not
 /// date-descending.
 #[test]
-fn skip_resort_summary_year_still_groups_by_year() {
+fn non_date_summary_year_still_groups_by_year() {
     // 1794, 1789, 1794 — interleaved, so a single 1794 section proves
     // find-or-append rather than a contiguous-run assumption, and
     // 1794-before-1789 proves the caller's order survived.
@@ -2521,11 +2515,11 @@ fn skip_resort_summary_year_still_groups_by_year() {
         "summary",
         "year",
         crate::i18n::Language::En,
-        true, // skip_resort — author's weight order
+        false, // a weight sort keeps the arrival order on its own
         &dir_overrides,
         None,
         None,
-        Some(moss_core::sort::SortAxis::Weight),
+        Some(&sorted_by(moss_core::sort::SortAxis::Weight)),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -2563,7 +2557,9 @@ fn undated_grid_puts_folders_first_then_folds_case() {
     let mao = make_doc("mao.html", "mao", None);
     let scarly = make_doc("scarly.html", "Scarly", None);
 
-    let items = vec![&scarly, &mao, &alpha, &zebra];
+    // Ordered as the listing's caller orders them, by the folder's sort.
+    let title = sorted_by(moss_core::sort::SortAxis::Title);
+    let items = moss_core::sort::sort_by_resolved(&[&scarly, &mao, &alpha, &zebra], &title);
     let all: Vec<&ParsedDocument> = vec![&scarly, &mao, &alpha, &zebra, &zebra_child];
 
     let project = test_project();
@@ -2578,7 +2574,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         &std::collections::HashMap::new(),
         None,
         None,
-        Some(moss_core::sort::SortAxis::Title),
+        Some(&title),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -3126,7 +3122,6 @@ fn trips_folder_note() -> ParsedDocument {
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
             explicit_order: None,
-            series_default: false,
         }),
         ..Default::default()
     }
@@ -3392,6 +3387,7 @@ fn count_listing(style: &str, count: Option<moss_core::frontmatter_union::Childr
     let mut host = make_folder_doc("stage/index.html", "Stage");
     host.children_style = Some(moss_core::Resolved::frontmatter(style.to_string()));
     host.children_count = count;
+    host.source_path = Some("stage/index.md".into());
     let docs = vec![
         host.clone(),
         make_folder_doc("stage/productions/index.html", "Productions"),
@@ -3431,6 +3427,39 @@ fn children_count_text_replaces_the_counter_with_singular_and_plural() {
     assert!(summary.contains(">2 productions<") && summary.contains(">1 production<"), "{summary}");
     let list = count_listing("list", setting());
     assert!(list.contains(">2 productions<") && list.contains(">1 production<"), "{list}");
+}
+
+#[test]
+fn a_body_embed_counts_in_its_host_page_s_children_count() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let mut home = make_folder_doc("index.html", "Home");
+    home.source_path = Some("index.md".into());
+    home.children_count = Some(ChildrenCount("{n} production|{n} productions".into()));
+    let docs = vec![
+        home,
+        make_folder_doc("stage/index.html", "Stage"),
+        make_folder_doc("stage/productions/index.html", "Productions"),
+        make_doc("stage/productions/a.html", "A", None),
+        make_doc("stage/productions/b.html", "B", None),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("grid".into()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker("/stage/", "index.md", &params);
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains(">2 productions<"), "{out}");
+    assert!(!out.contains("articles"), "{out}");
 }
 
 #[test]

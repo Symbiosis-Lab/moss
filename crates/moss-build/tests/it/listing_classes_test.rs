@@ -91,8 +91,7 @@ mod listed_partial {
             }
         }
         seen.sort();
-        // llms.txt writes out the home page's listing, so the row is a line of text there.
-        assert_eq!(seen, ["index.html", "llms.txt", "work/index.html"], "only the listings carry it");
+        assert_eq!(seen, ["index.html", "work/index.html"], "only the listings carry it");
     }
 
     fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -167,7 +166,6 @@ mod listed_partial {
             assert!(hrefs.contains(&"/work/brochure.pdf"), "{page}: the row links to the file: {hrefs:?}");
             assert!(hrefs.contains(&"/work/demo/"), "{page}: the row links to the folder: {hrefs:?}");
         }
-        assert!(site.html("llms.txt").contains("[Brochure](/work/brochure.pdf)"), "llms.txt keeps the row's address");
         assert!(!site.output("work/brochure/index.html").exists() && !site.output("work/demo-row/index.html").exists());
     }
 

@@ -28,8 +28,8 @@ pub enum Verb {
 
 /// Everything the run needs beyond the verb itself. `cwd: None` leaves the
 /// child's working directory unset (inherits the caller's own, matching
-/// today's `stack_install` behavior); `env` is added to, never replacing,
-/// the child's inherited environment.
+/// today's `stack_install` behavior); `env` is added to the slice of moss's
+/// environment a tool may inherit ([`InheritedEnv::Tools`](crate::system::bounded_command::InheritedEnv::Tools)).
 pub struct RunOpts<'a> {
     pub timeout: Duration,
     pub env: &'a [(String, String)],
@@ -56,6 +56,7 @@ pub fn run(home: &StackHome<'_>, verb: Verb, mut opts: RunOpts<'_>) -> Result<Bo
 
     let bin = super::layout::binary_path(home.root, home.stack)?;
     let mut cmd = std::process::Command::new(&bin);
+    crate::system::bounded_command::inherit_env(&mut cmd, crate::system::bounded_command::InheritedEnv::Tools);
     cmd.args(argv);
     if let Some(cwd) = opts.cwd {
         cmd.current_dir(cwd);

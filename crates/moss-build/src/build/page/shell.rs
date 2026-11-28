@@ -49,23 +49,6 @@ impl ShellRegistry {
         }
     }
 
-    /// Did the author write `layout: article` on this page?
-    ///
-    /// This is the *authored intent*, not the resolved template. It is a much
-    /// narrower question than `select_shell_type(..) == Article`, which is
-    /// also true of every ordinary nested page that said nothing at all.
-    ///
-    /// Ask this — never the resolved `ShellType` — when the behaviour should
-    /// follow from the author calling the page a piece. Series navigation is the
-    /// case that forced the distinction: a folder index is skipped by
-    /// its siblings' prev/next chain *because it is a doorway*, and `layout:
-    /// article` is how an author says this particular one is a step instead. If
-    /// that had been keyed on the resolved template, every nested folder index
-    /// on an organized site would have become a step by accident.
-    pub fn is_article_layout(doc: &ParsedDocument) -> bool {
-        doc.layout.as_deref() == Some("article")
-    }
-
     /// Determines the appropriate template type for a given document and context.
     ///
     /// Adaptive selection based on site mode:
@@ -92,7 +75,7 @@ impl ShellRegistry {
             Some(doc) => {
                 // Frontmatter override wins
                 if doc.layout.as_deref() == Some("page") { return ShellType::Page; }
-                if Self::is_article_layout(doc) { return ShellType::Article; }
+                if moss_core::page::site_page::SitePage::is_article_layout(doc) { return ShellType::Article; }
                 // Homepage and folder index files are always Pages (unless the
                 // layout override above applies) — the clean Page shell, not
                 // blog-Article chrome.
@@ -113,7 +96,7 @@ impl ShellRegistry {
                     ShellType::Article
                 } else {
                     // Flat mode: nav keywords = Page, everything else = Article
-                    if doc.is_root_level && crate::build::components::nav::is_nav_keyword(&doc.clean_stem) {
+                    if doc.is_root_level && moss_core::page::nav::is_nav_keyword(&doc.clean_stem) {
                         ShellType::Page
                     } else {
                         ShellType::Article
@@ -300,6 +283,16 @@ pub struct ShellVars {
     /// than one var per script because every gate is SITE-level: the set is
     /// identical on every page of a build.
     pub runtime_js_tags: String,
+    /// The inline scripts placed at the end of `<header>`, after the masthead
+    /// (`emit::scripts::ScriptAssets::inline_tags`), so they run before the
+    /// first paint. Inside it, not after it: `header:has(+ .moss-hero)` and a
+    /// theme's own `header + …` need the next sibling. Site-level, like
+    /// `runtime_js_tags`.
+    pub inline_js: String,
+    /// The page links a stylesheet of its own (the theme's or the page's), so
+    /// `.nav-content` carries `data-nav-themed` and keeps the flex row that
+    /// stylesheet was written against, out of the plain name's float.
+    pub nav_themed: bool,
     /// The full-screen viewer's markup (`media_collection::lightbox_html`),
     /// set only on a page that has a picture the viewer opens; empty elsewhere. Dropped in
     /// just before the runtime scripts, which `fullscreen.js` finds it through.
@@ -378,9 +371,11 @@ impl ShellProcessor {
             String::new()
         } else {
             format!(
-                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\"{}>\n                {}\n            </div>\n        </nav>{}\n    </header>",
                 vars.header_attrs,
-                vars.navigation
+                if vars.nav_themed { " data-nav-themed" } else { "" },
+                vars.navigation,
+                vars.inline_js,
             )
         };
 
@@ -408,7 +403,7 @@ impl ShellProcessor {
         };
         let values: std::collections::HashMap<&'static str, String> = std::collections::HashMap::from([
             // Escaped like every other attribute value here. The allowlist in
-            // `resolve_site_default_lang` is what actually closes this today;
+            // `resolve_site_lang` is what actually closes this today;
             // this is the second lock, so a future producer that reaches
             // `<html lang>` without passing the allowlist cannot break out of
             // the attribute.

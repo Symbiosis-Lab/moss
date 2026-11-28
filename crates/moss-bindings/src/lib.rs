@@ -16,6 +16,11 @@ uniffi::setup_scaffolding!();
 pub struct Site {
     inputs: SiteInputs,
     css: String,
+    bundle: SiteBundle,
+    pages: page::site_page::SitePages,
+    /// Every page's source by path, as `set_texts` received it; a listing's
+    /// cards read their excerpts and pictures from it.
+    texts: std::collections::HashMap<String, String>,
 }
 
 /// moss's page stylesheet, kept equal to the build's by a moss-build test.
@@ -25,7 +30,15 @@ impl Site {
     pub fn from_json(site_json: &str) -> Result<Self, String> {
         let bundle: SiteBundle = serde_json::from_str(site_json).map_err(|e| e.to_string())?;
         let css = format!("{PAGE_CSS}\n{}", bundle.theme_css);
-        Ok(Self { inputs: bundle.inputs(), css })
+        Ok(Self { inputs: bundle.clone().inputs(), css, bundle, pages: Default::default(), texts: Default::default() })
+    }
+
+    /// Replace every page's text, by site-relative path, and derive the site's
+    /// pages from them once. `root_name` is the site folder's own name.
+    pub fn set_texts(&mut self, texts_json: &str, root_name: &str) -> Result<(), String> {
+        self.texts = serde_json::from_str(texts_json).map_err(|e| e.to_string())?;
+        self.pages = page::site_page::site_pages(&self.texts, &self.bundle, root_name);
+        Ok(())
     }
 
     /// The effective schema used by this site's checks.
@@ -50,10 +63,28 @@ impl Site {
             .expect("note paths are strings")
     }
 
+    /// moss's page stylesheet, then the site's theme so the theme wins. It is the same for every
+    /// page, so `preview` leaves it out and the host adds it once.
+    pub fn stylesheet(&self) -> &str {
+        &self.css
+    }
+
     /// A full document, its title, and the renderer's diagnostics. Use `check` for validation.
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
-        let page = page::render_page(path, text, &self.inputs);
-        let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
+        let mut page = page::render_page(path, text, &self.inputs);
+        if let Some(heading) = self.pages.folder_heading(path, moss_core::frontmatter::body(text)).filter(|h| !h.is_empty()) {
+            page.body_html = format!("{heading}\n{}", page.body_html);
+        }
+        let typesetting = moss_core::frontmatter::read_page(text).0.typesetting;
+        if let Some(listing) = self.pages.own_listing(path, &self.texts, &self.inputs, typesetting.as_deref()) {
+            page.body_html.push_str(&listing);
+        }
+        let url = |url_path: &str| moss_core::resolve::output_url::to_pretty_url(url_path);
+        if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {
+            page.body_html.push_str(&nav);
+        }
+        let masthead = self.pages.masthead(path).unwrap_or_default();
+        let html = page::preview_document(&page, &masthead, &self.inputs.lang, base_href);
         serde_json::to_string(&page::PagePreview {
             revision: page::content_hash(text.as_bytes()),
             html,

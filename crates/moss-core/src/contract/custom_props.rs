@@ -416,6 +416,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "A picture in `.moss/theme/` (`url(\"card.jpg\")`) filling the link-preview card's full height at its inline end, as wide as its shape at 630px, at most 540px (cropped about its middle beyond that). A horizontal title card only; a page's own picture still makes its own card.",
     },
     CustomProp {
+        name: "--moss-share-card-logo",
+        owner: ":root",
+        default: "none",
+        description: "A logo in `.moss/theme/` (`url(\"logo.svg\")`, SVG or a picture) that signs the link-preview card in place of the site name: at the card's foot, at most 112px high and 480px wide (48px high on a card that frames the page's picture). A vertical card keeps the site name.",
+    },
+    CustomProp {
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",

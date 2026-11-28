@@ -16,7 +16,7 @@ fn term_identity<'a>(doc: &'a ParsedDocument, index: &'a TermIndex) -> Option<&'
         return TermKey::parse(key).map(|term| term.plain());
     }
     let key = doc.url_path.strip_suffix("/index.html")?;
-    if index.sites.contains_key(key) {
+    if index.sites().contains_key(key) {
         return TermKey::parse(key).map(|term| term.plain());
     }
     index.kind_for(key).map(|(kind, _)| kind.key.as_str())

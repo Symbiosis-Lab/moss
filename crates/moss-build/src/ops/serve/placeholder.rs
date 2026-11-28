@@ -291,8 +291,8 @@ mod tests {
         // None even if the AssetRegistry has it as Pending. This lets ServeDir
         // serve the real file with Range request support (critical for video).
         //
-        // This catches the race where registry.clear() + set_pending() during a
-        // rebuild marks already-converted videos as Pending.
+        // A rebuild promises every video again, so an already-converted one is
+        // Pending in the registry while its file is on disk.
         use crate::types::assets::AssetRegistry;
         use tempfile::TempDir;
 

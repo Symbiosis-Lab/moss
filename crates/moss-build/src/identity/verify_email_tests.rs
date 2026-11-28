@@ -16,7 +16,7 @@ pub(crate) struct Seta {
     /// Replies to the next sign-in requests, in order, as (status line,
     /// extra header lines, body); an empty queue answers 200.
     sign_in_replies: Arc<Mutex<std::collections::VecDeque<Reply>>>,
-    /// The body of an unverified key's 403 on `/sync`.
+    /// The body of an unverified key's 403 on opening a deploy.
     sync_refusal: Arc<Mutex<&'static str>>,
 }
 
@@ -66,10 +66,10 @@ impl Seta {
                         410 => ("410 Gone", r#"{"error":"Session expired"}"#.to_string()),
                         _ => ("500 Internal Server Error", r#"{"error":"upstream down"}"#.to_string()),
                     }
-                } else if path.ends_with("/sync") {
+                } else if path.ends_with("/deploys") {
                     // A key no sign-in has verified is not the site's owner.
                     if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
-                        ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
+                        ("200 OK", r#"{"deploy":"d0d0d0d0d0d0d0d0","state":"live","needed":[],"live_generation":"d0d0d0d0d0d0d0d0"}"#.to_string())
                     } else {
                         ("403 Forbidden", sr.lock().unwrap().to_string())
                     }
@@ -116,9 +116,14 @@ impl Seta {
 }
 
 /// A folder with a fresh identity, and `MOSS_SETA_URL` pointing at the mock.
+///
+/// It also holds the publish latch's test lock, taken before the environment
+/// lock as every publishing test does: a publish here widens the encode core
+/// budget, which the encode tests that hold that lock pin.
 pub(crate) struct Folder {
     pub(crate) dir: tempfile::TempDir,
     _env: std::sync::MutexGuard<'static, ()>,
+    _publishing: std::sync::MutexGuard<'static, ()>,
     prev_url: Option<String>,
 }
 
@@ -133,12 +138,13 @@ impl Drop for Folder {
 
 impl Folder {
     pub(crate) fn new(seta: &Seta) -> Folder {
+        let publishing = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
         let prev_url = std::env::var("MOSS_SETA_URL").ok();
         std::env::set_var("MOSS_SETA_URL", &seta.url);
-        Folder { dir, _env: env, prev_url }
+        Folder { dir, _env: env, _publishing: publishing, prev_url }
     }
 
     fn pubkey(&self) -> String {
@@ -426,7 +432,7 @@ async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
     let identity = crate::identity::Identity::load_for_signing(folder.dir.path()).unwrap();
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &crate::build::site_config::resolve_environment(&folder.dir.path().to_string_lossy()));
     let sync = || async {
-        crate::deploy::profile::sync(client.sync_manifest("my-site", &Default::default(), &Default::default(), "gen")).await.map(|_| ())
+        client.open_deploy("my-site", &Default::default(), &Default::default(), false).await.map(|_| ()).map_err(crate::deploy::profile::profiled_refusal)
     };
 
     let err = sync().await.expect_err("not signed in");

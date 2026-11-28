@@ -20,12 +20,8 @@ use crate::build::cache::ObjectStore;
 
 /// Above this size a regular file is recorded by hash only — no blob is kept.
 ///
-/// moss no longer has a fixed byte threshold for the chunked-upload protocol:
-/// `seta::upload_policy::needs_chunking` sizes the routing decision from
-/// measured link throughput, not a constant (see that module's header on why
-/// a fixed number could not survive a 2.7x slower tester one day later). So
-/// this is its own constant rather than a reuse, set to the 20 MB the design
-/// settled on as "one notion of a large file", beside
+/// Its own constant rather than the upload's chunking threshold, which the
+/// server sets per deploy: 20 MB as "one notion of a large file", beside
 /// `crate::build::store_gc::KEEP_GENERATIONS_DEFAULT`.
 pub(crate) const HISTORY_MEDIA_CEILING: u64 = 20 * 1024 * 1024;
 

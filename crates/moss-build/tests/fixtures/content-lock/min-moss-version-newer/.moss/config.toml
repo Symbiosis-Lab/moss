@@ -1,0 +1,6 @@
+schema_version = 7
+min_moss_version = "99.0.0"
+
+[site]
+lang = "en"
+url = "https://example.com/"

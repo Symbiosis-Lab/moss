@@ -11,13 +11,14 @@
  * Fixture: playwright/contents-ruler.config.ts → tests/e2e/helpers/contents-ruler-site.ts
  * Run via: bash scripts/render-gates.sh contents-ruler
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIONS, OPEN_WITH_IMAGE } from '../../e2e/helpers/contents-ruler-site';
 
 const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
+const WIDENED = '/essays/reading/widened/';
 const HOME = '/';
 const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
@@ -225,7 +226,7 @@ for (const [width, height] of [
       }
     });
 
-    test('a scroll up brings the bar beside the ruler without its sections, which return once the ruler fades', async ({ page }) => {
+    test('a scroll up brings the bar beside the ruler without its sections', async ({ page }) => {
       const island = () =>
         page.evaluate(() => {
           const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
@@ -243,36 +244,116 @@ for (const [width, height] of [
       await frames(page);
       await expect.poll(() => isAway(page)).toBe(false);
       await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: false, fits: true });
-
-      // Past the article the ruler fades and the bar has its sections again.
-      await scrollTo(page, 1e6);
-      await expect.poll(() => isAway(page)).toBe(true);
-      await page.evaluate(() => window.scrollBy(0, -120));
-      await frames(page);
-      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: true, fits: true });
-
-      await intoArticle(page);
-      await expect.poll(async () => (await island()).sections).toBe(false);
     });
 
-    test('keyboard focus that brings a faded ruler up takes the bar\'s sections at once and leaves the bar', async ({ page }) => {
-      await scrollTo(page, 1e6);
+    test('keyboard focus brings a faded ruler up, and the island has no sections either way', async ({ page }) => {
+      await scrollTo(page, 0);
       await expect.poll(() => isAway(page)).toBe(true);
-      await page.evaluate(() => window.scrollBy(0, -120));
+      const read = () =>
+        page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+          return { ruler: el.dataset.ruler, sections: el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility() };
+        });
+      expect(await read()).toEqual({ ruler: 'away', sections: false });
+      await page.evaluate(() => document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus({ preventScroll: true }));
       await frames(page);
-      await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
-      // Focus and read in one task, with no scroll and no frame in between.
-      const after = await page.evaluate(async () => {
-        document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus();
-        await Promise.resolve();
-        const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
-        const sections = el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility();
-        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert, sections };
-      });
-      expect(after).toEqual({ ruler: 'on', shown: 'true', inert: false, sections: false });
+      expect(await read()).toEqual({ ruler: 'on', sections: false });
     });
   });
 }
+
+/* Where the contents go is the page's and the window's choice, never the
+   scroll position's: at the foot of the page, the article long past, a scroll
+   up brings the bar, and the contents are still the ruler's. */
+for (const width of [1280, 1440]) {
+  test(`at ${width}px the contents stay beside the article to the foot of the page and the island takes none`, async ({ page }) => {
+    await open(page, width, 900);
+    await intoArticle(page);
+    await scrollTo(page, 1e6);
+    await page.evaluate(() => window.scrollBy(0, -120));
+    await frames(page);
+    await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
+    const state = () => page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+      const box = nav.querySelector('ol')!.getBoundingClientRect();
+      const article = (document.querySelector('main article') ?? document.querySelector('main'))!;
+      return {
+        footer: document.querySelector('footer')!.getBoundingClientRect().top < innerHeight,
+        articleAboveMiddle: article.getBoundingClientRect().bottom < innerHeight / 2,
+        rulerInWindow: !nav.hidden && box.top >= 0 && box.bottom <= innerHeight && box.height > 0,
+        rulerOpacity: getComputedStyle(nav).opacity,
+        ruler: island.dataset.ruler,
+        islandSections: island.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility(),
+      };
+    });
+    // Polled: the ruler fades in over a few frames after the jump.
+    await expect.poll(state).toEqual({
+      footer: true,
+      articleAboveMiddle: true,
+      rulerInWindow: true,
+      rulerOpacity: '1',
+      ruler: 'on',
+      islandSections: false,
+    });
+  });
+}
+
+/* A block the theme widens with CSS alone reaches into the margin as surely as
+   one with `data-width`: while it sits beside the ruler, the titles stop one
+   gutter short of it, or the ruler steps aside where that leaves them under
+   the narrowest useful title. The fixture leaves about 60px beside the grid at
+   1280 and about 158px at 1440, both far from the 96px threshold. */
+for (const [width, mode] of [[1280, 'steps aside'], [1440, 'clamped']] as const) {
+  test(`at ${width}px the titles stay clear of a grid the theme widens with CSS (${mode})`, async ({ page }) => {
+    await open(page, width, 900, WIDENED);
+    await page.evaluate(() => {
+      const grid = document.querySelector('main .moss-grid')!.getBoundingClientRect();
+      window.scrollBy(0, grid.top + grid.height / 2 - innerHeight / 2);
+    });
+    await frames(page);
+    const before = await geometry(page);
+    await page.mouse.move(before.dashes[0].x + 4, before.dashes[0].y);
+    await frames(page, 2);
+    const seen = await page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const list = nav.querySelector('ol')!.getBoundingClientRect();
+      const cells = [...document.querySelectorAll('main .moss-grid > *')].map((c) => c.getBoundingClientRect());
+      const beside = cells.filter((c) => c.top < list.bottom && c.bottom > list.top);
+      const labels = [...nav.querySelectorAll<HTMLElement>('.moss-contents-ruler-label')];
+      const boxes = labels.map((l) => l.getBoundingClientRect());
+      return {
+        cellLeft: Math.min(...beside.map((c) => c.left)),
+        textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
+        labelRight: Math.max(...boxes.map((b) => b.right)),
+        wholeRight: Math.max(...labels.map((l, i) => boxes[i].left + l.scrollWidth)),
+        away: nav.hasAttribute('data-away'),
+      };
+    });
+    expect(seen.cellLeft, 'the theme widens the grid past the text').toBeLessThan(seen.textLeft - 24);
+    expect(seen.wholeRight, 'a whole title would reach the grid').toBeGreaterThan(seen.cellLeft - 24);
+    if (mode === 'clamped') {
+      expect(seen.away, 'the titles have room beside the grid').toBe(false);
+      expect(seen.labelRight, 'one gutter short of the grid').toBeLessThanOrEqual(seen.cellLeft - 24 + 0.5);
+    } else {
+      expect(seen.away, 'too little room beside the grid: the ruler steps aside').toBe(true);
+    }
+  });
+}
+
+test('an island with no ruler state keeps its sections', async ({ page }) => {
+  await open(page, 1600, 900);
+  await intoArticle(page);
+  await page.evaluate(() => window.scrollBy(0, -120));
+  await frames(page);
+  // Read in the same task as the removal, before the next pass writes it back.
+  const sections = await page.evaluate(() => {
+    const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+    delete island.dataset.ruler;
+    return island.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility();
+  });
+  expect(sections).toBe(true);
+});
 
 test.describe('when it shows', () => {
   test('hidden below the width that leaves a label 96px, and the smallest width that shows it is the one that does', async ({ page }) => {
@@ -301,7 +382,7 @@ test.describe('when it shows', () => {
     await expect(ruler(page)).toBeHidden();
   });
 
-  test('faded at the top over the cover, shown mid-article, faded once past the article', async ({ page }) => {
+  test('faded at the top over the cover, shown mid-article and to the foot of the page', async ({ page }) => {
     await open(page, 1600, 900);
     await expect.poll(() => isAway(page)).toBe(true);
     const opacity = () => ruler(page).evaluate((el) => getComputedStyle(el).opacity);
@@ -315,7 +396,7 @@ test.describe('when it shows', () => {
       () => (document.querySelector('main article') ?? document.querySelector('main'))!.getBoundingClientRect().bottom < window.innerHeight * 0.5,
     );
     expect(past, 'the fixture can scroll the article above the middle').toBe(true);
-    await expect.poll(() => isAway(page)).toBe(true);
+    await expect.poll(opacity).toBe('1');
   });
 
   test('faded is not removed: its links stay in the tab order, and focus brings it back', async ({ page }) => {
@@ -358,7 +439,7 @@ test.describe('when it shows', () => {
 
   test('under reduced motion it has no transitions', async ({ browser }) => {
     const context = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 1600, height: 900 } });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto(ARTICLE);
     await page.waitForSelector('.moss-contents-ruler', { state: 'attached' });
     const durations = await page.evaluate(() =>

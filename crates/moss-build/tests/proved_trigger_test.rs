@@ -205,18 +205,16 @@ fn a_build_that_reused_a_serving_seal_does_not_let_the_next_one_stop() {
     assert_publishes_a_full_render(&site);
 }
 
-/// Media the seal found other than the ones its render read (a first build's
-/// share image, a video ladder registered at the seal) leave no page to carry:
-/// the build after renders every page, and the one after that is unchanged.
+/// A first build's sharing cards land at its seal, but no page reads one, so
+/// the seal is settled and the build after it, with nothing changed, ends at
+/// its entry.
 #[test]
-fn a_build_after_media_landed_at_the_seal_renders_every_page() {
+fn a_build_after_a_cold_build_with_nothing_changed_ends_at_its_entry() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let site = Site::new();
     build(site.root(), BuildTrigger::Unobserved);
     let record = build(site.root(), BuildTrigger::Unobserved);
-    assert!(rendered_everything(&record), "{record}");
-    let settled = build(site.root(), BuildTrigger::Unobserved);
-    assert!(unchanged(&settled), "{settled}");
+    assert!(unchanged(&record), "{record}");
 }
 
 /// A video and a `.webp` source are published by their media lanes, not the
@@ -253,6 +251,19 @@ fn one_markdown_edit_renders_that_page_and_not_the_site() {
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_rendered") >= 1, "{record}");
+    assert!(count(&record, "pages_carried") > 0, "{record}");
+}
+
+/// A first build's sharing cards are new beside an empty last seal, but a page
+/// names its card by address whether or not the card exists yet.
+#[test]
+fn the_first_edit_after_a_cold_build_renders_that_page_and_not_the_site() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    build(site.root(), BuildTrigger::Unobserved);
+    site.write("about.md", "---\ntitle: About\n---\n\nAbout us, at length.\n");
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
 }
 
@@ -686,6 +697,10 @@ fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json:
 }
 
 fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger) -> (serde_json::Value, std::sync::Arc<Heard>) {
+    serve_with(root, cell, trigger, moss_build::build::PluginMode::Skip)
+}
+
+fn serve_with(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger, plugins: moss_build::build::PluginMode) -> (serde_json::Value, std::sync::Arc<Heard>) {
     use moss_build::build::{run_pipeline, PipelineConfig};
     let heard = std::sync::Arc::new(Heard::default());
     let folder = root.to_string_lossy().into_owned();
@@ -698,7 +713,7 @@ fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: Bui
     rt.block_on(run_pipeline(PipelineConfig {
         root: moss_build::vault_root::VaultRoot::resolve(root),
         progress: std::sync::Arc::new(Ear(heard.clone())),
-        plugins: moss_build::build::PluginMode::Skip,
+        plugins,
         watch: false,
         start_server: true,
         host,
@@ -963,4 +978,97 @@ fn a_floating_nav_toggle_renders_only_the_pages_it_changes() {
     let record = save("[site]\ndomain = \"example.org\"\nfloating_nav = false\n");
     assert!(rendered_everything(&record), "{record}");
     assert_publishes_a_full_render(&site);
+}
+
+fn deployment_state(at: &str, url: &str, site_url: &str) -> String {
+    format!(
+        "[deployment]\nsite_id = \"site-1\"\n\n[deployment.observed]\nchecked_at = \"{at}\"\n\n\
+         [deployment.observed.dns_target]\nrecords = [{{ record_type = \"A\", name = \"@\", value = \"{url}\" }}]\n\n\
+         [deployment.targets.\"moss:site-1\"]\nlast_deployment_at = \"{at}\"\nlast_deployment_url = \"https://{url}\"\nsite_url = \"https://{site_url}\"\n"
+    )
+}
+
+/// A publish rewrites its own bookkeeping in `.moss/state.toml` (when and where
+/// it published, the DNS it saw). No page reads it, so the build after it stops
+/// at entry and serves what a full render does. The address the site is
+/// published under still renders every page.
+#[test]
+fn a_publish_rewriting_its_bookkeeping_leaves_the_last_seal_standing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write(".moss/state.toml", &deployment_state("2026-11-01T00:00:00Z", "a.example.net", "site-1.example.org"));
+    site.sealed();
+
+    site.write(".moss/state.toml", &deployment_state("2026-11-02T00:00:00Z", "b.example.net", "site-1.example.org"));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+
+    site.write(".moss/state.toml", &deployment_state("2026-11-02T00:00:00Z", "b.example.net", "site-2.example.org"));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}
+
+/// A publish of the sealed generation writes its record and names it in
+/// `.moss/state.toml`. The build after a publish renders the generation it
+/// published, so the next build stops at entry and serves what a full render
+/// does. A publish of any other generation renders every page.
+#[test]
+fn a_publish_of_the_sealed_generation_leaves_the_last_seal_standing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write(".moss/state.toml", &deployment_state("2026-11-01T00:00:00Z", "a.example.net", "site-1.example.org"));
+    site.sealed();
+    let paths = MossPaths::new(site.root());
+    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(paths.hashes()).unwrap()).unwrap();
+    let files: std::collections::HashMap<String, String> = serde_json::from_value(manifest["files"].clone()).unwrap();
+    let publish = |generation: &str| {
+        let record = serde_json::json!({
+            "generation_id": generation, "target": "moss:site-1", "published_at": "2026-11-02T00:00:00Z",
+            "sources": {}, "source_to_output": {}, "files": files,
+        });
+        site.write(moss_build::build::manifest::published_record::path_for(&paths, "moss:site-1"), &record.to_string());
+        site.write(".moss/state.toml", &format!("{}last_deployed_generation_id = \"{generation}\"\n", deployment_state("2026-11-02T00:00:00Z", "a.example.net", "site-1.example.org")));
+    };
+
+    publish(&moss_build::build::assets::paths::compute_manifest_generation_id(&files));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+
+    publish("another-generation");
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}
+
+/// The app opening a folder runs its plugins' import as the person's run; any
+/// other build's run is a build's, which reaches no network.
+#[test]
+fn the_folder_opening_runs_the_import_as_the_person_s_and_a_build_as_a_build_s() {
+    let site = Site::new();
+    site.write(
+        ".moss/plugins/importer/manifest.json",
+        r#"{"name":"importer","version":"1.0.0","entry":"main.js","global_name":"Importer","capabilities":["process"]}"#,
+    );
+    site.write(
+        ".moss/plugins/importer/main.js",
+        r#"var Importer = (() => ({ async process(ctx) { await globalThis.__TAURI__.core.invoke("write_plugin_file", { relativePath: "trigger", content: ctx.trigger }); return { success: true }; } }))();"#,
+    );
+    let heard = site.root().join(".moss/plugins/importer/trigger");
+    let trigger_of_the_run = || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !heard.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        fs::read_to_string(&heard).unwrap_or_default()
+    };
+
+    serve_with(site.root(), &new_cell(), BuildTrigger::Full, moss_build::build::PluginMode::NonBlocking);
+    assert_eq!(trigger_of_the_run(), "settings_manual");
+
+    fs::remove_file(&heard).unwrap();
+    build_with(site.root(), BuildTrigger::Full, moss_build::build::PluginMode::Blocking, None);
+    assert_eq!(trigger_of_the_run(), "background");
 }

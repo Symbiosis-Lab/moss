@@ -35,7 +35,7 @@ pub enum Shortcode {
     Subscribe(SubscribeShortcode),
     /// `:::buttons {.classname}` — list of action buttons.
     ///
-    /// Body is one markdown link per line (`[text](url)`). The first
+    /// Body is one link per line (`[text](url)` or `[[page|text]]`). The first
     /// button gets the primary class; subsequent buttons get secondary.
     /// Optional `{.classname}` extra classes attach to the wrapping div.
     ///
@@ -96,6 +96,10 @@ pub struct SubscribeShortcode {
     /// site's language, above the form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<crate::frontmatter::members::Members>,
+    /// Questions asked beside the email, in `:::form`'s list grammar; the
+    /// answers travel with the subscription.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::ast::FormField>,
 }
 
 /// Arguments for [`Shortcode::Buttons`].
@@ -703,6 +707,7 @@ mod tests {
             placeholder: Some("you@example.com".to_string()),
             button: Some("Subscribe".to_string()),
             members: None,
+            ..Default::default()
         });
         match &sc {
             Shortcode::Subscribe(args) => {
@@ -726,6 +731,7 @@ mod tests {
             placeholder: Some("p".to_string()),
             button: Some("b".to_string()),
             members: Some(crate::frontmatter::members::Members::Paid),
+            ..Default::default()
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

@@ -145,6 +145,15 @@ fn plan_reassembles_with_source_lines_on() {
 }
 
 #[test]
+fn a_form_drawn_without_an_id_is_not_re_rendered_under_a_scope() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("Intro.\n\n:::subscribe {button=\"Join\"}\n:::\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.subscribe_forms_mut().count(), 0);
+    assert_eq!(plan.to_html(), moss_core::ast::render_document(&doc, &hooks));
+}
+
+#[test]
 fn grid_id_lands_on_the_grid_element() {
     let hooks = DefaultHooks::new();
     let doc = parse(":::grid 2 5:7 {#rooms .x screen}\n## Left\n+++\nRight\n:::\n");

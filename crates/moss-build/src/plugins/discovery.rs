@@ -13,6 +13,16 @@ pub struct ChannelsConfig {
 }
 
 impl ChannelsConfig {
+    /// The `[channels.<id>]` tables of a migrated config. A non-table value still counts as installed.
+    pub fn from_raw(raw: &toml::Table) -> Self {
+        let channels = raw
+            .get("channels")
+            .and_then(|v| v.as_table())
+            .map(|t| t.iter().map(|(id, v)| (id.clone(), v.as_table().cloned().unwrap_or_default())).collect())
+            .unwrap_or_default();
+        Self { channels }
+    }
+
     pub fn is_installed(&self, id: &str) -> bool {
         self.channels.contains_key(id)
     }
@@ -90,14 +100,7 @@ pub fn get_channels_config(project_path: &str) -> Result<ChannelsConfig, String>
     let Some(raw) = read_and_migrate_raw(project_path)? else {
         return Ok(ChannelsConfig::default());
     };
-    let mut channels = BTreeMap::new();
-    if let Some(channels_table) = raw.get("channels").and_then(|v| v.as_table()) {
-        for (id, value) in channels_table {
-            let table = value.as_table().cloned().unwrap_or_default();
-            channels.insert(id.clone(), table);
-        }
-    }
-    Ok(ChannelsConfig { channels })
+    Ok(ChannelsConfig::from_raw(&raw))
 }
 /// Everything `discover_plugins` does except installing bundled plugins first.
 ///
@@ -166,12 +169,33 @@ pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, St
 /// settings disable, since discovery itself treats every installed plugin as
 /// active. The build decides which declarations a build that skips plugin
 /// hooks still reads.
-pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
-    let Ok(installed) = scan_installed_plugins(project_path) else { return Vec::new() };
-    installed.loaded.into_iter().filter(|p| {
-        get_plugin_config(project_path, &p.manifest.name)
-            .map_or(true, |config| config.get("enabled") != Some(&serde_json::Value::Bool(false)))
-    }).collect()
+pub fn plugins_declaring_for_build(project_path: &str) -> Declaring {
+    let Ok(installed) = scan_installed_plugins(project_path) else { return Declaring::default() };
+    // `enforce::refused_only_for_trust`, not the installed admission check, on
+    // purpose: that check is what refuses an untrusted folder.
+    let untrusted = installed.refused.iter()
+        .filter_map(|(dir, _)| read_plugin(dir).ok().filter(|p| crate::plugins::install::registry_client::enforce::refused_only_for_trust(&p.manifest, dir)));
+    Declaring {
+        loaded: installed.loaded.iter().cloned().filter(|p| not_switched_off(project_path, p)).collect(),
+        untrusted: untrusted.filter(|p| not_switched_off(project_path, p)).collect(),
+    }
+}
+
+/// What [`plugins_declaring_for_build`] found.
+#[derive(Default)]
+pub struct Declaring {
+    /// Plugins that may run.
+    pub loaded: Vec<Plugin>,
+    /// Plugins of a folder the user has not trusted. Only the identity proofs
+    /// read them: a proof is a value the person wrote in their own
+    /// `[services]` table, not code, so an untrusted folder's site still says
+    /// who owns it.
+    pub untrusted: Vec<Plugin>,
+}
+
+fn not_switched_off(project_path: &str, plugin: &Plugin) -> bool {
+    get_plugin_config(project_path, &plugin.manifest.name)
+        .map_or(true, |config| config.get("enabled") != Some(&serde_json::Value::Bool(false)))
 }
 
 /// Load a single plugin from a directory
@@ -183,6 +207,29 @@ pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
 /// * `Ok(Plugin)` - Loaded plugin
 /// * `Err(String)` - Error message if loading fails
 pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
+    let plugin = read_plugin(plugin_dir)?;
+    let manifest = &plugin.manifest;
+
+    // Whether this plugin may run at all is the app's call, not the build
+    // tree's, and it is asked before anything else touches the plugin. Here
+    // rather than in `discover_installed_plugins` because four of this
+    // function's callers never go through that list — see `super::admission`.
+    if let Some(refusal) = super::admission::refusal(manifest, plugin_dir) {
+        return Err(refusal);
+    }
+
+    // Validate entry point exists (a derivation-only plugin has none)
+    if let Some(entry) = &manifest.entry {
+        if !plugin_dir.join(entry).exists() {
+            return Err(format!("Entry point '{entry}' not found"));
+        }
+    }
+
+    Ok(plugin)
+}
+
+/// A plugin's manifest and folder, before anyone has asked whether it may run.
+fn read_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     let manifest_path = plugin_dir.join("manifest.json");
 
     // Check if manifest.json exists
@@ -194,28 +241,17 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     let manifest_content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
 
-    let manifest: PluginManifest = PluginManifest::parse(&manifest_content)
-        .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+    // A manifest written for a newer moss fails the full parse; its floor says why.
+    let manifest: PluginManifest = PluginManifest::parse(&manifest_content).map_err(|e| {
+        super::bundled::ManifestFloor::parse(&manifest_content)
+            .and_then(|floor| floor.unmet())
+            .unwrap_or_else(|| format!("Failed to parse manifest.json: {}", e))
+    })?;
 
     // A plugin named after a built-in target would be shadowed by it at
     // publish, so it never loads.
     if crate::config::deployment::is_built_in_target(&manifest.name) {
         return Err(format!("\"{}\" is the name of a host built into moss; a plugin cannot use it", manifest.name));
-    }
-
-    // Whether this plugin may run at all is the app's call, not the build
-    // tree's, and it is asked before anything else touches the plugin. Here
-    // rather than in `discover_installed_plugins` because four of this
-    // function's callers never go through that list — see `super::admission`.
-    if let Some(refusal) = super::admission::refusal(&manifest, plugin_dir) {
-        return Err(refusal);
-    }
-
-    // Validate entry point exists (a derivation-only plugin has none)
-    if let Some(entry) = &manifest.entry {
-        if !plugin_dir.join(entry).exists() {
-            return Err(format!("Entry point '{entry}' not found"));
-        }
     }
 
     // Plugins are always active once discovered
@@ -362,7 +398,7 @@ fn read_plugin_config_json(
 }
 
 /// Read plugin config from a standalone TOML file in the plugin folder
-fn read_plugin_config_file(
+pub(crate) fn read_plugin_config_file(
     config_path: &Path,
 ) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
     use std::collections::HashMap;
@@ -528,6 +564,31 @@ pub fn plugin_needs_connection(project_path: &str, plugin_id: &str) -> bool {
 // (readers travel with the pipeline into `crates/moss-build`;
 // config.toml writers stay app-side).
 
+/// Merge setting values into `.moss/plugins/<plugin>/config.toml`, the file
+/// the settings form and moss's sign-in row write. Keys not in `values` are
+/// untouched; a JSON `null` clears its key.
+pub fn merge_plugin_config_values(
+    project_path: &str,
+    plugin: &str,
+    values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let path = crate::plugins::plugin_dir(project_path, plugin).join("config.toml");
+
+    // The file is hand-editable like the vault's, so the edit is rendered over
+    // the bytes it was read from, and an absent file is only ever stood in for
+    // one proven absent: an evicted one must not be rewritten from an empty table.
+    let crate::vault::config::ManagedToml { original, root: mut table } = crate::vault::config::load_managed_toml(&path)?;
+    for (key, value) in values {
+        if value.is_null() {
+            table.remove(key);
+            continue;
+        }
+        let toml_value = toml::Value::try_from(value.clone()).map_err(|e| format!("Setting '{key}' cannot be written as TOML: {e}"))?;
+        table.insert(key.clone(), toml_value);
+    }
+    crate::vault::config::write_managed_toml(&path, &original, &table, crate::config::migrations::CURRENT_VERSION)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,6 +698,24 @@ mod tests {
 
         let refused = load_plugin(&plugin_dir).err().expect("refused");
         assert!(refused.contains("built into moss"), "{refused}");
+    }
+
+    #[test]
+    fn a_manifest_from_a_newer_moss_is_refused_by_its_floor() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("social");
+        fs::create_dir(&plugin_dir).unwrap();
+        let manifest = |floor: &str| format!(r#"{{"name":"social","version":"2.0.0","entry":"main.js","min_moss_version":"{floor}",
+            "contributes":{{"site_settings":{{"settings":[{{"key":"account","type":"a-type-from-the-future"}}]}}}}}}"#);
+
+        fs::write(plugin_dir.join("manifest.json"), manifest("98.0.0")).unwrap();
+        let refused = load_plugin(&plugin_dir).err().expect("refused");
+        assert!(refused.starts_with("social 2.0.0 needs moss 98.0.0 or newer"), "{refused}");
+
+        // A floor this moss meets leaves the parse error, the real fault.
+        fs::write(plugin_dir.join("manifest.json"), manifest("0.0.1")).unwrap();
+        let refused = load_plugin(&plugin_dir).err().expect("refused");
+        assert!(refused.starts_with("Failed to parse manifest.json"), "{refused}");
     }
 
     #[test]

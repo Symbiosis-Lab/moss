@@ -1,7 +1,7 @@
 // In a hero's words, a link inside a sentence stays a text link in the words'
 // colour, and a paragraph of nothing but links is the call to action, drawn as
 // buttons: on a page's hero and on the closing picture, on a phone and wide.
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const HEROES = [
   { name: "a page's hero", root: ".moss-hero:not(.moss-hero-closing)" },

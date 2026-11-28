@@ -536,7 +536,16 @@ describe('a heading inside a quote has two indicators, and each toggle and menu 
 });
 
 describe('the indicator is a control', () => {
-  const press = (el: Element) => el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+  // A grip (a heading's `#`) is a click on pointer-up with no travel; a quote's marker takes the mousedown.
+  const press = (el: Element) => {
+    const grip = el.hasAttribute('data-grip');
+    if (!grip) return el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    // jsdom has no PointerEvent: a MouseEvent carrying the two pointer fields the gesture reads.
+    const pointer = (type: string) => Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }), { isPrimary: true, pointerId: 1 });
+    const down = el.dispatchEvent(pointer('pointerdown'));
+    el.dispatchEvent(pointer('pointerup'));
+    return down;
+  };
 
   test('the hung marker carries its line type as a tooltip and a data attribute', () => {
     const v = indicatorViewFor('## Title\n\n> quoted');

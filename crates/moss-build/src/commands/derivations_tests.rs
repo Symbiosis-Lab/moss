@@ -79,7 +79,7 @@ fn state_reports_the_files_the_plugin_declined() {
     let page = "---\n---\n\n![[locked.fake#text]]\n";
     fs::write(dir.path().join("reports/p.md"), page).unwrap();
     // The decline is found in the cache, which a read of the file fills.
-    crate::system::derive::site::DerivedSite::load(true, dir.path()).expect("the plugin derives").read("reports/locked.fake", "text");
+    crate::system::derive::site::DerivedSite::load(true, dir.path(), Default::default()).expect("the plugin derives").read("reports/locked.fake", "text");
     let rows = derivation_state_in(dir.path()).unwrap();
     let r = row(&rows, "reports/");
     assert_eq!(r.skipped.len(), 1, "{r:?}");
@@ -120,3 +120,19 @@ fn showing_refuses_an_unknown_derivation_and_a_folder_outside_the_site() {
     assert!(!dir.path().join(".moss/config.toml").exists(), "a refused choice records nothing");
 }
 
+
+#[test]
+fn a_read_a_waiting_build_meets_unprepared_waits_for_a_core() {
+    use crate::system::folder_session::Encoder;
+    let dir = site(&[("reports/a.fake", "x")]);
+    let gate = crate::system::derive::test_support::own_gate();
+    let derived = crate::system::derive::site::DerivedSite::load(true, dir.path(), gate.clone()).expect("the plugin derives");
+    let held: Vec<_> = (0..gate.cores()).map(|_| gate.take_cores(Encoder::Picture, &|| false).unwrap()).collect();
+    std::thread::scope(|s| {
+        let read = s.spawn(|| derived.read("reports/a.fake", "text"));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!read.is_finished(), "no read runs while every core is held");
+        drop(held);
+        assert!(matches!(read.join().unwrap(), moss_core::resolve::embeds::derived::DerivedFragment::Ready { .. }));
+    });
+}

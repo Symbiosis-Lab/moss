@@ -13,19 +13,15 @@
  * Where the geometry matters, it is measured, not breakpointed:
  *
  * - A plain ruler's label may reach no further than one gutter short of the
- *   text column, so its maximum width is `textLeft - GUTTER - labelLeft`, read
- *   from the layout. Titles longer than that, on either ruler, are one line
- *   ended with an ellipsis by CSS.
+ *   text column, or of a wider block beside the ruler, so its maximum width is
+ *   `reach - GUTTER - labelLeft`, read from the layout. Titles longer than
+ *   that, on either ruler, are one line ended with an ellipsis by CSS.
  * - Under `MIN_LABEL` of room a label names nothing, so the ruler stays away
  *   and the island is all there is.
  * - A `contents: pictures` ruler is up wherever the page reserves its lane:
  *   site.css narrows the column there and sets `--moss-contents-lane` on
  *   `body`, and this module reads only whether that is set, so the media
- *   condition has one owner and nothing here measures the margin. Where the
- *   lane is reserved the island's `data-ruler` is `lane` while the list is
- *   away, and a headerless island's bar never shows. The controls stand in
- *   the lane at the foot of the window while the list is up and are hidden
- *   with it (site.css).
+ *   condition has one owner and nothing here measures the margin.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -40,10 +36,11 @@
  * magnifies the rows in place around the pointer, the focused one showing its
  * section's picture after its name (contents-lens.ts).
  *
- * The ruler belongs on screen from the first section to the end of the main
- * sections: the author's `contents=end` marker passing the middle of the
- * window, else the page's closing picture coming into view, else the
- * article's bottom passing the middle.
+ * Where the page and the window give the ruler room, it is the page's one
+ * contents list from top to bottom, wherever the reader is: the island never
+ * takes the sections back on a scroll. It only fades where it would stand over
+ * something: the opening above the first section, a wide block, the page's
+ * closing picture, and whatever follows the author's `contents=end` marker.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
@@ -62,11 +59,7 @@ const GUTTER = 24;
  *  is a few letters of a title, which names nothing. */
 const MIN_LABEL = 96;
 
-/** Fade out when the article's bottom is above the middle of the window. The
- *  list comes up when the first section's heading reaches the list's own top,
- *  so it never stands over an opening, whatever the window's height. Pinned to
- *  the window, the ruler only belongs on screen while the article's body is —
- *  not over a cover image above it or over the comments below it. */
+/** Fade out once the `contents=end` marker is above the middle of the window. */
 const HIDE_ABOVE = 0.5;
 
 export interface RulerOptions {
@@ -76,8 +69,8 @@ export interface RulerOptions {
   /** The nav's accessible name — the island's localized "sections" string. */
   label: string;
   /** The island: receives `data-ruler` (`on` while the list is on screen,
-   *  `lane` while it is away from a reserved lane, `off` otherwise), and
-   *  emits `SECTION_SYNC_EVENT`. */
+   *  `away` while it is the contents list but faded, `off` where the island
+   *  is), and emits `SECTION_SYNC_EVENT`. */
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
@@ -92,6 +85,9 @@ export interface RulerOptions {
    *  soon as it comes into view. */
   closing?: Element | null;
 }
+
+const hasOwnText = (el: Element): boolean =>
+  [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim() !== "");
 
 /** Mount the ruler. Returns its disposer: removes the node and every listener. */
 export function mountContentsRuler(opts: RulerOptions): () => void {
@@ -144,60 +140,75 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   stack.add(() => nav.remove());
   if (opts.pictures) stack.add(mountContentsLens({ nav, links }));
 
-  // Blocks wider than the text column (`data-width`) can sit anywhere in
-  // `main`, and script can add them after load: the list is read on layout and
-  // whenever the scope's children change, and tested each frame. What is
-  // tested is each block's children, not the block: a band whose content
-  // keeps the text column covers nothing, while a wide picture or grid covers
-  // the margin through its own child.
+  // A top-level or `data-width` block whose left edge is left of `edge` is a
+  // band, whatever widened it. What the labels must clear is its children,
+  // since a band whose content keeps the text column covers nothing; or the
+  // block itself when it holds text of its own or no elements at all.
   const scope = first.closest("main") ?? article;
-  let bands: Element[] = [];
-  const collectBands = (): void => {
-    bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")].flatMap((band) => [...band.children]);
-  };
-  collectBands();
-  let away = true;
-  /** The page reserves the list's lane and the list fits: set on layout. */
-  let lane = false;
+  const collectBands = (edge: number): Element[] =>
+    [...new Set([...article.children, ...scope.querySelectorAll("[data-width]")])]
+      .filter((block) => {
+        const box = block.getBoundingClientRect();
+        return box.width > 0 && box.left < edge;
+      })
+      .flatMap((block) => (block.children.length === 0 || hasOwnText(block) ? [block] : [...block.children]));
+  /** Measured by `layout` while the ruler can show, null while it cannot.
+   *  `edge` is where the margin a band reaches into ends: the text's left for
+   *  the plain ruler, whose titles stop short of it, and the dashes' right for
+   *  a pictures ruler, whose text sits beyond its own lane. `bands` is null
+   *  until the next pass that needs them. */
+  let geo: { edge: number; labelLeft: number; bands: Element[] | null } | null = null;
+  /** The labels' last written width; 0 before the first. */
+  let labelWidth = 0;
   let disposed = false;
 
   /**
    * One frame's reading and writing, run when the island's scrollspy reports.
    *
-   * The ruler counts as on screen when it is rendered (not `hidden`, and not
-   * hidden by the site's own CSS) and not faded. The island drops its own
-   * sections for exactly that case, so there is one contents list at a time.
-   * Reads come first, then the writes.
+   * The ruler is the contents list whenever it is rendered (not `hidden`, and
+   * not hidden by the site's own CSS), faded or not; the island drops its own
+   * sections for exactly that, so the list has one place on a page. Reads
+   * come first, then the writes.
    */
   function fade(): void {
     if (disposed) return;
     const height = window.innerHeight;
-    const zone = nav.hidden ? null : list.getBoundingClientRect();
+    const zone = geo ? list.getBoundingClientRect() : null;
     const inBody = zone === null || first.getBoundingClientRect().top <= zone.top;
     const notPast = opts.end
       ? opts.end.getBoundingClientRect().top > height * HIDE_ABOVE
-      : opts.closing
-        ? opts.closing.getBoundingClientRect().top > height
-        : article.getBoundingClientRect().bottom > height * HIDE_ABOVE;
-    // A wide block that reaches the ruler's column and shares its height would
-    // be painted over: the ruler steps aside until the block has passed.
-    // Only worth measuring while the ruler would otherwise be up.
-    const covered =
-      zone !== null &&
-      inBody &&
-      notPast &&
-      bands.some((band) => {
-        const box = band.getBoundingClientRect();
-        return box.left < zone.right && box.top < zone.bottom && box.bottom > zone.top;
-      });
+      : !opts.closing || opts.closing.getBoundingClientRect().top > height;
+    // A wide block beside the ruler is where its labels must stop, one gutter
+    // short, as they stop short of the text. One that leaves them under
+    // `MIN_LABEL`, or reaches the dashes, would be painted over: the ruler
+    // steps aside until it has passed. Only worth measuring while the ruler
+    // would otherwise be up.
+    let covered = false;
+    let width = labelWidth;
+    if (geo && zone) {
+      let reach = geo.edge;
+      if (inBody && notPast) {
+        geo.bands ??= collectBands(geo.edge);
+        for (const band of geo.bands) {
+          const box = band.getBoundingClientRect();
+          if (box.top < zone.bottom && box.bottom > zone.top) reach = Math.min(reach, box.left);
+        }
+      }
+      width = Math.max(0, Math.floor(reach - GUTTER - geo.labelLeft));
+      covered = reach < zone.right || (!opts.pictures && width < MIN_LABEL);
+    }
     const rendered =
       !nav.hidden &&
       (nav.checkVisibility
         ? nav.checkVisibility({ checkVisibilityCSS: true })
         : getComputedStyle(nav).display !== "none");
-    away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
+    const away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : lane && rendered ? "lane" : "off";
+    if (!opts.pictures && width !== labelWidth) {
+      labelWidth = width;
+      labels.forEach((label) => (label.style.maxWidth = `${width}px`));
+    }
+    island.dataset.ruler = !rendered ? "off" : away ? "away" : "on";
   }
 
   function layout(): void {
@@ -207,26 +218,27 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
-    collectBands();
-    const textLeft = vertical ? 0 : first.getBoundingClientRect().left;
+    const textLeft = first.getBoundingClientRect().left;
+    const labelLeft = labels[0].getBoundingClientRect().left;
     const listBox = list.getBoundingClientRect();
     // Up to the gutter before the text is the margin the plain ruler's titles
     // may use.
-    const room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
+    const room = Math.floor(textLeft - GUTTER - labelLeft);
     const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();
     const eligible = opts.pictures
       ? getComputedStyle(document.body).getPropertyValue("--moss-contents-lane").trim() !== "" && fits
       : !vertical && !rtl && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
-    lane = Boolean(opts.pictures) && eligible;
-    if (eligible && !opts.pictures) labels.forEach((label) => (label.style.maxWidth = `${room}px`));
+    geo = eligible ? { edge: opts.pictures ? listBox.right : textLeft, labelLeft, bands: null } : null;
     fade();
   }
 
   // Re-measure whenever the text column may have moved. A ResizeObserver sees
   // size changes only; the reader's font-size control and the sidenote gutter
   // change the column by changing an attribute on the root, so those are
-  // watched too. Coalesced to one pass per frame.
+  // watched too. Coalesced to one pass per frame. A change inside the scope
+  // (a block added, or restyled) only marks the bands stale, for the next
+  // pass that needs them.
   let frame = 0;
   const relayout = (): void => {
     cancelAnimationFrame(frame);
@@ -240,8 +252,10 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     stack.add(() => ro.disconnect());
   }
   if (typeof MutationObserver !== "undefined") {
-    const bandsMo = new MutationObserver(collectBands);
-    bandsMo.observe(scope, { childList: true, subtree: true });
+    const bandsMo = new MutationObserver(() => {
+      if (geo) geo.bands = null;
+    });
+    bandsMo.observe(scope, { childList: true, subtree: true, attributeFilter: ["class", "style", "data-width"] });
     stack.add(() => bandsMo.disconnect());
     const mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });

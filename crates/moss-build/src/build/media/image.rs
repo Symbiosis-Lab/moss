@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 // MIGRATION-STATE's image.rs debt row, Task 10.5). The dispatch-side rung loop
 // and the fingerprint-skip heal block stay here and CALL into it.
 use super::rungs::{decode_oriented, encode_rungs, redispatch_note, RungOutcome};
-use super::sniff::{is_animated_gif, is_animated_webp, is_cmyk_jpeg};
+use super::sniff::{has_cmyk_profile, is_animated_gif, is_animated_webp};
 
 // ---------------------------------------------------------------------------
 // Data types (foundation from Task 1)
@@ -101,8 +101,6 @@ pub struct ImageConversionItem {
     /// - [`SkipReason::Cmyk`] / [`SkipReason::NotAnImage`]: registered
     ///   `Failed`, so the post-seal degrade pass drops the
     ///   `<source>` and the page falls through to the original `<img>`.
-    ///   Before this a CMYK JPEG shipped a `<source>` that 404ed and the
-    ///   browser showed nothing at all (a painting on a real site, 2026-09-05).
     ///
     /// Every other verdict is a bare `<img>` on the emission side and needs
     /// no registration; those items are dropped in the collector.
@@ -114,6 +112,9 @@ pub struct ImageConversionItem {
     /// The `Arc` is the mark's identity: a later dispatch of the same unchanged
     /// source makes its own.
     pub(crate) fingerprint: Option<Arc<ImageFingerprint>>,
+    /// The scan found no colour for this picture, so the dispatch asks whether a
+    /// preview is waiting on it; a settled picture costs no read.
+    pub(crate) scanned_without_colour: bool,
 }
 
 /// Where a picture's WebP base is written and served: under its folder's
@@ -137,6 +138,12 @@ impl ImageConversionItem {
         if let Some(fingerprint) = &self.fingerprint {
             end_image_item(folder, &self.source_path.to_string_lossy(), fingerprint, delivered, advisories);
         }
+    }
+
+    /// A later dispatch no longer wants this item's encode: the picture left
+    /// every page, or was queued again over other bytes.
+    fn withdrawn(&self, folder: &str) -> bool {
+        self.fingerprint.as_ref().is_some_and(|mine| !image_mark_stands(folder, &self.source_path.to_string_lossy(), mine))
     }
 }
 
@@ -237,9 +244,10 @@ pub(crate) enum SkipReason {
     AnimatedGif,
     /// Animated WebP — already WebP and animation-preserving re-encode is out of scope.
     AnimatedWebp,
-    /// HEIC/HEIF — requires libheif, out of scope for v1.
+    /// HEIF on a computer with no HEIF decoder, and no encode of it kept.
     Heic,
-    /// CMYK JPEG — libwebp only supports RGB; colorspace conversion is lossy.
+    /// A JPEG with a CMYK print profile, which the browser colour-manages and
+    /// a plain decode would not match.
     Cmyk,
     /// Source is small AND already fits within max_edge — re-encoding wastes CPU.
     AlreadySmall,
@@ -385,7 +393,11 @@ const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 /// used to fail the read (and thus never skip) can now read real dimensions
 /// and be judged `AlreadySmall` — a different, newly-correct verdict the old
 /// version would still be serving.
-const FORMAT_PROBE_VERSION: u32 = 3;
+///
+/// **3 → 4**: a CMYK JPEG is skipped only when it embeds a CMYK profile.
+/// One without a profile is decoded by plain inversion, as libjpeg, Chromium
+/// and Firefox draw it (Safari assumes Generic CMYK), and is encoded.
+const FORMAT_PROBE_VERSION: u32 = 4;
 
 impl SkipReason {
     /// Whether a source skipped for this reason still has to be collected so
@@ -398,6 +410,7 @@ impl SkipReason {
     pub(crate) fn settles_a_promised_variant(&self, ext: &str) -> bool {
         match self {
             SkipReason::SourceInTheCloud => true,
+            SkipReason::Heic => true,
             SkipReason::Cmyk | SkipReason::NotAnImage => {
                 moss_core::asset_paths::is_ladder_source_ext(ext)
                     && !moss_core::asset_paths::is_webp_source_ext(ext)
@@ -413,9 +426,10 @@ impl SkipReason {
     pub(crate) fn failure_message(&self) -> Option<&'static str> {
         match self {
             SkipReason::Cmyk => Some(
-                "CMYK JPEG: published as the original — WebP has no CMYK and the colour conversion is lossy",
+                "CMYK JPEG with a print profile: published as the original",
             ),
             SkipReason::NotAnImage => Some("not a recognised image format"),
+            SkipReason::Heic => Some("this computer cannot read HEIC pictures: build once on a Mac or iPhone"),
             _ => None,
         }
     }
@@ -425,7 +439,7 @@ impl SkipReason {
 ///
 /// Called before any decoding work. Two tiers:
 ///
-/// 1. Extension-only checks (`Svg`/`Heic`) and the animated-gif/webp sniff —
+/// 1. Extension-only checks (`Svg`), a HEIF with no decoder and no kept encode, and the animated-gif/webp sniff —
 ///    always run fresh, never cached. The animated check is deliberately
 ///    left uncached per `scan.rs`'s documented policy (a stale cached
 ///    `is_animated` could silently mis-skip a file edited in place); it's
@@ -488,7 +502,14 @@ pub(crate) fn should_skip(
     if ext_lower == "svg" {
         return Some(SkipReason::Svg);
     }
-    if ext_lower == "heic" || ext_lower == "heif" {
+    // Before the format probe: a record another computer wrote says "encode
+    // it", which this one cannot. Its encodes, travelling with the folder,
+    // still serve; with none, nothing about the bytes is decided here, so
+    // nothing is written down.
+    if super::sniff::is_heif(source_path)
+        && !super::decode::decodes_heif(source_path)
+        && super::rungs::kept_base(transforms, source_oid, &config.to_params(), source_path, config.max_edge).is_none()
+    {
         return Some(SkipReason::Heic);
     }
     if ext_lower == "gif" && is_animated_gif(source_path) {
@@ -602,7 +623,7 @@ fn probe_cmyk_magic_already_small(
     file_size: u64,
     config: &ImageCompressionConfig,
 ) -> Option<SkipReason> {
-    if (ext_lower == "jpg" || ext_lower == "jpeg") && is_cmyk_jpeg(source_path) {
+    if (ext_lower == "jpg" || ext_lower == "jpeg") && has_cmyk_profile(source_path) {
         return Some(SkipReason::Cmyk);
     }
 
@@ -614,7 +635,6 @@ fn probe_cmyk_magic_already_small(
     // failed" advisory — alarming for something that was never an image.
     //
     // SVG is excluded above (no magic bytes to check for text formats).
-    // HEIC/HEIF is excluded above (handled by extension before we reach here).
     // For all other image extensions, a magic MISMATCH means NotAnImage —
     // an unreadable file means nothing at all, and takes the SourceInTheCloud
     // path so the caller registers the variant promise and the verdict is
@@ -739,6 +759,9 @@ pub(crate) fn collect_images_for_conversion(
             // has already promised — see `ImageConversionItem::skip`. The
             // `<picture>` promise is only ever made for png/jpg/jpeg, so a
             // `NotAnImage` gif or a mislabelled webp still drops here.
+            if let (SkipReason::Heic, Some(message)) = (&reason, reason.failure_message()) {
+                log::warn!("{}: {message}", media_meta.path);
+            }
             if reason.settles_a_promised_variant(&media_meta.file_type) {
                 log::debug!(
                     "Image {}: {:?} — registering its variants, skipping the encode",
@@ -752,6 +775,7 @@ pub(crate) fn collect_images_for_conversion(
                     dimensions: media_meta.dimensions,
                     skip: Some(reason),
                     fingerprint: None,
+                    scanned_without_colour: media_meta.dominant_color.is_none(),
                 });
                 continue;
             }
@@ -776,6 +800,7 @@ pub(crate) fn collect_images_for_conversion(
             dimensions: media_meta.dimensions,
             skip: None,
             fingerprint: None,
+            scanned_without_colour: media_meta.dominant_color.is_none(),
         });
     }
 
@@ -1363,6 +1388,16 @@ fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_sta
     write_media_meta(transforms, Some(key), Some(source_oid), extension, original_size, &meta);
 }
 
+/// A picture a preview scan recorded under its stat key without the colour and
+/// blur only a decode finds. No record means no scan is waiting (a build that
+/// bakes them found none), and an evicted source cannot be decoded.
+fn placeholder_unsettled(transforms: &crate::build::cache::TransformCache, rel_source: &str, stat: &crate::build::stat::FileStat, source_file: &Path) -> bool {
+    let key = crate::build::scan::scan::image_meta_stat_key(rel_source, stat.size, stat.mtime);
+    let extension = source_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    crate::build::scan::scan::read_cached_meta(transforms, &key, extension).is_some_and(|meta| meta.dominant_color.is_none())
+        && !crate::build::icloud::is_evicted(source_file)
+}
+
 // ---------------------------------------------------------------------------
 // Fingerprint (identifies one dispatch's worker, for in-flight join + advisory
 // carry-forward — the skip-on-no-change decision itself is now originated from
@@ -1429,6 +1464,9 @@ struct ImageLedger {
     /// Marks ever made. Every mark leaves `pending` once, so the ones gone
     /// are this less what `pending` still holds.
     queued: u64,
+    /// A build left pages on a placeholder that moved to the build this work
+    /// ends in ([`promise_settled_build`]).
+    settle_promised: bool,
 }
 
 /// Images handed to a worker since the process started, and how many of
@@ -1458,6 +1496,23 @@ pub fn image_work() -> ImageWork {
 #[cfg(test)]
 pub(crate) fn image_work_in(folder: &str) -> ImageWork {
     with_image_ledger(folder, |ledger| ledger.work())
+}
+
+/// Promise one `ImagesSettled` build for `folder`, for a build that left the
+/// pages showing a moved placeholder to it; [`take_settle_promise`] keeps it.
+pub(crate) fn promise_settled_build(folder: &str) {
+    with_image_ledger(folder, |ledger| ledger.settle_promised = true);
+}
+
+/// Whether a settled build is promised and no image is in flight. Takes the
+/// promise when it answers yes. A promise made with pictures in flight is taken
+/// at the next shipping seal after they drain (the next save, beside a watcher,
+/// whose encodes are not joined to a seal); until then those pages are as stale
+/// as any page between a detached encode and the next seal. A build that never
+/// ships leaves only the restored digests, which the next build renders from.
+pub(crate) fn take_settle_promise(folder: &str) -> bool {
+    let mut ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.get_mut(folder).is_some_and(|ledger| ledger.pending.is_empty() && std::mem::take(&mut ledger.settle_promised))
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an
@@ -1574,6 +1629,38 @@ pub(crate) fn end_image_item(folder: &str, path: &str, queued_as: &Arc<ImageFing
             ledger.advisories.insert(path.to_string(), advisories.to_vec());
         }
     })
+}
+
+/// `do_work` of `convert` for `flight`, or `None` once `withdrawn`. A converter
+/// whose own item is withdrawn while it waits for a core returns `None` from
+/// `convert`; a waiter on it that is still wanted runs the work itself.
+fn convert_unless_withdrawn(
+    images: &crate::build::cache::Singleflight<Option<ImageConversionOutcome>>,
+    flight: &str,
+    withdrawn: &dyn Fn() -> bool,
+    convert: impl Fn() -> Option<ImageConversionOutcome>,
+) -> Option<(Option<ImageConversionOutcome>, bool)> {
+    loop {
+        match images.do_work(flight, &convert) {
+            (Some(None), _) if withdrawn() => return None,
+            (Some(None), _) => continue,
+            (result, shared) => return Some((result.flatten(), shared)),
+        }
+    }
+}
+
+/// Whether `mark` is still the ledger's mark for `path`. Read-only, so it wakes
+/// no joined build: a worker parked on the core budget asks it on every recheck.
+fn image_mark_stands(folder: &str, path: &str, mark: &Arc<ImageFingerprint>) -> bool {
+    let ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.get(folder).and_then(|ledger| ledger.pending.get(path)).is_some_and(|marked| Arc::ptr_eq(marked, mark))
+}
+
+/// Whether `folder`'s ledger still marks or advises on any image. Read-only, so
+/// a folder that never had a picture gets no ledger.
+fn image_ledger_records_any(folder: &str) -> bool {
+    IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(folder)
+        .is_some_and(|ledger| !ledger.pending.is_empty() || !ledger.advisories.is_empty())
 }
 
 /// The advisories recorded for `path` alongside its last delivered
@@ -1695,7 +1782,21 @@ impl ImageRunContext {
 /// An item's source megapixels, rounded up; unknown dimensions count as the
 /// largest possible.
 fn item_megapixels(item: &ImageConversionItem) -> u64 {
-    item.dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
+    megapixels(item.dimensions)
+}
+
+/// Megapixels one build's full decodes may hold at once: ~64 MP ≈ ~256 MB of
+/// decoded RGBA + ~2-3× that in resize/encode scratch, under a GB even with a
+/// couple of huge images; an unbounded per-core decode runs out of memory on
+/// large photos. `MOSS_ENCODE_MP_BUDGET` overrides it for lower-RAM hardware
+/// without a recompile.
+pub(crate) fn decode_budget_mp() -> u64 {
+    std::env::var("MOSS_ENCODE_MP_BUDGET").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&n| n > 0).unwrap_or(64)
+}
+
+/// Source megapixels to reserve; unknown dimensions reserve the whole budget.
+pub(crate) fn megapixels(dimensions: Option<(u32, u32)>) -> u64 {
+    dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
 }
 
 /// A megapixels-in-flight budget: a counting semaphore whose unit is source
@@ -1715,19 +1816,19 @@ fn item_megapixels(item: &ImageConversionItem) -> u64 {
 /// self-throttle (a 34 MP image against a 64 MP budget runs ~alone). A permit is
 /// released on drop, so it's returned on a normal return, an early bail, or a
 /// panic mid-encode that unwinds.
-struct MegapixelBudget {
+pub(crate) struct MegapixelBudget {
     available: std::sync::Mutex<u64>,
     cv: std::sync::Condvar,
     total: u64,
 }
 
-struct MpPermit<'a> {
+pub(crate) struct MpPermit<'a> {
     budget: &'a MegapixelBudget,
     held: u64,
 }
 
 impl MegapixelBudget {
-    fn new(total_mp: u64) -> Self {
+    pub(crate) fn new(total_mp: u64) -> Self {
         Self {
             available: std::sync::Mutex::new(total_mp),
             cv: std::sync::Condvar::new(),
@@ -1737,7 +1838,7 @@ impl MegapixelBudget {
 
     /// Block until `want` megapixels are free (clamped to `[1, total]` so an
     /// image larger than the whole budget still runs — alone), then reserve them.
-    fn acquire(&self, want: u64) -> MpPermit<'_> {
+    pub(crate) fn acquire(&self, want: u64) -> MpPermit<'_> {
         let want = want.clamp(1, self.total);
         let mut available = self.available.lock().unwrap();
         while *available < want {
@@ -1853,14 +1954,18 @@ impl ItemStep {
     fn base_failed(source_path: &str, webp: &str, rungs: Vec<(u32, String)>, err: String) -> Self {
         let mut failed = vec![(webp.to_string(), Failure::encode(err.clone()))];
         failed.extend(rungs.into_iter().map(|(_, rung)| (rung, Failure::encode(err.clone()))));
+        // Only Safari draws a HEIC, so its page has nothing to show until the
+        // person re-exports it.
+        let heif = Path::new(source_path).extension().and_then(|e| e.to_str()).is_some_and(moss_core::asset_paths::is_heif_source_ext);
+        let (severity, key) = if heif { (Severity::NeedsAction, "heif_unreadable") } else { (Severity::ShippedDegraded, "shipped_without_optimizing") };
         Self::Handled {
             delivered: Vec::new(),
             failed,
             advisories: vec![Advisory::for_source(
                 Scope::File,
-                Severity::ShippedDegraded,
+                severity,
                 source_path,
-                crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", &err)]),
+                crate::infra::app_advisory::fmt(key, &[("err", &err)]),
                 Action::None,
             )],
             encoded: false,
@@ -2034,19 +2139,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             .map(|n| n.get())
             .unwrap_or(4)
             .min(n_items.max(1));
-        // ~64 MP in flight ≈ ~256 MB of decoded RGBA + ~2-3× that in transient
-        // resize/encode scratch → comfortably under a GB even with a couple of
-        // huge images, and safe running alongside the editor + a browser. This
-        // replaced an unbounded per-core encode that OOM-SIGKILLed the process
-        // on large-photo vaults (max 34 MP). Overridable via
-        // MOSS_ENCODE_MP_BUDGET so a future OOM on lower-RAM hardware (or a
-        // throughput bump on a big machine) needs no recompile.
-        let budget_mp = std::env::var("MOSS_ENCODE_MP_BUDGET")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(64);
-        let mp_budget = MegapixelBudget::new(budget_mp);
+        let mp_budget = MegapixelBudget::new(decode_budget_mp());
         // Encodes keep running while the window is hidden, at background QoS.
         let gate = services.derived_work_gate();
         let work = crate::build::cache::LocalFirst::new(n_items);
@@ -2168,44 +2261,44 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             crate::build::scan::scan::image_meta_stat_key(&rel_source_str, m.len(), mtime)
         });
 
-        let (sf_result, was_shared) = {
-            // Singleflight dedups concurrent duplicate-content conversions so a
-            // repeated image decodes once (waiters block on its condvar and reuse
-            // the result). do_work is correct under concurrency — the earlier
-            // wedge that looked like a do_work deadlock was actually the OS
-            // OOM-killing the process; the MegapixelBudget fixes that root cause.
-            //
-            // The megapixel permit is acquired INSIDE the converter closure, so
-            // ONLY the actual converter reserves budget. A waiting duplicate
-            // holds no budget while parked, so it can't starve its own converter
-            // (which would deadlock the budget). do_work wraps the closure in
-            // catch_unwind, and the permit drops as the panic unwinds, so a
-            // panicking encode cannot wedge the budget.
-            services.in_flight_images.do_work(&ctx.rung_plan.flight(&source_oid, &relative_webp), || {
-                // Before the permit: a picture waiting for its download holds
-                // no encode capacity.
-                ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
-                // Cores before megapixels, never the reverse. Cancelled while
-                // waiting, the converter sees the flag and returns at once.
-                let _cores = gate.take_cores(crate::system::folder_session::Encoder::Picture, &cancelled);
-                let _permit = mp_budget.acquire(item_megapixels(item));
-                let before = super::encodes_on_this_thread();
-                let outcome = convert_single_image(
-                    &source_file,
-                    &source_oid,
-                    &relative_webp,
-                    &temp_dir,
-                    &ctx.staging_dir,
-                    &objects,
-                    &transforms,
-                    &ctx.config,
-                    cancel_flag,
-                    meta_stat_key.as_deref(),
-                    &ctx.rung_plan,
-                );
-                encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
-                outcome
-            })
+        // Singleflight dedups concurrent duplicate-content conversions so a
+        // repeated image decodes once (waiters block on its condvar and reuse
+        // the result).
+        //
+        // The megapixel permit is acquired INSIDE the converter closure, so
+        // ONLY the actual converter reserves budget. A waiting duplicate
+        // holds no budget while parked, so it can't starve its own converter
+        // (which would deadlock the budget). do_work wraps the closure in
+        // catch_unwind, and the permit drops as the panic unwinds, so a
+        // panicking encode cannot wedge the budget.
+        let withdrawn = || item.withdrawn(&ctx.source_path);
+        let Some((sf_result, was_shared)) = convert_unless_withdrawn(&services.in_flight_images, &ctx.rung_plan.flight(&source_oid, &relative_webp), &withdrawn, || {
+            // Before the permit: a picture waiting for its download holds
+            // no encode capacity.
+            ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
+            // Cores before megapixels, never the reverse. Cancelled while
+            // waiting, the converter sees the flag and returns at once.
+            let cores = gate.take_cores(crate::system::folder_session::Encoder::Picture, &|| cancelled() || withdrawn());
+            if cores.is_none() && !cancelled() { return None }
+            let _permit = mp_budget.acquire(item_megapixels(item));
+            let before = super::encodes_on_this_thread();
+            let outcome = convert_single_image(
+                &source_file,
+                &source_oid,
+                &relative_webp,
+                &temp_dir,
+                &ctx.staging_dir,
+                &objects,
+                &transforms,
+                &ctx.config,
+                cancel_flag,
+                meta_stat_key.as_deref(),
+                &ctx.rung_plan,
+            );
+            encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
+            Some(outcome)
+        }) else {
+            return ItemStep::nothing_shipped(Vec::new());
         };
 
         if was_shared {
@@ -2411,7 +2504,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 });
             }
         });
-        work.report(encodes.into_inner());
+        let encodes = encodes.into_inner();
+        work.report("image outputs", encodes);
+        crate::build::phase::record_count("image_encodes", encodes);
     }
 
     // ---- Reduce the parallel accumulators ----
@@ -2570,8 +2665,9 @@ fn heal_and_verify_variant(
 /// the same `BackgroundContext`. We clone only what we need into an owned
 /// `ImageRunContext` for the `'static` spawn.
 ///
-/// Empty `image_items` → return early. Terminal receipts are not this worker's
-/// concern at all — see `BuildTerminalBarrier`.
+/// Returns early when there is no image and the folder's ledger records none
+/// (see the guard). Terminal receipts are not this worker's concern at all —
+/// see `BuildTerminalBarrier`.
 ///
 /// When `tx` is `Some`, each produced `.webp` path is registered via the
 /// coordinator channel instead of the legacy `update_image_hashes` disk write.
@@ -2625,11 +2721,10 @@ pub(crate) fn dispatch_image_conversions_at(
     render: Option<u64>,
 ) -> Result<(), crate::build::background::BuildError> {
     let prelude = crate::build::phase::PhaseTrace::start("media_prelude");
-    if ctx.image_items.is_empty() {
-        return Ok(());
-    }
-
-    let Some(svc) = services else { return Ok(()) };
+    // A site whose last picture just left still ends that picture's mark and
+    // sweeps its advisory, so only a folder with nothing recorded returns here.
+    let has_work = !ctx.image_items.is_empty() || image_ledger_records_any(&ctx.source_path);
+    let Some(svc) = services.filter(|_| has_work) else { return Ok(()) };
 
     let config = ImageCompressionConfig::default();
 
@@ -2648,7 +2743,6 @@ pub(crate) fn dispatch_image_conversions_at(
         // file under the vault, and the prune keeps only what something
         // points at. See `orphan_prune::suppressed_variants`.
         let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
-
         let total_items = ctx.image_items.len();
         // No `Option<String>` is ever a fresh oid here — this is the
         // carry-forward skip path (`rematerialize` relinks a cached blob but
@@ -2659,8 +2753,7 @@ pub(crate) fn dispatch_image_conversions_at(
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
         // The workers this dispatch joined, and the outputs they will stage: registered
         // once those workers are done, so this build's seal holds them.
-        let mut joined_marks: Vec<(String, Arc<ImageFingerprint>)> = Vec::new();
-        let mut joined_keys: Vec<String> = Vec::new();
+        let mut parked: Vec<(String, Arc<ImageFingerprint>, Vec<String>)> = Vec::new();
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
         // Sizes sent back to the worker to be produced; see `redispatch_note`.
@@ -2700,8 +2793,8 @@ pub(crate) fn dispatch_image_conversions_at(
             // megapixel budget of its own — and a heal here would put this dispatch's
             // link on a target that worker is about to link.
             if let Some(mark) = fingerprint.as_ref().and_then(|fp| pending_image_mark(&ctx.source_path, &rel_source, fp)) {
-                joined_marks.push((rel_source, mark));
-                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)));
+                let keys: Vec<String> = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)).collect();
+                parked.push((rel_source, mark, keys));
                 continue;
             }
             // The skip candidate's origin: a STRICT stat comparison against the
@@ -2786,7 +2879,10 @@ pub(crate) fn dispatch_image_conversions_at(
             // cause that persists does not re-encode this image on every build.
             let missing_rung = redispatch_note::to_retry(&ctx.moss_dir, disk_source_oid.as_deref().unwrap_or_default(), &missing_rungs, clock());
 
-            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() {
+            // The worker's cache hit settles a placeholder without encoding again.
+            let unsettled = item.scanned_without_colour
+                && fingerprint.as_ref().is_some_and(|fp| placeholder_unsettled(&heal_transforms, &rel_source, &fp.stat, &on_disk(Path::new(&ctx.source_path), &rel_source)));
+            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() && !unsettled {
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
@@ -2830,7 +2926,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     }
                 }
             } else {
-                if disk_source_oid.is_some() {
+                if disk_source_oid.is_some() && !(outputs_present && missing_rung.is_none()) {
                     log::info!(
                         "Image '{}' unchanged but {} is missing — \
                          re-dispatching to self-heal instead of skipping",
@@ -2843,6 +2939,18 @@ pub(crate) fn dispatch_image_conversions_at(
                 to_dispatch.push(ImageConversionItem { fingerprint: fingerprint.map(Arc::new), ..item.clone() });
             }
         }
+
+        // A parked picture no page and no file of the folder names leaves the
+        // set, so the retain below ends its worker's mark and the worker skips it.
+        // A feed a worker writes after this scan costs the picture this build only:
+        // the ship-time scan reads the finished stage and keeps it out of its verdict.
+        if !parked.is_empty() {
+            let unnamed = crate::build::media::orphan_prune::unnamed_sources(&ctx.staging_dir, &heal_paths.memo_dir(), Path::new(&ctx.source_path), parked.iter().map(|(source, _, keys)| (source.as_str(), keys.as_slice())));
+            parked.retain(|(source, _, _)| !unnamed.contains(source));
+            current_paths.retain(|path| !unnamed.contains(path));
+        }
+        let joined_marks: Vec<(String, Arc<ImageFingerprint>)> = parked.iter().map(|(source, mark, _)| (source.clone(), mark.clone())).collect();
+        let joined_keys: Vec<String> = parked.into_iter().flat_map(|(_, _, keys)| keys).collect();
 
         // Drop stored fingerprints for images no longer in the current set,
         // so a removed-then-re-added image starts fresh rather than
@@ -2910,7 +3018,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     advisories: carried_advisories,
                 });
             }
-            return register_joined_images(ctx, joined_images, &tx, &heal_objects);
+            return register_joined_images(svc, ctx, joined_images, &tx, &heal_objects);
         }
         if to_dispatch.len() < total_items {
             log::info!(
@@ -2991,7 +3099,7 @@ pub(crate) fn dispatch_image_conversions_at(
             redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
         }
         // Last, after this build's own encodes are under way.
-        register_joined_images(ctx, joined_images, &joined_tx, &heal_objects)
+        register_joined_images(svc, ctx, joined_images, &joined_tx, &heal_objects)
     }
 }
 
@@ -3005,7 +3113,9 @@ struct JoinedImages<'a> {
 }
 
 /// Wait for the workers a dispatch joined, then register what they staged
-/// through this build's channel, so its seal holds them.
+/// through this build's channel, so its seal holds them, and settle them as Ready
+/// in this build's registry: the joined worker settles the one it started with,
+/// which this build's own promises have replaced.
 ///
 /// Each item's mark ends as it finishes, and its worker saves the hash index
 /// only once its whole run ends, so nothing vouches for these outputs by oid
@@ -3015,7 +3125,7 @@ struct JoinedImages<'a> {
 ///
 /// A build that stops waiting (see [`wait_for_joined_images`]) registers
 /// nothing and answers [`BuildError::LeftToNewerBuild`](crate::build::background::BuildError::LeftToNewerBuild).
-fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
+fn register_joined_images(svc: &BuildServices, ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
     objects: &crate::build::cache::ObjectStore) -> Result<(), crate::build::background::BuildError> {
     if joined.marks.is_empty() {
         return Ok(());
@@ -3029,6 +3139,13 @@ fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Op
         joined.keys.iter().filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key))).map(|key| (key.clone(), None)).collect();
     super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root: Path::new(&ctx.source_path), tx, staging_dir: &ctx.staging_dir,
         objects, suppressed: &Default::default(), registry: None }.run(&staged);
+    if let Some(registry) = svc.assets.as_deref() {
+        for (key, _) in staged {
+            if registry.set_ready(key.clone()) {
+                svc.reporter.report(&PipelineEvent::AssetReady { path: key, asset_type: "image".to_string() });
+            }
+        }
+    }
     Ok(())
 }
 

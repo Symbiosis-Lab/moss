@@ -922,7 +922,7 @@ async fn base_failure_fails_registered_rung_promises() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1003,7 +1003,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1100,7 +1100,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1175,7 +1175,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1735,14 +1735,44 @@ fn should_skip_svg() {
     assert_eq!(reason, Some(SkipReason::Svg));
 }
 
+fn heic_at(h: &TestHarness, name: &str) -> (PathBuf, String) {
+    let src = h._tmp.path().join(name);
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/heic/tiled-1100x700.heic"), &src).unwrap();
+    let oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    (src, oid)
+}
+
 #[test]
-fn should_skip_heic() {
+fn a_heic_with_no_decoder_and_no_kept_encode_is_skipped_and_nothing_is_written_down() {
     let h = harness();
-    let src = h._tmp.path().join("pic.heic");
-    fs::write(&src, b"\x00\x00\x00\x20ftypheic").unwrap();
+    let (src, oid) = heic_at(&h, "pic.heic");
+    let _off = super::super::decode::no_heif_decoder::at(&src);
     let cfg = ImageCompressionConfig::default();
-    let reason = should_skip(&src, "heic", 100, &cfg, &h.transforms, "fake_oid", false);
-    assert_eq!(reason, Some(SkipReason::Heic));
+    let size = fs::metadata(&src).unwrap().len();
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), Some(SkipReason::Heic));
+    assert!(
+        !matches!(h.transforms.read(&oid, crate::build::cache::RecordMode::Request), crate::build::cache::RecordRead::Present(_)),
+        "a computer without a decoder writes no verdict about the picture"
+    );
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_heic_a_mac_encoded_builds_from_its_kept_encode_where_nothing_decodes_it() {
+    let h = harness();
+    let (src, oid) = heic_at(&h, "pic.heic");
+    let cfg = ImageCompressionConfig::default();
+    let size = fs::metadata(&src).unwrap().len();
+    // The Mac: decodes, probes, encodes.
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), None);
+    let made = convert_single_image(&src, &oid, "pic.heic.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
+    assert!(made.error.is_none(), "{:?}", made.error);
+    // A computer with no decoder, reading the same folder's cache.
+    let _off = super::super::decode::no_heif_decoder::at(&src);
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), None);
+    fs::remove_file(h.staging.join("pic.heic.webp")).unwrap();
+    let again = convert_single_image(&src, &oid, "pic.heic.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
+    assert!(again.error.is_none() && h.staging.join("pic.heic.webp").exists(), "{:?}", again.error);
 }
 
 /// The probe's verdict is worked out again from the source: adding it to a
@@ -2149,22 +2179,35 @@ fn should_skip_not_an_image_real_jpeg_passes() {
 
 // ----- format-probe cache -----
 
-/// Build a handcrafted CMYK JPEG: SOI, then SOF0 with a 4-component frame.
-/// Mirrors `is_cmyk_jpeg_handcrafted_sof_components4`'s fixture — a real
-/// decodable JPEG is not required since `is_cmyk_jpeg` only parses the SOF
-/// marker, and CMYK is checked (and short-circuits) before the magic-byte
-/// check in `probe_cmyk_magic_already_small`.
+/// A JPEG head that embeds a CMYK print profile: SOI, an APP2 profile larger
+/// than the sniffers' usual few KB, then SOF0 with a 4-component frame. Not
+/// decodable, which no caller needs: the profile is checked before the
+/// magic-byte check in `probe_cmyk_magic_already_small`.
 pub(crate) fn make_cmyk_jpeg(path: &Path) {
-    let mut bytes: Vec<u8> = vec![0xFF, 0xD8];
-    bytes.push(0xFF);
-    bytes.push(0xC0); // SOF0
-    bytes.extend_from_slice(&[0x00, 0x11]); // length = 17
-    bytes.push(0x08); // precision
-    bytes.extend_from_slice(&[0x00, 0x10]); // height
-    bytes.extend_from_slice(&[0x00, 0x10]); // width
-    bytes.push(0x04); // component count = 4 (CMYK)
-    bytes.extend_from_slice(&[0; 12]); // padding to satisfy length
+    let mut profile = vec![0u8; 6000];
+    profile[16..20].copy_from_slice(b"CMYK");
+    let mut bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE2];
+    bytes.extend_from_slice(&u16::try_from(2 + 14 + profile.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(b"ICC_PROFILE\0\x01\x01");
+    bytes.extend_from_slice(&profile);
+    bytes.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x10, 0x04]);
+    bytes.extend_from_slice(&[0; 12]);
     fs::write(path, &bytes).unwrap();
+}
+
+/// A CMYK JPEG with no profile, made by ImageMagick from sRGB (216, 152, 27).
+pub(crate) const CMYK_UNTAGGED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/cmyk-untagged.jpg"));
+
+#[test]
+fn a_cmyk_jpeg_without_a_profile_is_encoded_by_plain_inversion_as_chromium_and_firefox_draw_it() {
+    let h = harness();
+    let src = h._tmp.path().join("plate.jpg");
+    fs::write(&src, CMYK_UNTAGGED).unwrap();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..ImageCompressionConfig::default() };
+    assert_eq!(should_skip(&src, "jpg", CMYK_UNTAGGED.len() as u64, &cfg, &h.transforms, &source_oid, false), None);
+    let image::Rgb([r, g, b]) = *crate::build::media::rungs::decode_oriented(&src).unwrap().to_rgb8().get_pixel(5, 5);
+    assert!([(r, 216), (g, 152), (b, 27)].iter().all(|&(got, want)| got.abs_diff(want) <= 6), "decoded ({r}, {g}, {b})");
 }
 
 #[test]
@@ -2801,17 +2844,18 @@ fn test_collect_images_filters_skipped() {
 
     let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
-    // svg and heic get a bare <img> and drop here; the html-as-png is a
-    // promised `<picture>` source, so it is collected WITH its verdict for the
-    // registration loop to settle (`ImageConversionItem::skip`).
+    // svg gets a bare <img> and drops here. The html-as-png and the heic that
+    // is not a picture both had variants promised, so each is collected WITH
+    // its verdict for the registration loop to settle (`ImageConversionItem::skip`).
     let by_path = |p: &str| {
         items
             .iter()
             .find(|i| i.source_path == PathBuf::from(p))
             .unwrap_or_else(|| panic!("{p} must be collected"))
     };
-    assert_eq!(items.len(), 2, "svg and heic must be filtered: {items:?}");
+    assert_eq!(items.len(), 3, "svg must be filtered: {items:?}");
     assert_eq!(by_path("Test.png").skip, Some(SkipReason::NotAnImage));
+    assert_eq!(by_path("pic.heic").skip, Some(SkipReason::NotAnImage));
     assert_eq!(by_path("photo.jpg").skip, None);
     assert_eq!(items[0].source_path, PathBuf::from("photo.jpg"));
     assert_eq!(items[0].ext, "jpg");
@@ -2941,6 +2985,23 @@ fn a_cmyk_jpeg_is_collected_with_its_verdict_so_its_source_can_be_settled() {
 }
 
 #[test]
+fn a_heic_no_computer_here_can_read_is_collected_so_its_promised_encodes_settle() {
+    let (mut structure, _tmp) = build_project_with_images(&[("pic.heic", "heic", None, true)]);
+    let pic = _tmp.path().join("pic.heic");
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/heic/tiled-1100x700.heic"), &pic).unwrap();
+    structure.image_files[0].size = fs::metadata(&pic).unwrap().len();
+    let _off = super::super::decode::no_heif_decoder::at(&pic);
+    let transforms = crate::build::cache::TransformCache::new(
+        _tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(_tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut crate::build::cache::HashIndex::new(), &cfg, None);
+    assert_eq!(items.iter().map(|item| item.skip.clone()).collect::<Vec<_>>(), [Some(SkipReason::Heic)]);
+}
+
+#[test]
 fn only_promised_variants_are_settled_for_a_skipped_source() {
     // The `<picture>` promise exists for png/jpg/jpeg only. A webp carries
     // its ladder on `<img srcset>` whose base URL IS the source file, so a
@@ -3001,7 +3062,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3059,7 +3120,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -3125,7 +3186,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3201,7 +3262,7 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
             ext: "jpg".to_string(),
             dimensions: Some(scan_dimensions),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3268,6 +3329,44 @@ fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
 
     assert!(staging.join("photo.webp").exists(), "the base is carried forward");
     assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
+}
+
+/// On a machine new to the folder the fingerprints say unchanged, while the
+/// preview scan's own record holds the size alone. The cached encode is reused
+/// and the picture gets the colour and blur its pages wait on.
+#[test]
+fn an_unchanged_image_the_preview_recorded_without_colour_gets_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
+    ctx.image_items[0].scanned_without_colour = true;
+    let source = tmp.path().join("photo.jpg");
+    let meta = fs::metadata(&source).unwrap();
+    let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let key = crate::build::scan::scan::image_meta_stat_key("photo.jpg", meta.len(), mtime);
+    let transforms = crate::build::cache::TransformCache::for_site(&MossPaths::from_moss_dir(ctx.moss_dir.clone()));
+    let size_only = crate::build::cache::CachedMediaMeta { dimensions: Some((1000, 600)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+    crate::build::scan::scan::write_media_meta(&transforms, Some(&key), None, "jpg", meta.len(), &size_only);
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
+
+    let settled = crate::build::scan::scan::read_cached_meta(&transforms, &key, "jpg").unwrap();
+    assert!(settled.dominant_color.is_some() && settled.lqip_data_uri.is_some(), "{settled:?}");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// The scan tells the dispatch which pictures have no colour yet, so a
+/// settled picture costs the dispatch no read.
+#[test]
+fn a_picture_the_scan_recorded_without_colour_is_marked_for_it() {
+    let (mut structure, tmp) = build_project_with_images(&[("plain.jpg", "jpg", None, true), ("settled.jpg", "jpg", None, true)]);
+    structure.image_files[1].dominant_color = Some("#808080".to_string());
+    let transforms = crate::build::cache::TransformCache::new(tmp.path().join("t"), crate::build::cache::ObjectStore::new(tmp.path().join("o")));
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut crate::build::cache::HashIndex::new(), &cfg, None);
+
+    let marked: Vec<_> = items.iter().map(|i| (i.source_path.to_string_lossy().into_owned(), i.scanned_without_colour)).collect();
+    assert_eq!(marked, [("plain.jpg".to_string(), true), ("settled.jpg".to_string(), false)]);
 }
 
 /// A clock the test moves by hand.
@@ -3436,7 +3535,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3588,7 +3687,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3724,7 +3823,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         };
         let webp_rel = format!("{}.webp", name.trim_end_matches(".jpg"));
         let webp_path = staging.join(&webp_rel);
@@ -3759,7 +3858,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     });
 
     let ctx = BackgroundContext {
@@ -3924,7 +4023,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(fresh_name),
@@ -3932,7 +4031,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -4062,7 +4161,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4153,7 +4252,7 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4250,7 +4349,7 @@ async fn test_image_cancel_aborts_image_runner() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4335,7 +4434,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(img2_rel),
@@ -4343,7 +4442,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -6261,7 +6360,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6344,7 +6443,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
         ext: "jpg".to_string(),
         dimensions: Some((1000, 750)),
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6418,7 +6517,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6502,7 +6601,7 @@ async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         image_items: vec![item.clone()],
@@ -6588,7 +6687,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     // The disk hash index already knows the source's CURRENT content, as if
     // the scan phase had just re-hashed it — but nothing has ever encoded a
@@ -6686,7 +6785,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         })
         .collect();
 
@@ -7040,6 +7139,13 @@ impl RewriteVault {
     /// The staged variant, as the last rebuild left it.
     fn webp(&self) -> Vec<u8> {
         fs::read(self.moss_dir.join("build/staging/pic.webp")).expect("the rebuild staged pic.webp")
+    }
+
+    /// Stages `html` as the build's only page, before any worker has made the stage.
+    fn stage_page(&self, html: &str) {
+        let stage = self.moss_dir.join("build/staging");
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(stage.join("index.html"), html).unwrap();
     }
 
     /// Two solid colours whose PNGs are the same number of bytes, so a rewrite
@@ -7425,6 +7531,7 @@ async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_an
     vault.rebuild(true).await;
     let first = vault.webp();
     vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.stage_page(r#"<img src="pic.webp">"#);
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect(), workers.services()).await;
@@ -7487,6 +7594,145 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 
     assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
     assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
+}
+
+/// An image taken off the site while its worker waits for a core is not encoded: the
+/// dispatch that dropped it ended its mark, and the worker reads that before it
+/// encodes, also while it is parked on the core budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_that_leaves_the_site_while_its_worker_waits_for_a_core_is_not_encoded() {
+    assert!(!parked_pic_encoded_after_rebuild_of(&["other.png"], |_| ()).await, "the worker encoded an image the site no longer lists");
+}
+
+/// The file stays in the folder, so the rebuild still lists it, but no page of
+/// that rebuild names its copies: its worker must not encode it either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_whose_embed_leaves_while_its_worker_waits_for_a_core_is_not_encoded() {
+    assert!(!parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |_| ()).await, "the worker encoded a picture no page names");
+}
+
+/// A stylesheet of the folder still names the copy, and the build may not have
+/// copied that stylesheet into staging yet: the picture is still encoded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_only_a_stylesheet_names_is_still_encoded_when_its_embed_leaves() {
+    for named in ["pic.webp", "pic.png"] {
+        let css = format!("body {{ background: url({named}) }}");
+        assert!(parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| fs::write(vault.root.join("site.css"), &css).unwrap()).await, "a picture the folder's stylesheet names as {named} was not encoded");
+    }
+}
+
+/// Takes a path's permissions away until dropped.
+#[cfg(unix)]
+struct Denied(PathBuf);
+
+#[cfg(unix)]
+impl Denied {
+    fn new(path: PathBuf) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        Denied(path)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Denied {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// A judgement that cannot read every staged page, every folder of the vault
+/// or every file without waiting on the cloud, judges nothing unnamed.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_staged_page_cannot_be_read() {
+    assert!(parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| Denied::new(vault.moss_dir.join("build/staging/index.html"))).await, "an unreadable staged page was judged not to name the picture");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_folder_of_the_vault_cannot_be_read() {
+    let encoded = parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| {
+        fs::create_dir(vault.root.join("notes")).unwrap();
+        Denied::new(vault.root.join("notes"))
+    })
+    .await;
+    assert!(encoded, "an unreadable folder was judged not to name the picture");
+}
+
+/// The cloud placeholder holds no bytes that name the picture: the check is
+/// what keeps the judgement from reading, and so waiting on, the file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_stylesheet_is_in_the_cloud() {
+    let encoded = parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| {
+        let css = vault.root.join("site.css");
+        fs::write(&css, "body { color: red }").unwrap();
+        crate::build::icloud::pretend::evicted(&css)
+    })
+    .await;
+    assert!(encoded, "a stylesheet in the cloud was read to judge the picture");
+}
+
+/// Queues pic.png and other.png on a worker parked on the core budget, then
+/// rebuilds with `rebuilt` listed and a staged page naming only other.webp.
+/// `setup` then prepares the vault, and what it returns is held until the
+/// rebuild is done. Says whether pic.webp was encoded.
+async fn parked_pic_encoded_after_rebuild_of<G>(rebuilt: &[&str], setup: impl FnOnce(&RewriteVault) -> G) -> bool {
+    use crate::system::folder_session::{CorePool, Encoder};
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    let pool = CorePool::own();
+    let all = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, false, &|| false).unwrap()).collect();
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
+
+    vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), services()).await;
+    let running = tokio::spawn({
+        let workers = workers.clone();
+        async move { workers.run_held().await }
+    });
+    // Long enough for the worker to reach the core budget and park on it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    vault.stage_page(r#"<picture><source srcset="other.webp"><img src="other.png"></picture>"#);
+    let _held = setup(&vault);
+    let joining = vault.dispatch_joining(vault.collect_of(rebuilt), services(), None, None).await;
+    drop(busy);
+    running.await.unwrap();
+    joining.await.unwrap().unwrap();
+
+    let staged = |name: &str| vault.moss_dir.join("build/staging").join(name).exists();
+    assert!(staged("other.webp"), "premise: the image that stayed was encoded");
+    staged("pic.webp")
+}
+
+/// The same when the picture that leaves is the site's last: a dispatch with no
+/// pictures left still ends the marks of the ones it dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_last_image_leaving_the_site_while_its_worker_waits_for_a_core_is_not_encoded() {
+    use crate::system::folder_session::{CorePool, Encoder};
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let pool = CorePool::own();
+    let all = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, false, &|| false).unwrap()).collect();
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
+
+    vault.dispatch(vault.collect_of(&["pic.png"]), services()).await;
+    let running = tokio::spawn({
+        let workers = workers.clone();
+        async move { workers.run_held().await }
+    });
+    // Long enough for the worker to reach the core budget and park on it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    vault.dispatch(Vec::new(), services()).await;
+    drop(busy);
+    running.await.unwrap();
+
+    assert!(!vault.moss_dir.join("build/staging/pic.webp").exists(), "the worker encoded the last image after the site dropped it");
 }
 
 /// A worker vouches for the source its dispatch saw. One that read the file later has
@@ -7595,6 +7841,27 @@ async fn a_build_that_joins_a_running_worker_seals_with_what_that_worker_stages(
         }
     }
     assert_eq!(registered, ["pic.webp"], "the joining build did not register the picture the worker it joined staged");
+}
+
+/// A build settles every key it promised, including one it left to a worker it
+/// joined: that worker settles the registry it was started with, which a later
+/// build's promises replace, so the joining build marks what it staged as Ready
+/// itself. Left Pending, the preview stands in for a picture that is already there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_a_running_worker_settles_the_keys_it_promised() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    let promised = std::sync::Arc::new(AssetRegistry::new());
+    promised.set_pending("pic.webp".to_string(), Some((24, 24)), None);
+    let joining = vault.dispatch_joining(vault.collect(), BuildServices { assets: Some(promised.clone()), ..workers.services() }, None, None).await;
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+
+    assert!(promised.pending_keys().is_empty(), "the joining build left its promises pending: {:?}", promised.pending_keys());
+    assert!(matches!(promised.get("pic.webp"), Some(AssetState::Ready)));
 }
 
 /// A build waiting on a joined image leaves it to a newer build that waits on it
@@ -7879,7 +8146,7 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
             ext: "webp".to_string(),
             dimensions: Some((2600, 8)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -7920,7 +8187,7 @@ async fn a_picture_waits_for_a_core_from_the_folder_budget() {
             ext: "jpg".to_string(),
             dimensions: Some((400, 300)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -7971,7 +8238,7 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
     // The run's encode count.
     let run = |source_oid: String| {
         let ctx = ImageRunContext {
-            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None }],
+            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None , scanned_without_colour: false}],
             source_path: root.to_string_lossy().to_string(),
             staging_dir: staging.clone(),
             moss_dir: moss_dir.clone(),
@@ -8011,6 +8278,16 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
 /// A heartbeat tells an idle app from one still encoding by these totals, so
 /// every mark must end exactly once: finished by its worker, replaced by a
 /// newer dispatch, or dropped with its page.
+/// A HEIC the decoder refused has nothing a browser but Safari can show, so the
+/// person is asked to re-export it, by file.
+#[test]
+fn a_heic_that_could_not_be_read_asks_to_be_re_exported() {
+    let ItemStep::Handled { advisories, .. } = ItemStep::base_failed("photos/IMG_1.HEIC", "photos/IMG_1.HEIC.webp", Vec::new(), "decode failed".into()) else { panic!() };
+    assert_eq!(advisories[0].severity, crate::advisory::Severity::NeedsAction);
+    assert_eq!(advisories[0].item.as_deref(), Some("photos/IMG_1.HEIC"));
+    assert!(advisories[0].what.contains("re-export"), "{}", advisories[0].what);
+}
+
 #[test]
 fn image_work_counts_every_mark_until_it_ends() {
     let tmp = tempfile::tempdir().unwrap();
@@ -8031,4 +8308,54 @@ fn image_work_counts_every_mark_until_it_ends() {
     retain_image_item_fingerprints(&folder, &std::collections::HashSet::new());
     assert_eq!(image_work_in(&folder), work(3, 3), "its page went");
     assert!(image_work().queued >= 3, "the process total includes this folder");
+}
+
+/// A save that left pages to the settled build gets exactly one, and only once
+/// the images it saw with a worker are done; a seal before then keeps it.
+#[test]
+fn a_promised_settled_build_is_enqueued_once_when_the_image_work_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let folder = tmp.path().to_string_lossy();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let mark = std::sync::Arc::new(seen);
+    let handle = crate::ops::watch::worker::register(&folder);
+    let run = mark_image_items_pending(&folder, [("pic.jpg".to_string(), mark.clone())]);
+
+    promise_settled_build(&folder);
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert!(handle.take().is_none(), "a seal while the picture is with its worker keeps the promise");
+
+    end_image_item(&folder, "pic.jpg", &mark, true, &[]);
+    drop(run);
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::ImagesSettled { edited: false }));
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert!(handle.take().is_none(), "the promise is kept once");
+    crate::ops::watch::worker::deregister(&folder, &handle);
+}
+
+/// Two paths with the same bytes share one encode. When the converter's own
+/// picture is withdrawn while it waits for a core, the other path, still
+/// wanted, runs the encode itself instead of inheriting nothing.
+#[test]
+fn a_still_wanted_picture_encodes_itself_when_the_encode_it_waited_on_is_withdrawn() {
+    let flight = crate::build::cache::Singleflight::<Option<ImageConversionOutcome>>::new();
+    let encoded = || Some(ImageConversionOutcome { webp_oid: Some("webp".into()), webp_size: 1, original_size: 2, error: None, rungs: Vec::new() });
+    let (started, converter_started) = std::sync::mpsc::channel();
+    std::thread::scope(|s| {
+        let converter = s.spawn(|| {
+            convert_unless_withdrawn(&flight, "same-bytes", &|| true, || {
+                started.send(()).unwrap();
+                // Long enough for the waiter to join this flight.
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                None
+            })
+        });
+        converter_started.recv().unwrap();
+        let waiter = convert_unless_withdrawn(&flight, "same-bytes", &|| false, encoded);
+        assert!(converter.join().unwrap().is_none(), "the withdrawn picture encodes nothing");
+        let Some((Some(outcome), _)) = waiter else { panic!("the waiter got {waiter:?}") };
+        assert_eq!(outcome.webp_oid.as_deref(), Some("webp"));
+    });
 }

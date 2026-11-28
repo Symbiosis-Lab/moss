@@ -187,28 +187,37 @@ pub fn require_members_moss(folder: &Path) -> Result<(), String> {
     write_managed_toml(&path, &config.original, &config.root, CURRENT_VERSION)
 }
 
+/// Let `edit` change the folder's `.moss/config.toml`, then write back only
+/// what it changed.
+pub fn edit_config(folder: &Path, edit: impl FnOnce(&mut Table) -> Result<(), String>) -> Result<(), String> {
+    let path = folder.join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&path)?;
+    edit(&mut root)?;
+    write_managed_toml(&path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
 /// Write the top-level `environment` key into `.moss/config.toml`.
 pub fn save_environment(project_path: &str, env: HostingEnvironment) -> Result<(), String> {
-    let config_path = Path::new(project_path).join(".moss").join("config.toml");
-    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
-    root.insert("environment".to_string(), Value::String(env.name().to_string()));
-    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+    edit_config(Path::new(project_path), |root| {
+        root.insert("environment".to_string(), Value::String(env.name().to_string()));
+        Ok(())
+    })
 }
 
 /// Write one `[site]` field — the shared frame behind the typed wrappers
 /// [`save_site_str`] and [`save_site_bool`], which were byte-level twins of
 /// each other until 2026-08-31.
 fn save_site_value(project_path: &str, field: &str, value: Value) -> Result<(), String> {
-    let config_path = Path::new(project_path).join(".moss").join("config.toml");
-    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
-    let site = subtable(&mut root, "site")?;
-    site.insert(field.to_string(), value);
-    // `url` replaces the older `domain`: every write of it drops `domain`, so
-    // a folder never holds two addresses that could disagree.
-    if field == "url" {
-        site.remove("domain");
-    }
-    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+    edit_config(Path::new(project_path), |root| {
+        let site = subtable(root, "site")?;
+        site.insert(field.to_string(), value);
+        // `url` replaces the older `domain`: every write of it drops
+        // `domain`, so a folder never holds two addresses that could disagree.
+        if field == "url" {
+            site.remove("domain");
+        }
+        Ok(())
+    })
 }
 
 /// Write a string field into `[site]`.
@@ -219,6 +228,34 @@ pub fn save_site_str(project_path: &str, field: &str, value: &str) -> Result<(),
 /// Write a boolean field into `[site]`.
 pub fn save_site_bool(project_path: &str, field: &str, value: bool) -> Result<(), String> {
     save_site_value(project_path, field, Value::Boolean(value))
+}
+
+/// Write `[channels.email] provider`, or remove it for `None`; the channel's
+/// other keys stay.
+pub fn save_newsletter_provider(project_path: &str, provider: Option<&str>) -> Result<(), String> {
+    if let Some(name) = provider {
+        crate::config::provider_name(name)?;
+    }
+    let config_path = Path::new(project_path).join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
+    let email = subtable(subtable(&mut root, "channels")?, "email")?;
+    match provider {
+        Some(provider) => email.insert("provider".to_string(), Value::String(provider.to_string())),
+        None => email.remove("provider"),
+    };
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
+/// Name `provider` as the site's analytics service, with the site's id there:
+/// `[services.analytics] provider` and `site_id`.
+pub fn save_analytics_service(project_path: &str, provider: &str, site_id: &str) -> Result<(), String> {
+    crate::config::provider_name(provider)?;
+    let config_path = Path::new(project_path).join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
+    let analytics = subtable(subtable(&mut root, "services")?, "analytics")?;
+    analytics.insert("provider".to_string(), Value::String(provider.to_string()));
+    analytics.insert("site_id".to_string(), Value::String(site_id.to_string()));
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
 }
 
 /// Set the site's address to a custom domain: `[site].url = "https://<domain>/"`
@@ -456,5 +493,16 @@ mod tests {
         assert!(after.contains("schema_version = 6"), "got: {after}");
         let sevens = saved_config("schema_version = 7\n");
         assert!(sevens.contains("schema_version = 7"), "a stamped site is not lowered: {sevens}");
+    }
+
+    #[test]
+    fn a_provider_line_is_written_only_as_a_name_the_build_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        assert!(save_newsletter_provider(path, Some("Send Grid")).is_err());
+        assert!(save_newsletter_provider(path, Some("")).is_err());
+        save_newsletter_provider(path, Some("sendgrid")).unwrap();
+        let config = crate::build::site_config::read_project_config(path).unwrap();
+        assert_eq!(config.newsletter_service(), Some(Ok("sendgrid".to_string())));
     }
 }

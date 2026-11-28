@@ -15,10 +15,8 @@
 //! Term identity rules (fold, slug, key) are owned by `moss_core::terms`;
 //! this pass only applies them to documents.
 
-use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use moss_core::terms::term_folder_key;
 use regex::Regex;
 
 use crate::build::scan::article_map::to_pretty_url;
@@ -54,9 +52,7 @@ pub mod places;
 // doc comment for why it is a sibling file rather than inline here.
 mod rollup;
 mod stubs;
-mod editions;
-pub use editions::TermKey;
-use editions::scope;
+pub use moss_core::terms::index::TermKey;
 mod translations;
 mod cards;
 pub use cards::{set_term_cards, with_term_pages};
@@ -68,223 +64,7 @@ static LINK_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[\[[^\]]*\]\]|\[[^\]]*\]\([^)]*\)").expect("valid regex")
 });
 
-/// One term's build-time identity: where its page lives and what it is called.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TermSite {
-    /// Display name — the first-seen original-case form of the term.
-    pub display: String,
-    /// Pretty URL key of the claiming page (`about/ma/`; `` for the home
-    /// page), when a real page claims this term. `None` ⇒ the term page is
-    /// generated at the pseudo-folder key. Persisted as-is in the article
-    /// map, so the editor reads the claim instead of re-deriving it.
-    pub claimed_by: Option<String>,
-    /// This term's parent's pseudo-folder key (`places/japan`), when the
-    /// term belongs to a place-typed kind and that kind's `parents` map
-    /// names one after resolution. Set inside `derive_terms` pass 2 —
-    /// `derive_terms` reads only the generic `parents` map its own `kinds`
-    /// parameter already carries, never the gazetteer directly.
-    ///
-    /// `skip_serializing_if` keeps a term with no parent out of the JSON
-    /// entirely — without it every term in every article map gains a
-    /// literal `"parent": null`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
-}
-
-/// The vault's terms, keyed by pseudo-folder key (`authors/<slug>`,
-/// `tags/<slug>`, or a declared kind's own namespace). Built by
-/// [`derive_terms`]; consumed by the synthetic-index loops (which keys to
-/// seed, what title to show) and by the link pass (where a term name
-/// points).
-#[derive(Debug, Default)]
-pub struct TermIndex {
-    sites: BTreeMap<String, TermSite>,
-    /// The kinds table this index was derived from. Persisted so a later
-    /// reader (the article map, the editor's takeover resolver) sees the
-    /// same kinds `derive_terms` used, instead of re-reading config. Read
-    /// through [`Self::kinds`], not directly — same reasoning as `sites`.
-    kinds: Vec<TermKind>,
-    /// Term key, field name → the member `url_path`s that field claims, in
-    /// scan order. Recorded in `derive_terms`'s membership pass at the same
-    /// point a member's `also_in` entry is pushed, so the two can never
-    /// disagree about who's a member. Feeds `ParsedDocument::term_sections`
-    /// and the article map's per-field summary. Read through
-    /// [`Self::members_by_field`].
-    members_by_field: BTreeMap<(String, String), Vec<String>>,
-    /// Term key → that term's listing split by field, resolved once in
-    /// `derive_terms`'s second pass and shared by both pages that can host
-    /// the listing: a claiming page reads its own copy off
-    /// `ParsedDocument::term_sections`, and a generated term page — which
-    /// has no document until the render layer synthesizes one — reads it
-    /// here through [`Self::sections`]. One computation, two readers, so
-    /// the claimed and unclaimed pages of the same term cannot disagree
-    /// about which field a member came through.
-    sections_by_term: BTreeMap<String, Vec<(Option<String>, Vec<String>)>>,
-    /// Term key → its direct children's `(display, url, count)`, where
-    /// `count` is the number of distinct member URLs across the child's own
-    /// `members_by_field` entries (not a raw sum over fields, which would
-    /// double-count a document reaching the child through two fields).
-    /// Already roll-up-inclusive: a region's children counts already
-    /// reflect every city under it, since pass 2's ancestor walk pushed
-    /// every level of a document's chain into `members_by_field`, not only
-    /// the immediate parent.
-    children_by_term: BTreeMap<String, Vec<(String, String, usize)>>,
-    /// Every namespace root in use, in kind order then edition order.
-    roots: Vec<TermRoot>,
-}
-
-/// A namespace root in use in one edition.
-#[derive(Debug)]
-struct TermRoot {
-    /// `partners`, `de/partners`.
-    key: String,
-    /// Index into `TermIndex::kinds`.
-    kind: usize,
-    /// The edition's tree, `""` for the default edition.
-    edition: String,
-}
-
-/// A kind's entry in one edition's nav bar.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TermNavEntry {
-    /// The edition's root page key (`partners`, `de/partners`).
-    pub root: String,
-    pub label: String,
-    pub weight: Option<i32>,
-    /// The edition's tree, `""` for the default edition.
-    pub edition: String,
-}
-
-impl TermIndex {
-    /// Every term key, claimed or not.
-    pub fn term_keys(&self) -> impl Iterator<Item = &str> {
-        self.sites.keys().map(String::as_str)
-    }
-
-    /// The pretty URL of the page that claims this term, if one does.
-    pub fn claimed_by(&self, term_key: &str) -> Option<&str> {
-        self.sites.get(term_key)?.claimed_by.as_deref()
-    }
-
-    /// Pseudo-folder keys that need a GENERATED term page — every term no
-    /// real page claims. Sorted (BTreeMap) so page emission is deterministic.
-    pub fn unclaimed_keys(&self) -> impl Iterator<Item = &str> {
-        self.sites
-            .iter()
-            .filter(|(_, s)| s.claimed_by.is_none())
-            .map(|(k, _)| k.as_str())
-    }
-
-    /// Display title for a term pseudo-folder key. `None` for a namespace
-    /// root, which is no term: its heading is the owning kind's own
-    /// resolved `title` (see [`Self::kind_for`]).
-    pub fn display(&self, key: &str) -> Option<&str> {
-        self.sites.get(key).map(|s| s.display.as_str())
-    }
-
-    /// The kind whose namespace root this key is (`partners`, `de/partners`),
-    /// with the root's edition.
-    ///
-    /// Only for a namespace this build actually put terms in. A kind exists
-    /// whether or not anything feeds it (the built-ins survive their
-    /// dimension being switched off, with an empty `fields`), and a site
-    /// with `[terms] author = false` may well have a real directory called
-    /// `authors/` — which keeps its own name, rather than being retitled by
-    /// a namespace nothing is in.
-    pub fn kind_for(&self, key: &str) -> Option<(&TermKind, &str)> {
-        self.roots.iter().find(|root| root.key == key).map(|root| (&self.kinds[root.kind], root.edition.as_str()))
-    }
-
-    /// Every derived term, keyed by pseudo-folder key, in key order. What the
-    /// article map records so the editor reads claims instead of re-deriving
-    /// them (one owner of link semantics).
-    pub fn sites(&self) -> &BTreeMap<String, TermSite> {
-        &self.sites
-    }
-
-    /// The kinds table this index was derived from — what the article map
-    /// persists (`ArticleMap::kinds`) so the editor's takeover resolver sees
-    /// the same kinds `derive_terms` used instead of re-reading config.
-    pub fn kinds(&self) -> &[TermKind] {
-        &self.kinds
-    }
-
-    /// Term key, field name → the member `url_path`s that field claims. What
-    /// the article map's `fields_with_members` summarizes (term key → the
-    /// subset of that kind's fields with at least one member).
-    pub fn members_by_field(&self) -> &BTreeMap<(String, String), Vec<String>> {
-        &self.members_by_field
-    }
-
-    /// This term's listing split by field, in `kind.fields` order with a
-    /// trailing unlabelled group — the same value a claiming page carries
-    /// in `ParsedDocument::term_sections`. The render layer's generated
-    /// term page reads it from here because it has no document of its own.
-    pub fn sections(&self, term_key: &str) -> Option<&[(Option<String>, Vec<String>)]> {
-        self.sections_by_term.get(term_key).map(Vec::as_slice)
-    }
-
-    /// This term's direct children, `(display, url, count)` — the same
-    /// value a claiming page carries in `ParsedDocument::place_children`.
-    /// `None` for a term with no children (every non-place term, and a leaf
-    /// place).
-    pub fn children(&self, term_key: &str) -> Option<&[(String, String, usize)]> {
-        self.children_by_term.get(term_key).map(Vec::as_slice)
-    }
-
-    /// Whether any term exists under this root key.
-    fn namespace_in_use(&self, root: &str) -> bool {
-        let prefix = format!("{}/", root);
-        self.sites.keys().any(|k| k.starts_with(&prefix))
-    }
-
-    /// The namespace roots (each declared kind's key, once per edition) that
-    /// have at least one term — a claimed one counts, since the claim page
-    /// joins the root listing.
-    pub fn roots_in_use(&self) -> impl Iterator<Item = &str> + '_ {
-        self.roots.iter().map(|root| root.key.as_str())
-    }
-
-    /// The nav-bar entries of the kinds in `nav` (see
-    /// `ConfigFile::terms_nav`) that have a root page, in the order given, one
-    /// per edition that has a root of the kind, labelled with the kind's name
-    /// in that edition (`TermKind::title_in`).
-    pub fn nav_entries(&self, nav: &[(String, Option<i32>)]) -> Vec<TermNavEntry> {
-        let mut out = Vec::new();
-        for (ns, weight) in nav {
-            for root in self.roots.iter().filter(|root| self.kinds[root.kind].key == *ns) {
-                let label = self.kinds[root.kind].title_in(&root.edition);
-                out.push(TermNavEntry { root: root.key.clone(), label, weight: *weight, edition: root.edition.clone() });
-            }
-        }
-        out
-    }
-
-    /// Every pseudo-folder that needs a synthetic folder document and an
-    /// index page: the unclaimed terms, plus the root of each namespace in
-    /// use. The one list both folder-index synthesis blocks in
-    /// `render/blocking.rs` seed from, so they cannot disagree about which
-    /// pseudo-folders exist (a claimed term needs neither — the claiming page
-    /// is a real document — but its root still does, and the root's own
-    /// `authors/index.html` has no ancestor for the ancestor walk to register).
-    pub fn synthetic_folder_keys(&self) -> Vec<String> {
-        self.unclaimed_keys()
-            .map(str::to_string)
-            .chain(self.roots_in_use().map(str::to_string))
-            .collect()
-    }
-
-    /// The bare namespace-root keys among [`Self::synthetic_folder_keys`]
-    /// (no `/`) whose kind is place-typed — every folder a real `index.md`
-    /// can host that kind's term map on, the same map an unclaimed root
-    /// already gets from the synthetic-index path in `render/blocking.rs`.
-    /// An individual place term (`places/kyoto`) is never a member: it is
-    /// reached through a claim (`ParsedDocument::term_listing`) instead, and
-    /// `roots_in_use` already yields bare keys only.
-    pub fn place_namespace_roots(&self) -> impl Iterator<Item = &str> + '_ {
-        self.roots.iter().filter(|root| self.kinds[root.kind].is_place).map(|root| root.key.as_str())
-    }
-}
+pub use moss_core::terms::index::{TermIndex, TermNavEntry, TermSite};
 
 /// This doc's values for a name-list field. A name outside the five built-ins
 /// is site-declared, read from the page's own frontmatter like `author:`.
@@ -311,7 +91,7 @@ fn raw_frontmatter_value(doc: &ParsedDocument, key: &str) -> Option<serde_yaml::
 
 /// This doc's term-page claim for a name-list field, or `None`. Companion to
 /// [`field_names`].
-fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::TermClaim> {
+pub(crate) fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::TermClaim> {
     match field {
         "author" => doc.author_page.clone(),
         "tags" => doc.tag_page.clone(),
@@ -327,25 +107,6 @@ fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::
 }
 
 pub use moss_core::terms::claim_field_key;
-
-/// Maps read a page's places from `location`. A place-typed kind fed by other
-/// fields (`fields = ["place"]`) mirrors their names there, so every map,
-/// locator and place line treats the kind's fields as `location`.
-fn mirror_place_fields_into_location(documents: &mut [ParsedDocument], kinds: &[TermKind]) {
-    let fields: Vec<&str> = kinds.iter().filter(|k| k.is_place).flat_map(|k| k.fields.iter().map(String::as_str)).filter(|f| *f != "location").collect();
-    if fields.is_empty() {
-        return;
-    }
-    for doc in documents.iter_mut() {
-        for field in &fields {
-            for name in field_names(doc, field) {
-                if !doc.location.contains(&name) {
-                    doc.location.push(name);
-                }
-            }
-        }
-    }
-}
 
 /// Derive term memberships and claims from a build's kinds table. Mutates
 /// documents in place:
@@ -371,267 +132,25 @@ fn mirror_place_fields_into_location(documents: &mut [ParsedDocument], kinds: &[
 /// Terms are per edition (`ParsedDocument::edition`): a page's terms, claims
 /// and links stay inside the language tree it sits in.
 pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> TermIndex {
-    mirror_place_fields_into_location(documents, &kinds);
+    moss_core::page::inherit::mirror_place_fields_into_location(documents, &kinds, |d| &mut d.location);
     inherit::inherit_work_locations(documents);
-    let mut index = TermIndex::default();
-
-    // Pass 1: claims. Resolve every *_page claim to its term key so pass 2
-    // can exclude the claiming page from its own listing.
-    for doc in documents.iter() {
-        for kind in &kinds {
-            for field in &kind.fields {
-                let Some(claim) = term_claim_of(doc, field) else { continue };
-                let name = claim.name(&doc.title).trim();
-                let Some(key) = resolved_key(kind, &doc.edition, name) else { continue };
-                let site = index.sites.entry(key.clone()).or_insert_with(|| TermSite {
-                    display: name.to_string(),
-                    claimed_by: None,
-                    parent: None,
-                });
-                // First URL wins, so the result is scan-order independent.
-                let claim = to_pretty_url(&doc.url_path);
-                match &site.claimed_by {
-                    None => site.claimed_by = Some(claim),
-                    Some(existing) if *existing <= claim => {
-                        crate::build::cli_output::log_warn_problem!(
-                            "duplicate term claim: '{}' is already claimed by /{}; ignoring the claim on /{}",
-                            name, existing, claim
-                        );
-                    }
-                    Some(existing) => {
-                        crate::build::cli_output::log_warn_problem!(
-                            "duplicate term claim: '{}' is already claimed by /{}; ignoring the claim on /{}",
-                            name, claim, existing
-                        );
-                        site.claimed_by = Some(claim);
-                    }
-                }
-            }
-        }
+    let derived = moss_core::terms::index::derive_index(documents, kinds);
+    for problem in &derived.problems {
+        crate::build::cli_output::log_warn_problem!("{problem}");
     }
-
-    // The winning claimer hosts the term's member listing. Deliberately NOT
-    // lowered onto `children_source`: that field is a wikilink reference that
-    // resolves through stem extraction (`frontmatter_ref_to_stem` keeps only
-    // the last path segment), which would mangle a pseudo-folder key like
-    // `authors/林小滿`. A dedicated resolved field keeps the render layer and
-    // the listing-group digest reading one unambiguous value.
-    for doc in documents.iter_mut() {
-        let claim_key = claimed_key(doc, &kinds, &index);
-        let Some(key) = claim_key else { continue };
-        // The claim page takes the generated page's place in the NAMESPACE
-        // ROOT listing too (`/authors/`, `/tags/`): membership in the root is
-        // declared the same way term membership is, via `also_in`.
-        if let Some(term) = TermKey::parse(&key) {
-            doc.also_in.get_or_insert_with(Vec::new).push(term.root());
+    let index = derived.index;
+    for (doc, added) in documents.iter_mut().zip(derived.pages) {
+        if !added.also_in.is_empty() {
+            doc.also_in.get_or_insert_with(Vec::new).extend(added.also_in);
         }
-        if doc.children_source.is_some() {
-            continue; // author routed children explicitly; their routing wins
+        if added.term_listing.is_some() {
+            doc.term_listing = added.term_listing;
         }
-        if doc.children == Some(false) {
-            continue; // author suppressed the listing; the claim still resolves links
-        }
-        doc.term_listing = Some(key);
-    }
-
-    // Pass 2: memberships. Every field value of every kind claims membership
-    // in its pseudo-folder, beside any authored `also_in` — and records which
-    // field it came through, in `members_by_field`. A place-typed kind's
-    // resolved key also walks `kind.parents` upward (the roll-up: a page in
-    // a city also lists on its region and country), pushing each ancestor
-    // through the same steps as the immediate key.
-    for doc in documents.iter_mut() {
-        // A page reached only by its link joins no term: the term's page
-        // would name the page, or the term, to the whole site.
-        if doc.hidden_from_search_engines() {
-            continue;
-        }
-        let own_claim = claimed_key(doc, &kinds, &index);
-        let doc_edition = doc.edition.clone();
-        let doc_url = to_pretty_url(&doc.url_path);
-        // Dedup `also_in`: a page naming the same term through more than one
-        // field of one kind (`author:` and `editor:` both crediting the same
-        // person) must still occupy that pseudo-folder's membership list only
-        // once — the per-field split still records each field's own
-        // contribution in `members_by_field` below, which is a different
-        // question ("which field did this member come through") that the
-        // dedup here doesn't touch.
-        let mut also_in_pushed: std::collections::HashSet<String> = std::collections::HashSet::new();
-        // Gates the `members_by_field` push, for the immediate key AND every
-        // ancestor alike — keyed on `(key, field)`, not on `also_in_pushed`
-        // (which only remembers keys already pushed into `also_in`, so it
-        // neither stops an ancestor reached twice through two fields of one
-        // document, nor a key reached both directly and as an ancestor).
-        let mut members_pushed: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        for kind in &kinds {
-            for field in &kind.fields {
-                let names = field_names(doc, field).to_vec();
-                for name in &names {
-                    let name = name.trim();
-                    let Some(key) = resolved_key(kind, &doc_edition, name) else { continue };
-                    // First-seen original case is the display form; later
-                    // case variants merge into the same key by construction.
-                    index.sites.entry(key.clone()).or_insert_with(|| TermSite {
-                        display: name.to_string(),
-                        claimed_by: None,
-                        parent: None,
-                    });
-                    if own_claim.as_deref() != Some(key.as_str()) {
-                        // a term page never lists itself
-                        if also_in_pushed.insert(key.clone()) {
-                            doc.also_in.get_or_insert_with(Vec::new).push(key.clone());
-                        }
-                        if members_pushed.insert((key.clone(), field.clone())) {
-                            index
-                                .members_by_field
-                                .entry((key.clone(), field.clone()))
-                                .or_default()
-                                .push(doc_url.clone());
-                        }
-                    }
-                    // The roll-up: walk `kind.parents` upward from `key`.
-                    // Empty for every non-place kind, so this is a no-op
-                    // there. A4's cycle-guard already made the gazetteer's
-                    // `parents` map a fixed point, so this walk shouldn't
-                    // need one of its own — but `seen` is a defensive
-                    // backstop here too, the same as the two sibling walks
-                    // below that also traverse `kind.parents`: a hand-built
-                    // `TermKind` reaching this loop by some path other than
-                    // `attach_parents` is not this function's business to
-                    // rule out.
-                    let mut current = key.clone();
-                    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                    seen.insert(current.clone());
-                    while let Some(parent_display) = kind.parents.get(&current) {
-                        let anc = kind.key_in("", parent_display);
-                        index.sites.entry(anc.clone()).or_insert_with(|| TermSite {
-                            display: parent_display.clone(),
-                            claimed_by: None,
-                            parent: None,
-                        });
-                        if own_claim.as_deref() != Some(anc.as_str()) {
-                            if also_in_pushed.insert(anc.clone()) {
-                                doc.also_in.get_or_insert_with(Vec::new).push(anc.clone());
-                            }
-                            if members_pushed.insert((anc.clone(), field.clone())) {
-                                index
-                                    .members_by_field
-                                    .entry((anc.clone(), field.clone()))
-                                    .or_default()
-                                    .push(doc_url.clone());
-                            }
-                        }
-                        if !seen.insert(anc.clone()) {
-                            break;
-                        }
-                        current = anc;
-                    }
-                }
-            }
-        }
-    }
-
-    // `TermSite.parent` and children-with-counts — resolved
-    // once, in the sibling `rollup` module, now that pass 2's memberships
-    // are final. See its own doc comment for why this is a separate sweep
-    // rather than set inline during the ancestor walk above.
-    rollup::resolve_hierarchy(&mut index, &kinds);
-
-    // Second small pass: resolve `term_sections` for every claiming page,
-    // now that `members_by_field` is complete. A reverse scan of every
-    // document's now-final `also_in` finds hand-authored cross-listing
-    // (`also_in: [...]`) that names a term directly — membership no field
-    // record claims — so it can still appear, in a trailing unlabelled
-    // group, rather than being silently dropped.
-    let mut all_members_by_term: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for doc in documents.iter() {
-        let Some(also_in) = &doc.also_in else { continue };
-        for key in also_in {
-            if key.contains('/') {
-                all_members_by_term.entry(key.clone()).or_default().push(to_pretty_url(&doc.url_path));
-            }
-        }
-    }
-    // Resolved for EVERY term, not only the claimed ones: a term no page
-    // claims still gets a listing, rendered from a synthetic folder document
-    // the render layer builds after this pass. Both readers take the same
-    // value — the claiming page through its own `term_sections` below, the
-    // generated page through `TermIndex::sections`.
-    let mut sections_by_term: BTreeMap<String, Vec<(Option<String>, Vec<String>)>> = BTreeMap::new();
-    for term_key in index.sites.keys() {
-        let Some(term) = TermKey::parse(term_key) else { continue };
-        let Some(kind) = kinds.iter().find(|k| k.key == term.ns) else { continue };
-        let mut claimed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut sections: Vec<(Option<String>, Vec<String>)> = kind
-            .fields
-            .iter()
-            .map(|field| {
-                let urls = index
-                    .members_by_field
-                    .get(&(term_key.clone(), field.clone()))
-                    .cloned()
-                    .unwrap_or_default();
-                claimed_urls.extend(urls.iter().cloned());
-                (Some(field.clone()), urls)
-            })
-            .collect();
-        let trailing: Vec<String> = all_members_by_term
-            .get(term_key)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|u| !claimed_urls.contains(u))
-            .collect();
-        sections.push((None, trailing));
-        sections_by_term.insert(term_key.clone(), sections);
-    }
-    index.sections_by_term = sections_by_term;
-    for doc in documents.iter_mut() {
         let Some(term_key) = doc.term_listing.as_deref() else { continue };
-        doc.term_sections = index.sections_by_term.get(term_key).cloned();
-        doc.place_children = index.children_by_term.get(term_key).cloned();
+        doc.term_sections = index.sections(term_key).map(<[_]>::to_vec);
+        doc.place_children = index.children(term_key).map(<[_]>::to_vec);
     }
-
-    // Typo diagnostic (design §"what is genuinely required"): a claimed term
-    // with no member pages is either an author with no published works yet
-    // (valid) or a misspelled claim name; warn so the author can tell which.
-    for (key, site) in &index.sites {
-        if let Some(claimer) = &site.claimed_by {
-            let has_member = documents
-                .iter()
-                .any(|d| d.also_in.as_ref().is_some_and(|a| a.contains(key)));
-            if !has_member {
-                crate::build::cli_output::log_warn_problem!(
-                    "term page '{}' ({}) has no member pages — if that is unexpected, check the claimed name for typos",
-                    site.display, claimer
-                );
-            }
-        }
-    }
-
-    index.kinds = kinds;
-    let mut tiers: Vec<&str> = vec![""];
-    tiers.extend(index.sites.keys().filter_map(|key| TermKey::parse(key)).map(|term| term.edition));
-    tiers.sort_unstable();
-    tiers.dedup();
-    let roots: Vec<TermRoot> = index
-        .kinds
-        .iter()
-        .enumerate()
-        .flat_map(|(i, kind)| {
-            tiers
-                .iter()
-                .filter(move |edition| edition.is_empty() || !kind.is_place)
-                .map(move |edition| TermRoot { key: scope(edition, &kind.key), kind: i, edition: edition.to_string() })
-        })
-        .filter(|root| index.namespace_in_use(&root.key))
-        .collect();
-    index.roots = roots;
-    // Runs last: `TermIndex::place_namespace_roots` reads `index.kinds`,
-    // just set above. See `rollup::flag_place_namespace_roots`'s own doc.
     rollup::flag_place_namespace_roots(documents, &index);
-
     index
 }
 
@@ -687,7 +206,7 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
         // "declared but never in a byline row" warning, which fired for
         // every located page before this exclusion existed.
         let mut declared: Vec<String> = Vec::new();
-        for kind in &index.kinds {
+        for kind in index.kinds() {
             if kind.is_place {
                 continue;
             }
@@ -730,7 +249,7 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
                     return None;
                 }
                 // None: no kind's namespace has a term for this name.
-                let url = index.kinds.iter().find_map(|kind| index.term_url_in(&edition, &kind.key, name))?;
+                let url = index.kinds().iter().find_map(|kind| index.term_url_in(&edition, &kind.key, name))?;
                 if url == own_url {
                     return None; // the term page itself never links to itself
                 }
@@ -826,23 +345,6 @@ fn find_bounded(row: &str, name: &str) -> Option<(usize, usize)> {
     })
 }
 
-/// Pseudo-folder key for a term name, or `None` for a name with no
-/// alphanumeric characters at all (empty, or punctuation-only like "！！！").
-/// Such names have no slug of their own — `generate_slug` falls back to
-/// "untitled", which would silently merge every punctuation-only value into
-/// one shared `authors/untitled` term.
-fn resolved_key(kind: &TermKind, edition: &str, name: &str) -> Option<String> {
-    if !name.chars().any(char::is_alphanumeric) {
-        if !name.is_empty() {
-            crate::build::cli_output::log_warn_problem!(
-                "term name '{}' has no sluggable characters; skipping", name
-            );
-        }
-        return None;
-    }
-    Some(kind.key_in(edition, name))
-}
-
 /// Split a term page's already-fetched member slice into the groups its
 /// resolved `sections` describe, dropping every group no member landed in.
 ///
@@ -909,42 +411,10 @@ pub fn render_term_sections<'a>(
     )
 }
 
-/// The pseudo-folder key this doc claims, if any, across every kind's
-/// fields (the first field to resolve one wins — a page can be one term's
-/// page, and two claims on one page is an authoring mistake worth a
-/// warning).
-fn claimed_key(doc: &ParsedDocument, kinds: &[TermKind], index: &TermIndex) -> Option<String> {
-    let mut found: Option<String> = None;
-    for kind in kinds {
-        for field in &kind.fields {
-            let Some(claim) = term_claim_of(doc, field) else { continue };
-            let name = claim.name(&doc.title).trim();
-            let Some(key) = resolved_key(kind, &doc.edition, name) else {
-                continue;
-            };
-            // Only the winning claimer acts as the term page.
-            if index.sites.get(&key).and_then(|s| s.claimed_by.as_deref())
-                != Some(to_pretty_url(&doc.url_path).as_str())
-            {
-                continue;
-            }
-            match found {
-                None => found = Some(key),
-                Some(ref first) => {
-                    crate::build::cli_output::log_warn_problem!(
-                        "page {} claims more than one term page; keeping {}",
-                        doc.url_path, first
-                    );
-                }
-            }
-        }
-    }
-    found
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moss_core::terms::term_folder_key;
     use moss_core::terms::{TermClaim, AUTHOR_NS, TAGS_NS};
 
     fn doc(url: &str, title: &str) -> ParsedDocument {
@@ -1309,7 +779,7 @@ mod tests {
         assert!(docs[0].also_in.as_ref().unwrap().contains(&"places/kyoto".to_string()));
         assert!(docs[0].also_in.as_ref().unwrap().contains(&"places/japan".to_string()));
         assert_eq!(
-            index.members_by_field.get(&("places/japan".to_string(), "location".to_string())),
+            index.members_by_field().get(&("places/japan".to_string(), "location".to_string())),
             Some(&vec!["posts/a/".to_string()])
         );
     }
@@ -1347,12 +817,12 @@ mod tests {
         docs[0].location = vec!["Kyoto".to_string()];
         let index = derive_terms(&mut docs, kinds);
         assert_eq!(
-            index.members_by_field.get(&("places/japan".to_string(), "location".to_string())),
+            index.members_by_field().get(&("places/japan".to_string(), "location".to_string())),
             Some(&vec!["posts/a/".to_string()]),
             "the roll-up records the field the city was reached through, not a flat merge"
         );
         assert_eq!(
-            index.members_by_field.get(&("places/japan".to_string(), "editor".to_string())),
+            index.members_by_field().get(&("places/japan".to_string(), "editor".to_string())),
             None,
             "no editor: value named this document, so it must not appear under that field"
         );
@@ -1366,7 +836,7 @@ mod tests {
         let index = derive_terms(&mut docs, kinds);
         assert_eq!(
             index
-                .members_by_field
+                .members_by_field()
                 .get(&("places/japan".to_string(), "location".to_string()))
                 .map(Vec::len),
             Some(1),
@@ -1467,17 +937,17 @@ mod tests {
         docs[0].editor = vec!["Kane".to_string()];
         let index = derive_terms(&mut docs, kinds);
         assert_eq!(
-            index.members_by_field.get(&("people/ada-lin".to_string(), "author".to_string())),
+            index.members_by_field().get(&("people/ada-lin".to_string(), "author".to_string())),
             Some(&vec!["posts/a/".to_string()])
         );
         assert_eq!(
-            index.members_by_field.get(&("people/kane".to_string(), "editor".to_string())),
+            index.members_by_field().get(&("people/kane".to_string(), "editor".to_string())),
             Some(&vec!["posts/a/".to_string()])
         );
         // Cross-checked against the wrong field: a member recorded under
         // "author" must not also show up under "editor" for the same term.
         assert_eq!(
-            index.members_by_field.get(&("people/ada-lin".to_string(), "editor".to_string())),
+            index.members_by_field().get(&("people/ada-lin".to_string(), "editor".to_string())),
             None
         );
     }

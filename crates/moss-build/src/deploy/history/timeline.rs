@@ -5,14 +5,14 @@
 //! doesn't already know how to do (see [`crate::build::manifest::change_set::diff_hashes`],
 //! which both `classify` and this module call).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::build::manifest::change_set::{self, ChangedPage, PageVerb};
 use super::tree::SourceTree;
 
 use super::record::{self, PublishRecord, Trigger};
-use super::store;
+use super::{restore, store, VersionScope};
 
 /// One row in a timeline — a publish, a manual save, or a pre-restore save.
 ///
@@ -41,6 +41,8 @@ pub struct SiteVersionPages {
     /// output hash to detect it from, only ever Added/Edited/Deleted.
     pub changed_since: Vec<ChangedPage>,
     pub unchanged: Vec<String>,
+    /// The pages a restore to this version moves to the Trash.
+    pub to_trash: Vec<String>,
 }
 
 /// The timeline for one page: a row for every record where the page's hash
@@ -76,19 +78,24 @@ pub(crate) fn page_timeline(root: &Path, path: &str) -> Vec<Row> {
     rows
 }
 
-/// Every site version, newest-first-agnostic (oldest first, matching
-/// [`super::store::list_records`]), each with its own changed/added/removed
-/// count against the version before it. A kept outside edit holds one page,
-/// so it is no site version: counted against, it would read as every other
-/// page removed and then added back.
-pub(crate) fn site_timeline(root: &Path) -> Vec<Row> {
+/// Every site version, oldest first (matching [`super::store::list_records`]),
+/// each with its changed/added/removed count against the version before it,
+/// counting only what `scope` holds. A kept outside edit holds one page, so
+/// it is no site version: counted against, it would read as every other page
+/// removed and then added back. In a folder, a publish that changed nothing
+/// under it is no stop; a manual save and a restore always are.
+pub(crate) fn site_timeline(root: &Path, scope: &VersionScope) -> Vec<Row> {
     let records = store::list_records(root);
     let mut rows = Vec::with_capacity(records.len());
     let mut prev: Option<&PublishRecord> = None;
     for (id, record) in records.iter().filter(|(_, r)| r.trigger != Trigger::Displaced) {
-        let (changed, added, removed) = diff_counts(prev, record);
-        rows.push(row_for(id, record, changed, added, removed));
+        let counts = diff_counts(prev, record, scope);
         prev = Some(record);
+        let untouched_folder = matches!(scope, VersionScope::Folder(_)) && counts == (0, 0, 0);
+        if untouched_folder && record.trigger == Trigger::Publish {
+            continue;
+        }
+        rows.push(row_for(id, record, counts.0, counts.1, counts.2));
     }
     rows
 }
@@ -110,12 +117,12 @@ fn row_for(id: &str, record: &PublishRecord, changed: usize, added: usize, remov
 /// [`change_set::diff_hashes`]'s verbs. No previous record (the very first
 /// one) reads as every one of its entries being added, the same reading
 /// `classify` gives a page with no previous publish at all.
-fn diff_counts(prev: Option<&PublishRecord>, cur: &PublishRecord) -> (usize, usize, usize) {
-    let cur_hashes = record::flat_hashes(cur);
+fn diff_counts(prev: Option<&PublishRecord>, cur: &PublishRecord, scope: &VersionScope) -> (usize, usize, usize) {
+    let cur_hashes = held(record::flat_hashes(cur), scope);
     let Some(prev) = prev else {
         return (0, cur_hashes.len(), 0);
     };
-    let prev_hashes = record::flat_hashes(prev);
+    let prev_hashes = held(record::flat_hashes(prev), scope);
     let mut changed = 0;
     let mut added = 0;
     let mut removed = 0;
@@ -135,13 +142,19 @@ fn diff_counts(prev: Option<&PublishRecord>, cur: &PublishRecord) -> (usize, usi
 /// carry-gap and no output hash, so the shared core is the whole answer with
 /// nothing layered on top (unlike `classify`, which needs its own restyle
 /// pass and its own deletion loop).
-pub(crate) fn site_version_pages(root: &Path, id: &str, current: &SourceTree) -> Result<SiteVersionPages, String> {
+pub(crate) fn site_version_pages(
+    root: &Path,
+    id: &str,
+    current: &SourceTree,
+    scope: &VersionScope,
+) -> Result<SiteVersionPages, String> {
     let record = store::load_record(root, id).ok_or_else(|| format!("no such version: {id}"))?;
     if record.trigger == Trigger::Displaced {
         return Err(format!("{id} is one page's kept outside edit, not a site version"));
     }
-    let record_hashes = record::flat_hashes(&record);
-    let current_hashes = current.hashes();
+    let record_hashes = held(record::flat_hashes(&record), scope);
+    let current_hashes = held(current.hashes(), scope);
+    let to_trash = restore::pages_to_trash(&record_hashes, &current_hashes);
 
     let changed_since = change_set::diff_hashes(&record_hashes, &current_hashes);
     let changed_paths: HashSet<&str> = changed_since.iter().map(|c| c.source_path.as_str()).collect();
@@ -149,7 +162,13 @@ pub(crate) fn site_version_pages(root: &Path, id: &str, current: &SourceTree) ->
         record_hashes.keys().filter(|path| !changed_paths.contains(path.as_str())).cloned().collect();
     unchanged.sort();
 
-    Ok(SiteVersionPages { changed_since, unchanged })
+    Ok(SiteVersionPages { changed_since, unchanged, to_trash })
+}
+
+/// `hashes` narrowed to the paths `scope` holds.
+pub(crate) fn held(mut hashes: HashMap<String, String>, scope: &VersionScope) -> HashMap<String, String> {
+    hashes.retain(|path, _| scope.holds(path));
+    hashes
 }
 
 #[cfg(test)]

@@ -37,7 +37,7 @@
  * Config:  playwright/vertical-nav-chrome.config.ts
  * Run via: pnpm run test:render-gates vertical-nav-chrome
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 const URL = '/playwright/fixtures/vertical-nav-chrome/live-css.html';
 

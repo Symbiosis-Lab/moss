@@ -32,8 +32,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "deploy",
-            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--email <address>] [--allow-plugins] [--overwrite-newer] [--dry-run [--json]] [--accept-removals] [--accept-stale-content] [--retry-copies=<channel>] [--copies-of=<file>]",
-            description: "Build the folder and publish it: a prebuilt directory if one is set (--prebuilt=<dir>), else through a `[hooks] deploy` plugin, else to the moss host. A first publish to the moss host: `moss env <staging|production|local> <folder>`, then `moss deploy <folder> --site-id=<name> --email <address>`, which emails a link that signs the folder in, waits up to 15 minutes for it to be opened, and publishes the site as <name>. A site name can't be given back, and no email is sent without --email. A folder that isn't signed in is refused with the command that signs it in. Other refusals and their ways out: a plugin that came with the folder and was never allowed on this computer (--allow-plugins); a live site published from another copy of this folder since this copy last published (bring this folder up to date, or --overwrite-newer); an address the site would stop serving that you didn't delete (add the printed line under [redirects] in .moss/config.toml, or --accept-removals); changed pages older than what is published (restore them, or --accept-stale-content); two sources with one address (no override: give each its own). --dry-run builds as a deploy does, sends and records nothing, prints what would change and whether a deploy would be refused (exit 1), and asks the server once whether this folder's key may publish its site and whether another copy published since (no answer refuses nothing and says why). --dry-run --json prints the whole report: `refusal` is {kind, text}, kind one of unresolved_inputs, missing_references, drafts_linked, links_in_cloud, links_in_flight, pending_derivations, build_unfinished, removals, stale_content, output_collision, no_environment, foreign_inputs, not_signed_in, not_owner, stale_copy; `owner` is {state: answered, site, access: authorized, not_owner, not_signed_in or not_found} or {state: unchecked, reason}; `pending_removals` lists each refused address with its cause (none with --prebuilt, whose refused files are `transfer.removed_output_paths`); `redirects_to_add` holds the [redirects] lines; a failure prints {\"error\"}. An `output_path` is a file of the build output, an `address` or `moved_to` is what a visitor asks for, a `source_path` is a file in the folder. After a publish, moss posts each new page to the channels its `syndicate:` names (at most ten per channel per run, never twice) and adds each copy's address to the page's `syndicated:`; --retry-copies=<channel> resends copies whose send was cut off; with --copies-of=<file>, which sends only that page's copies, it also hands over again a copy you post yourself.",
+            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--email <address>] [--allow-plugins] [--overwrite-newer] [--dry-run [--json]] [--accept-removals] [--accept-stale-content] [--retry-copies=<channel>] [--copies-of=<file>] [--to <server>] [--check [--trust <fingerprint>] [--json]] [--connect [--json]] [--take-over]",
+            description: "Build the folder and publish it: a prebuilt directory if one is set (--prebuilt=<dir>), else through a `[hooks] deploy` plugin, else to the moss host. A first publish to the moss host: `moss env <staging|production|local> <folder>`, then `moss deploy <folder> --site-id=<name> --email <address>`, which emails a link that signs the folder in, waits up to 15 minutes for it to be opened, and publishes the site as <name>. A site name can't be given back, and no email is sent without --email. A folder that isn't signed in is refused with the command that signs it in. Other refusals and their ways out: a plugin that came with the folder and was never allowed on this computer (--allow-plugins); a live site published from another copy of this folder since this copy last published (bring this folder up to date, or --overwrite-newer); an address the site would stop serving that you didn't delete (add the printed line under [redirects] in .moss/config.toml, or --accept-removals); changed pages older than what is published (restore them, or --accept-stale-content); two sources with one address (no override: give each its own). --dry-run builds as a deploy does, sends and records nothing, prints what would change and whether a deploy would be refused (exit 1), and asks the server once whether this folder's key may publish its site and whether another copy published since (no answer refuses nothing and says why). --dry-run --json prints the whole report: `refusal` is {kind, text}, kind one of unresolved_inputs, missing_references, drafts_linked, links_in_cloud, links_in_flight, pending_derivations, build_unfinished, removals, stale_content, output_collision, no_environment, foreign_inputs, not_signed_in, not_owner, stale_copy; `owner` is {state: answered, site, access: authorized, not_owner, not_signed_in or not_found} or {state: unchecked, reason}; `pending_removals` lists each refused address with its cause (none with --prebuilt, whose refused files are `transfer.removed_output_paths`); `redirects_to_add` holds the [redirects] lines; `remote_pictures` is {gone, unchecked, offline}, where `gone` lists each picture from another site whose host answers 404 or 410 (source_path, source_span.line, reference, status), and refuses nothing; a failure prints {\"error\"}. An `output_path` is a file of the build output, an `address` or `moved_to` is what a visitor asks for, a `source_path` is a file in the folder. After a publish, moss prints a line for each picture from another site that is gone, and posts each new page to the channels its `syndicate:` names (at most ten per channel per run, never twice) and adds each copy's address to the page's `syndicated:`; --retry-copies=<channel> resends copies whose send was cut off; with --copies-of=<file>, which sends only that page's copies, it also hands over again a copy you post yourself. Your own server: `moss deploy <folder> --to deploy@example.com:/var/www/html` (or `sftp://deploy@example.com:2222/var/www/html`) publishes the folder there over SFTP from now on. `--check` runs four steps (reach, trust, sign in, write) and publishes nothing (exit 1 if a step fails; --json prints the steps); a new or changed server key is printed, and `--check --trust <fingerprint>` trusts it, and a refused sign-in prints the line to add to the server's ~/.ssh/authorized_keys (moss makes the key; it never leaves this computer). moss deletes only files it published there, recorded in .moss-published.json in that folder; a folder another site published to is refused (--take-over publishes there anyway and leaves that site's files).",
         },
         CliCommandInfo {
             name: "preview",
@@ -59,6 +59,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             name: "domain",
             args: "<list|link|status> <folder> [<domain>] [--json]",
             description: "List, link or check custom domains for a project's site; link prints the DNS records to set.",
+        },
+        CliCommandInfo {
+            name: "provider",
+            args: "<status|connect|disconnect> <folder> [<part>] [--provider <id>] [--list <id> | --new-list <name>] [--json]",
+            description: "Check or connect the outside providers of a site's parts (the newsletter today). connect reads the key from the variable the provider's manifest names, such as SENDGRID_API_KEY, or from stdin, never from an argument; without --list it prints the account's lists and exits 2. status reports every part as one object, with each account an installed plugin holds (how it signs in, the parts it serves and their costs), and exits 0 when each named provider is connected.",
         },
         CliCommandInfo {
             name: "site",
@@ -93,7 +98,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "plugin",
             args: "hash <plugin-dir> [--json]  |  install <id> [<folder>]  |  secret set <plugin> <key> [<folder>]",
-            description: "`install` puts a plugin into the existing site at <folder> and records no trust. An explicit folder must be the site root with its own .moss directory; without a folder, moss finds the site containing the current directory. Plugins come from the plugin registry, or are copied out of moss when moss ships them. It prints one line, which says when the folder is not trusted: its plugins stay off until the folder is trusted in the moss app, or a build passes --allow-plugins. The registry catalog is fetched on every install so a withdrawn version is not installed; when it cannot be reached the last cached catalog is used and its age is printed, and with none cached the install fails naming the network error. Exits 1 on failure, 2 on bad arguments. `hash` prints the code hash of a plugin directory: the value moss records when a plugin is allowed and the registry pins per version. Needs no site. Prints the hex digest, or with --json {\"id\", \"version\", \"code_sha256\"}. Exits 1 when the directory has no readable manifest.json or entry file. `secret set` stores a credential the plugin's manifest asks the user for (an app password, a token), read from standard input, in moss's secret store outside every site folder, where the app's credential prompt keeps it too; empty input removes it. The key must be one the manifest declares.",
+            description: "`install` puts a plugin into the existing site at <folder> and records no trust. An explicit folder must be the site root with its own .moss directory; without a folder, moss finds the site containing the current directory. Plugins come from the plugin registry, or are copied out of moss when moss ships them. It prints one line, which says when the folder is not trusted: its plugins stay off until the folder is trusted in the moss app, or a build passes --allow-plugins. The registry catalog is fetched on every install so a withdrawn version is not installed; when it cannot be reached the last cached catalog is used and its age is printed, and with none cached the install fails naming the network error. Exits 1 on failure, 2 on bad arguments. `hash` prints the code hash of a plugin directory: the value moss records when a plugin is allowed and the registry pins per version. Needs no site. Prints the hex digest, or with --json {\"id\", \"version\", \"code_sha256\"}. Exits 1 when its manifest.json, or the entry file it names, cannot be read; a plugin with no entry is hashed from its manifest alone. `secret set` stores a credential the plugin's manifest asks the user for (an app password, a token), read from standard input, in moss's secret store outside every site folder, where the app's credential prompt keeps it too; empty input removes it. The key must be one the manifest declares.",
         },
         CliCommandInfo {
             name: "import",
@@ -131,6 +136,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. moss's own cache (`.moss/cache/`) is left in the cloud, since a build downloads what it needs again: exclude it from a copy (`rsync --exclude .moss/cache`). Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file but the cache is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
         },
         CliCommandInfo {
+            name: "sync",
+            args: "<folder> [--allow-plugins]",
+            description: "Run the process hooks of the plugins in a site once, as the moss app does when the folder opens or Sync is pressed (an import of new posts, for example), then exit without building. A build reaches no network, so this is where plugins fetch for someone who builds from the command line; the next `moss build` reads what they wrote. Plugins that came with the folder run only once the folder is trusted in the moss app, or with --allow-plugins; without either, it exits 1 naming them and runs none. Exits 1 when a plugin's hook fails, naming it, and 2 on bad arguments.",
+        },
+        CliCommandInfo {
             name: "doctor",
             args: "--math [<folder>] | --surface [<folder>] [--all] [--json]",
             description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, theme selectors keyed on a page address (they break when the page is renamed), and the class names the theme invents that moss does not write, each marked as used in pages or nowhere (`theme_own_classes` in --json). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
@@ -138,7 +148,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "migrate",
             args: crate::cli::doctor::migrate::ARGS,
-            description: "Rewrite what `moss doctor --surface` finds, and list what an older moss left behind. --list prints the retired names the folder still uses (with --json: each one's id, replaced_by, whether moss migrate renames it or nothing replaces it, the files and the count); it reads files only. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it. --lift <class> --as <field> --place <place> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml; --place says where moss draws it instead of the div (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only (it sets the field's place for the whole site, so none also removes a place the field already has); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
+            description: "Rewrite what `moss doctor --surface` finds, and list what an older moss left behind. --list prints the retired names the folder still uses (with --json: each one's id, replaced_by, whether moss migrate renames it or nothing replaces it, the files and the count); it reads files only. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it; it also adds `series: true` to each folder home a build of that copy finds with no series: and its pages ordered by weight: or a sort: list, a cascaded one included (before 0.15.30 that order alone drew previous and next links), and deletes each bare `:::` line that closes nothing. --lift <class> --as <field> --place <place> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml; --place says where moss draws it instead of the div (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only (it sets the field's place for the whole site, so none also removes a place the field already has); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
         },
         CliCommandInfo {
             name: "list",
@@ -165,7 +175,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 11] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "site", "env", "import", "history"];
+const OWN_HELP: [&str; 12] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "provider", "site", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -224,6 +234,8 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("preview", "moss                                 # Launch the app window"),
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
     ("domain", "moss domain link ~/blog/ example.com # Link a domain; prints the DNS records to set"),
+    ("provider", "moss provider status ~/blog/ --json  # Every part's provider and whether it is connected"),
+    ("provider", "SENDGRID_API_KEY=… moss provider connect ~/blog/ newsletter --provider sendgrid --list <id>"),
     ("domain", "moss domain status ~/blog/ example.com # Check live DNS and certificate; exit 0 when live"),
     ("site", "moss site transfer ~/blog/ --to new@example.com --dry-run # What handing the site over would move"),
     ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
@@ -234,6 +246,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("import", "moss import https://studio.example/ ~/Sites/studio/ --export studio.WordPress.xml"),
     ("fetch", "moss fetch ~/blog/                  # Download every cloud-only file; exit 1 if the provider is not delivering"),
+    ("sync", "moss sync ~/blog/                   # Run the plugins' imports once, without building"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors, theme-invented classes"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
@@ -402,6 +415,53 @@ pub fn top_level_help(version: &str, answers: &dyn Fn(&str) -> bool) -> String {
     }
     text.push_str(&agent_footer());
     text
+}
+
+// ---- the verbs both binaries dispatch by name ----
+//
+// Each binary keeps only its own arms (`build`, `preview`, `edit`, `desktop`,
+// and the app's `deploy`, matched before this table) and looks every other
+// verb up here, so moss and the app cannot answer different sets.
+
+pub type Run = fn(&[String]) -> i32;
+
+const VERBS: &[(&str, Run)] = &[
+    ("sessions", crate::ops::serve::ui::sessions::run),
+    ("guide", super::guide::run),
+    ("agents", super::agents::run),
+    ("list", super::list::run),
+    ("doctor", super::doctor::run),
+    ("migrate", super::doctor::migrate::run),
+    ("render", super::render::run),
+    ("root", super::root::run),
+    ("plugin", crate::plugins::install::hash_cli::run),
+    // The caller seeds its own version before dispatch; moss-build's would be wrong.
+    ("describe", |args| super::describe::run(args, crate::system::app_version())),
+    ("env", super::env::run),
+    ("tools", super::tools::run),
+    ("domain", super::domain::run),
+    ("provider", super::provider::run),
+    ("site", super::site::run),
+    ("map", super::map::run),
+    ("import", super::import::run),
+    ("deploy", super::deploy::run),
+    ("rename", super::rename::run),
+    ("mv", super::rename::run),
+    ("new", super::new::run),
+    ("expand", super::expand::run),
+    ("fetch", crate::build::cloud_readiness::fetch::run),
+    ("sync", crate::build::process_hooks::sync),
+    ("history", crate::deploy::history::cli::run),
+    ("comments", crate::build::features::comment::cli::run),
+    ("data", crate::vault::read_back::cli::run),
+];
+
+pub fn verb(verb: &str) -> Option<Run> {
+    VERBS.iter().find(|(name, _)| *name == verb).map(|(_, run)| *run)
+}
+
+pub fn verb_names() -> impl Iterator<Item = &'static str> {
+    VERBS.iter().map(|(name, _)| *name)
 }
 
 #[cfg(test)]

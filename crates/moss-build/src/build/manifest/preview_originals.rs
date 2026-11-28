@@ -96,6 +96,17 @@ fn default_urls(source: &str) -> Vec<String> {
 }
 
 impl PendingManifest {
+    /// `url` is promised but this build will never encode it.
+    pub(crate) fn register_never_made(&mut self, url: String) {
+        self.never_made.insert(url);
+    }
+
+    /// Each never-made variant's original, for a writer that cannot wait for
+    /// the seal to learn which `<img src>` must name the original instead.
+    pub(crate) fn never_made_originals(&self) -> std::collections::HashMap<String, String> {
+        crate::build::markdown::html_post::failed_variant_originals(&self.never_made, |url| self.preview_originals.get(url)?.as_deref())
+    }
+
     pub(crate) fn register_preview_original(&mut self, url: String, source: String) {
         // Two sources promising one URL cannot establish its original owner.
         self.preview_originals.entry(url).and_modify(|old| {
@@ -105,6 +116,20 @@ impl PendingManifest {
 }
 
 impl SealedManifest {
+    /// Every `.webp` URL this generation promised as a variant of a picture,
+    /// leaving out a `.webp` source and its rungs, which are the person's own.
+    pub(crate) fn promised_variants(&self) -> impl Iterator<Item = &str> {
+        self.preview_originals.iter().filter_map(|(url, source)| {
+            let source = source.as_deref()?;
+            (url.ends_with(".webp") && !source.to_ascii_lowercase().ends_with(".webp")).then_some(url.as_str())
+        })
+    }
+
+    /// The one vault source that promised `url`, if exactly one did.
+    pub(crate) fn preview_original(&self, url: &str) -> Option<&str> {
+        self.preview_originals.get(url)?.as_deref()
+    }
+
     pub(crate) fn write_preview_originals(&self, generations: &Path) -> std::io::Result<()> {
         let images = self.preview_originals.iter().filter_map(|(url, source)| {
             let source = source.as_ref()?;

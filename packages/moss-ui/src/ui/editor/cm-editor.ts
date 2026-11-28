@@ -14,7 +14,6 @@ import { isolateHistory, historyField } from '@codemirror/commands';
 import type { EditorReferenceResolution } from '@symbiosis-lab/moss-ui';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { t } from "../i18n/index";
-import { applyStaticStrings } from "../i18n/apply-static-strings";
 import { UNDO_KEY, REDO_KEY } from "../utils/kbd-label";
 import { installBackgroundClickCaret } from './cm-background-click';
 import { shortcodeDivergenceCheck } from './cm-shortcode-scanner';
@@ -39,7 +38,7 @@ import { detectFileType, type EditorFileType } from './file-types';
 import {
   referenceCardExtension, assetCardProvider, replaceAsset, footnoteCardProvider,
   linkCardProvider, pageLinkCardProvider, cardProviders, cardAugmenters,
-  currentArticleCardProvider, isCurrentArticleMapAt, openCardAt, withLinkControls, type CurrentArticleCardData, type CardProvider,
+  currentArticleCardProvider, isCurrentArticleMapAt, openCardAt, closeCard, withLinkControls, type CurrentArticleCardData, type CardProvider,
 } from './cm-reference-card';
 import { problemCardAugmenter, problemsExtension } from './cm-problems';
 import { toRelative } from './path-domain';
@@ -49,6 +48,7 @@ import { sourceAssetUrl } from './source-asset-url';
 import { jsonEditingExtension } from './cm-json';
 import { osDropCaret, blockDropCursor } from './cm-os-drop-caret';
 import { clearOutsideWashLater, outsideWashOf, revealFlashExtension } from './cm-reveal-flash';
+import { roomBelowLastLine } from './cm-scroll-sync';
 import { dropExtension, type DestinationFor } from './cm-drop';
 import { focusPointExtension, pictureActExtension, pictureAtCaretField, heroWordsExtension, sourceMarkdownExtensions } from './cm';
 import { host as uiHost } from "../host";
@@ -251,20 +251,22 @@ export interface CmEditorOptions {
   onEscapeTop?: () => boolean;
 }
 
-/** Why the editor is frozen; picks the scrim caption. */
-export type SealReason = 'publish' | 'commit';
-
-const SEAL_CAPTION: Record<SealReason, string> = {
-  publish: 'editor.seal_publishing',
-  commit: 'editor.seal_committing',
-};
+/**
+ * Read-only, and closed to every change but another writer's (applyExternal).
+ * The content stays focusable, so the text still selects, copies and keeps focus.
+ * `cm-held` draws it the same in every editor: no caret, and no handles.
+ */
+const HELD: Extension = [
+  EditorState.readOnly.of(true),
+  EditorState.changeFilter.of((tr) => tr.annotation(externalUpdate) === true),
+  EditorView.editorAttributes.of({ class: 'cm-held' }),
+];
 
 export class CmEditor {
   private view: EditorView;
   private onBeforeDestroy?: () => void;
   private readonly uninstallBackgroundClick: () => void;
-  /** Reconfigurable EditorView.editable (read-only without remount). */
-  private readonly editableCompartment = new Compartment();
+  private readonly heldCompartment = new Compartment();
 
   constructor(options: CmEditorOptions) {
     // Resolve the path once at construction for language/file-type detection.
@@ -276,8 +278,7 @@ export class CmEditor {
     const hasInsertBar = isMarkdown && !!options.insertBar;
 
     const extensions: Extension[] = [
-      // editable is reconfigured live by setReadOnly().
-      this.editableCompartment.of(EditorView.editable.of(true)),
+      this.heldCompartment.of([]),
       minimalSetup,
       // Drop-caret feedback while dragging files/text over the editor.
       // Non-markdown files use the built-in dropCursor() (vertical inline caret)
@@ -290,6 +291,7 @@ export class CmEditor {
       // Single-click reveal wash from the preview (any file type — a css/js
       // file opened via a page's asset link maps clicks too).
       ...revealFlashExtension(),
+      roomBelowLastLine,
       EditorView.lineWrapping,
       ...(options.onHistoryKey
         ? [
@@ -646,79 +648,14 @@ export class CmEditor {
   }
 
   /**
-   * Seal/unseal the editor. Read-only is a live Compartment
-   * reconfigure (no remount) — preserves cursor, scroll, and undo history.
-   *
-   * A `.cm-seal-scrim` overlay is the SOLE sealed signal (R10). The old
-   * `opacity:0.55` dim on `.cm-editor.sealed` is removed; the scrim provides
-   * the visual indicator + sole pointer-event barrier.
-   *
-   * Asymmetric fade (R11): `is-sealing` on the scrim drives 150ms ease-out
-   * fade-IN; removing it drives 200ms ease-out fade-OUT. A single CSS
-   * `transition` cannot do both directions, so we toggle the class here.
+   * Hold or release the text without a remount, so the caret, scroll and undo
+   * history survive. The look of a hold is not drawn here: see hold.ts.
    */
-  setReadOnly(readOnly: boolean, reason: SealReason = 'publish'): void {
+  setHeld(held: boolean): void {
+    if (held) closeCard(this.view); // an open card's fields and actions write
     this.view.dispatch({
-      effects: this.editableCompartment.reconfigure([
-        EditorView.editable.of(!readOnly),
-        EditorState.readOnly.of(readOnly),
-      ]),
+      effects: this.heldCompartment.reconfigure(held ? HELD : []),
     });
-    this.view.dom.classList.toggle('sealed', readOnly);
-    this._updateScrim(readOnly, reason);
-  }
-
-  private _updateScrim(seal: boolean, reason: SealReason): void {
-    const dom = this.view.dom;
-    let scrim = dom.querySelector<HTMLElement>('.cm-seal-scrim');
-
-    if (seal) {
-      if (!scrim) {
-        scrim = document.createElement('div');
-        scrim.className = 'cm-seal-scrim';
-        // Indeterminate transit line at the pane's top edge (R13). Decorative —
-        // the caption below is the accessible status text.
-        const transit = document.createElement('div');
-        transit.className = 'cm-seal-scrim__transit';
-        transit.setAttribute('aria-hidden', 'true');
-        scrim.appendChild(transit);
-        const status = document.createElement('div');
-        status.className = 'cm-seal-scrim__status';
-        // Announced, not just drawn — same idiom as the inline-status badges.
-        status.setAttribute('role', 'status');
-        status.setAttribute('aria-live', 'polite');
-        scrim.appendChild(status);
-        dom.appendChild(scrim);
-      }
-      // The caption names WHY the buffer is frozen. A rename or move commit
-      // used to show "Publishing your site…" here — in a document window,
-      // where no site exists at all.
-      const caption = scrim.querySelector<HTMLElement>('.cm-seal-scrim__status');
-      if (caption) {
-        caption.dataset.i18n = SEAL_CAPTION[reason];
-        applyStaticStrings(scrim);
-      }
-      // Restore the click barrier (defers to the stylesheet's `pointer-events`).
-      // This reverts the unseal override below so a SECOND publish seals again.
-      scrim.style.pointerEvents = '';
-      // Asymmetric fade-IN (R11): add .is-sealing to switch to 150ms ease-out.
-      // The class is applied synchronously; in real browsers a single-frame delay
-      // is not needed because the scrim starts at opacity:0 in CSS and the class
-      // transitions it to opacity:1.  The immediate-add approach is also testable
-      // (jsdom does not run rAF automatically between microtasks).
-      scrim.classList.add('is-sealing');
-    } else if (scrim) {
-      // Asymmetric fade-OUT: remove .is-sealing to switch to 200ms ease-out.
-      scrim.classList.remove('is-sealing');
-      // Drop the pointer barrier IMMEDIATELY on unseal. The scrim div is kept in
-      // the DOM so the opacity fade-out can play, but it must NOT keep swallowing
-      // clicks — otherwise an invisible (opacity:0) overlay leaves the editor
-      // permanently un-clickable after the first publish (the v0.7.9 "editor
-      // cannot be edited / can't place cursor" regression). Belt-and-suspenders
-      // with the `.cm-seal-scrim` stylesheet rule, which only blocks while
-      // `.is-sealing` is present.
-      scrim.style.pointerEvents = 'none';
-    }
   }
 
   /**

@@ -86,7 +86,7 @@ async fn upload_file_chunked_sends_content_hash_header() {
     // loop. Pass the actual byte count — 3 bytes fits in one request, so we get
     // exactly GET+POST+PATCH+POST.
     let file_size = file_bytes.len() as u64;
-    let throughput = crate::seta::upload_policy::Throughput::new();
+    let throughput = crate::seta::upload_policy::Throughput::new(1);
     client
         .upload_file_chunked(
             "her-blog",
@@ -232,7 +232,7 @@ async fn a_resumed_upload_hashes_the_prefix_it_did_not_send() {
         &identity,
         &format!("http://{}", addr),
     );
-    let throughput = crate::seta::upload_policy::Throughput::new();
+    let throughput = crate::seta::upload_policy::Throughput::new(1);
     client
         .upload_file_chunked(
             "her-blog",
@@ -369,7 +369,7 @@ async fn upload_refused_with(patch_status: &'static str) -> (usize, bool, Result
         &identity,
         &format!("http://{}", addr),
     );
-    let throughput = crate::seta::upload_policy::Throughput::new();
+    let throughput = crate::seta::upload_policy::Throughput::new(1);
     let result = client
         .upload_file_chunked("her-blog", "tail.bin", &file_path, 3, "abc123def456abcd", &throughput, None)
         .await;
@@ -561,7 +561,7 @@ async fn a_slow_link_walks_the_escalation_ladder_down() {
         &identity,
         &format!("http://{}", addr),
     );
-    let throughput = crate::seta::upload_policy::Throughput::new();
+    let throughput = crate::seta::upload_policy::Throughput::new(1);
     let result = client
         .upload_file_chunked(
             "her-blog",

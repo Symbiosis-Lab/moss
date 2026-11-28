@@ -13,7 +13,7 @@
  * Run via:
  *   npx playwright test -c playwright/comments-cascade.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 // Relative, so the port lives only in the config's baseURL.
 // hello.md renders at /hello/index.html.

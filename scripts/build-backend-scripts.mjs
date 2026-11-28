@@ -29,11 +29,13 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/bridge/preview-shim.ts", out: "crates/moss-build/src/ops/serve/js/comment-preview-shim.js" },
 
   { entry: "crates/moss-build/src/js-src/site/theme.ts", out: "crates/moss-build/src/assets/js/theme.js" },
+  // Inlined into every page right after the masthead, not fetched (emit/scripts.rs, `Load::Inline`).
+  { entry: "crates/moss-build/src/js-src/site/nav/nav-owned.ts", out: "crates/moss-build/src/assets/js/nav-owned.js" },
   { entry: "crates/moss-build/src/js-src/site/fullscreen.ts", out: "crates/moss-build/src/assets/js/fullscreen.js" },
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
   { entry: "crates/moss-build/src/js-src/site/selection.ts", out: "crates/moss-build/src/assets/js/selection.js" },
   { entry: "crates/moss-build/src/js-src/site/comments/artalk.ts", out: "crates/moss-build/src/assets/js/comments-artalk.js" },
-  { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "crates/moss-build/src/assets/js/subscribe.js" },
+  { entry: "crates/moss-build/src/js-src/site/subscribe/hint.ts", out: "crates/moss-build/src/assets/js/subscribe-hint.js" },
   { entry: "crates/moss-build/src/js-src/site/forms/forms.ts", out: "crates/moss-build/src/assets/js/forms.js" },
   { entry: "crates/moss-build/src/js-src/site/heading-anchor.ts", out: "crates/moss-build/src/assets/js/heading-anchor.js" },
   // Site search runtime. `external: ["/_moss/pagefind/*"]` is not needed — the
@@ -59,7 +61,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/scroll-row.ts", out: "crates/moss-build/src/assets/js/scroll-row.js" },
   { entry: "crates/moss-build/src/js-src/site/marquee.ts", out: "crates/moss-build/src/assets/js/marquee.js" },
   { entry: "crates/moss-build/src/js-src/site/maps/country-map/index.ts", out: "crates/moss-build/src/assets/js/maps/country-map.js" },
-  { entry: "crates/moss-build/src/js-src/site/hero/hero-ends.ts", out: "crates/moss-build/src/assets/js/hero/hero-ends.js" },
+  { entry: "crates/moss-build/src/js-src/site/event-ends.ts", out: "crates/moss-build/src/assets/js/event-ends.js" },
   // Places-explorer interactive layer, stub for now (see the entry's own
   // module doc). A directory, not a single file, because the runtime this
   // grows into will need several modules.
@@ -67,7 +69,7 @@ export const BUNDLES = [
   // Not embedded: the project's hand-built landing page signs readers up with
   // the hosted subscribe form, so its states and its bot check come from the
   // same module every moss site ships.
-  { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "site/home/subscribe.js", globalName: "mossSubscribe" },
+  { entry: "crates/moss-build/src/js-src/site/subscribe/standalone.ts", out: "site/home/subscribe.js", globalName: "mossSubscribe" },
 ];
 
 /**

@@ -6,6 +6,7 @@
 //! `BackgroundContext` and handled by the background phase in `pipeline.rs`.
 
 use crate::build::scan::path_collision::{logical_path, on_disk};
+use moss_core::page::site_page::SitePage;
 use crate::build::cloud_readiness;
 use crate::build::phase::PhaseTrace;
 use crate::build::cli_output::log_warn_problem;
@@ -51,7 +52,7 @@ use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedA
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
-use super::source_evidence::{flatten_missing_reference_occurrences, SourceRecord};
+use super::source_evidence::{flatten_occurrences, AuthoredEvidence, SourceRecord};
 
 /// # Note
 /// The caller is responsible for creating the output directory and managing
@@ -293,14 +294,29 @@ pub fn generate_blocking_content(
     // care about it. `pipeline::run`'s real build path calls
     // `generate_blocking_content_for_build` instead, so this name's contract
     // ("just render the site") never quietly changed under existing callers.
-    let output = generate_blocking_content_for_build(
+    let mut output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
         crate::build::inputs::build_instant(),
     )?;
+    // No background phase follows either.
+    write_site_files_now(&mut output, output_dir, pending)?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
     Ok(output)
+}
+
+/// What the background phase writes after paint (the feeds, llms.txt,
+/// sitemap.xml), written now, for a caller that runs no background phase.
+pub(crate) fn write_site_files_now(
+    output: &mut BlockingContentOutput,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<(), String> {
+    match output.1.site_files.take() {
+        Some(site_files) => site_files.write_now(&output.2, output_dir, pending),
+        None => Ok(()),
+    }
 }
 
 /// Same as [`generate_blocking_content`], with the synchronous link-metadata
@@ -315,6 +331,7 @@ pub fn generate_blocking_content(
 /// plans sharing cards for the background phase; standalone callers pass false.
 /// `instant` is the moment the build is as of; every past/upcoming decision
 /// reads the day it falls on in the site's zone (`inputs::effective_now`).
+
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -491,7 +508,7 @@ pub fn generate_blocking_content_for_build(
     // pass above has just filled for every file — hence the ordering.
     let folder_languages = resolve_folder_languages(
         &project_structure.markdown_files, source_path_buf,
-        &mut folder_lang_cache, &frontmatter_scan_cache,
+        &mut folder_lang_cache, &frontmatter_scan_cache, site_config.lang_declared,
     );
     if let Err(e) = folder_lang_cache.save(&folder_lang_cache_path) {
         log::info!("failed to persist folder-lang cache: {}", e);
@@ -518,18 +535,11 @@ pub fn generate_blocking_content_for_build(
     let site_lang: crate::i18n::Language =
         crate::i18n::Language::from_code(&site_config.lang).unwrap_or(crate::i18n::Language::En);
 
-    // The site id inline `:::subscribe` forms post with, read once per build.
-    // None (unpublished, or published elsewhere) renders the pending form.
     let deploy = crate::build::site_config::get_domain_config(source_path)
         .unwrap_or_default();
-    let site_id = crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string);
-
-    // Resolve the seta base URL once per build from the project environment.
-    // Passed into `process_markdown_file` so inline `:::subscribe` shortcodes
-    // emit the correct action URL for staging/local environments.
-    let seta_url_for_build: String = crate::build::site_config::resolve_environment(source_path)
-        .seta_url()
-        .to_string();
+    // Inline `:::subscribe` forms post to this seta with this site id; no id renders the pending form.
+    let site_id = site_config.seta.site_id.clone();
+    let seta_url_for_build: String = site_config.seta.url.to_string();
 
     // Open the Loop A parse cache. Eligibility is
     // `site_config.incremental.parse_cache` — a SIBLING of the render
@@ -1047,14 +1057,16 @@ pub fn generate_blocking_content_for_build(
     for record in &source_records {
         let doc = &mut documents[record.document_index];
         let public_source = members_policy.public_source(&record.source_path, &record.source);
-        doc.missing_reference_occurrences = parse_session.recording(&record.source_path, &parse_answers, || {
-            crate::build::types::MissingReferenceOccurrence::from_authored_source(
+        let evidence = parse_session.recording(&record.source_path, &parse_answers, || {
+            AuthoredEvidence::from_authored_source(
                 &record.source_path,
                 &public_source,
                 &authored_evidence_parse_config,
                 &reference_context,
             )
         });
+        doc.missing_reference_occurrences = evidence.missing;
+        doc.remote_picture_occurrences = evidence.remote_pictures;
         gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
@@ -1067,7 +1079,8 @@ pub fn generate_blocking_content_for_build(
         reporter.report(&event);
     }
 
-    let missing_references = flatten_missing_reference_occurrences(&documents);
+    let missing_references = flatten_occurrences(&documents, |d| &d.missing_reference_occurrences);
+    let remote_pictures = flatten_occurrences(&documents, |d| &d.remote_picture_occurrences);
 
     // The PRE-reduce cache boundary: the passes below fold other documents'
     // state into a parsed document.
@@ -1215,6 +1228,11 @@ pub fn generate_blocking_content_for_build(
         // inference, and BEFORE any rendering that reads `direct_children_sort`
         // (listing card renderer, series-nav, editor inferred-axis hint).
         populate_direct_children_sorts(&mut documents);
+        let unlinked = crate::build::scan::sort_inference::unlinked_folders(&documents);
+        if let Some(note) = crate::build::scan::sort_inference::unlinked_note(&unlinked, crate::build::phase::previous_moss_version(source_path_buf).as_deref()) {
+            crate::build::cli_output::log_note!("{note}");
+        }
+        pending.note_unlinked_folders(unlinked);
         log::debug!(target: "timing", "[reduce] populate_direct_children_sorts: {:?}", reduce_start.elapsed());
 
         // Term derivation:
@@ -1312,6 +1330,8 @@ pub fn generate_blocking_content_for_build(
                 documents[i].translations = links;
             }
         }
+        #[cfg(test)]
+        crate::build::site_pages_tests::record(root, &documents, &term_index, project_structure);
 
         // Inline `:::subscribe` forms get their page's language scope, judged
         // the same way the footer form's is, now that every page has parsed,
@@ -1411,8 +1431,12 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
-        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_share_cover(site_config.share_cover).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        site_config.identity.add_copy_verification(
+            crate::syndication::record::Records::in_vault(&crate::moss_paths::MossPaths::new(source_path_buf)).all(),
+            site_url.as_str(),
+        );
+        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links()).with_page_links(site_config.identity.page_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
@@ -1481,6 +1505,7 @@ pub fn generate_blocking_content_for_build(
     let site_assets = crate::build::types::SiteAssets::of(
         &documents,
         layout_config.typesetting.as_deref(),
+        now,
         crate::build::types::SiteAssets {
             media_pages,
             video_ladder: services
@@ -1491,6 +1516,7 @@ pub fn generate_blocking_content_for_build(
             colophon_credit: site_config.colophon_credit.is_some(),
             selection_tools: site_config.selection_tools,
             selection_comments: site_config.selection_comments,
+            subscribe: site_config.email_installed,
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
@@ -1536,9 +1562,12 @@ pub fn generate_blocking_content_for_build(
     let has_user_css = user_css_content.is_some();
     // The stylesheet's references to theme files, pointed at their hashed
     // copies. Hashed after the rewrite so a changed font renames the sheet.
-    let theme_css = user_css_content.as_deref().map(|content| {
-        crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
+    let mut theme_css = user_css_content.as_deref().map(|content| {
+        crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &site_config.lang, &input_evidence)
     });
+    for note in theme_css.iter().flat_map(|themed| &themed.notes) {
+        log_warn_problem!("{}", note);
+    }
     // Read when the first page is rendered, so a build that carries every page reads no theme file.
     let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
     let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
@@ -1758,7 +1787,7 @@ pub fn generate_blocking_content_for_build(
                 theme_modules: &shared.theme_modules,
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
-            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
+            home_breadcrumb: moss_core::page::nav::home_breadcrumb_setting(&documents),
             media_lookup: shared.media_lookup,
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
@@ -2204,7 +2233,7 @@ pub fn generate_blocking_content_for_build(
             // already a URL-space (slugified) key, and the synthetic index
             // always lists direct children with neither homepage filter.
             // An edition's generated home lists like an authored one.
-            let home = crate::build::folder_embed::home_defaults(&documents[entry.document_index]);
+            let home = moss_core::page::listing::home_defaults(&documents[entry.document_index]);
             let folder_docs: Vec<&ParsedDocument> =
                 crate::build::folder_embed::select_children_by_slug(
                     folder,
@@ -2267,9 +2296,7 @@ pub fn generate_blocking_content_for_build(
                 &dir_overrides,
                 layout_config.typesetting.as_deref(),
                 Some(&event_level_image_lookup),
-                // Synthetic folder index — no `ParsedDocument` with a
-                // direct_children_sort exists. Date fallback (None → Date) matches
-                // the legacy meta-slot behavior.
+                // A generated index has no sort: it lists by date and is never typed.
                 None,
                 site_config.math,
                 &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), host_url_path: &folder_doc.url_path, ..Default::default() },
@@ -2296,7 +2323,7 @@ pub fn generate_blocking_content_for_build(
             )
             .unwrap_or_default();
             // Synthetic folder index: no markdown source, so prepend the shared
-            // <h1 class="moss-folder-title"> via folder_title::render. Same
+            // <h1 class="moss-folder-title"> via moss_core::heading::folder_title. Same
             // helper used by folder_cover::render (cover branch) and
             // render/html.rs (no-cover branch).
             //
@@ -2404,12 +2431,13 @@ pub fn generate_blocking_content_for_build(
     // The `timing` checkpoints below are cumulative from `total_start`.
     let site_files_phase = PhaseTrace::start("render_site_files");
 
-    // Generate RSS feed and sitemap (only if a real https URL was resolved)
+    // The feeds, llms.txt and sitemap.xml are written after the preview paints.
+    let mut site_files = crate::build::feeds::site_files::SiteFiles::new(Path::new(source_path), site_url.as_str(), site_lang, &dir_overrides);
+    site_files.theme_font_slices(theme_css.as_mut().map(|themed| std::mem::take(&mut themed.slices)).unwrap_or_default());
+    // Only with a real https URL.
     if has_rss {
         let url = site_url.as_str();
-        crate::build::feeds::emit(&documents, url, site_lang, &dir_overrides, output_dir, pending)?;
-
-        // sitemap.xml is emitted further down, once every page is registered.
+        site_files.feeds();
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
         let robots_content = site_config.ai.robots_txt(url);
@@ -2447,38 +2475,10 @@ pub fn generate_blocking_content_for_build(
     // after `generate_blocking_content` returns, using `BackgroundContext::search_enabled`
     // (set below). See `build/feeds/search.rs`.
 
-    // llms.txt: the whole site's text, unless AI answers are asked not to.
-    if site_config.ai.publishes_llms_txt() {
-        let llms_site_title = documents
-            .iter()
-            .find(|d| d.url_path == "index.html")
-            .map(|d| d.title.as_str())
-            .unwrap_or(crate::i18n::t(site_lang, "site"));
-        // Plain text: llms.txt's own body is deliberately raw markdown (see
-        // that module's doc comment), but this one line is a one-sentence
-        // site blurb quoted in a header line, not page content — reduced the
-        // same way the SPA/og/twitter description tags are, so `_..._`
-        // doesn't ship its markers into a file whose whole point is to read
-        // cleanly.
-        let homepage_desc: Option<String> = documents
-            .iter()
-            .find(|d| d.url_path == "index.html")
-            .and_then(|d| d.description.as_deref())
-            .map(crate::build::page::meta::strip_markdown_inline)
-            .filter(|s| !s.trim().is_empty());
-        let llms_content = crate::build::feeds::llms_txt::generate_llms_txt(
-            &documents,
-            llms_site_title,
-            homepage_desc.as_deref(),
-            |body, host| {
-                let from = host.source_path.as_deref().unwrap_or(&host.url_path);
-                crate::build::folder_embed::marker_pages(body, from, &documents, project_structure, &dir_overrides, site_config.math, now)
-            },
-        );
-        // Site 14 (Pattern A): emit llms.txt.
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&ServedPath::for_llms_txt(), llms_content.into_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
+    // llms.txt: an index of the listed pages, unless AI answers are asked not to.
+    // Its links are absolute, so like the sitemap it waits for a real address.
+    if has_rss && site_config.ai.publishes_llms_txt() {
+        site_files.llms();
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
     // publish the templates and the Reply-to.
@@ -2486,8 +2486,9 @@ pub fn generate_blocking_content_for_build(
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; crate::build::emit::members::emit_sender(&site_config.members, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
-    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
+    crate::build::emit::commerce::emit(&documents, site_config.forms.as_deref().map_err(|off| *off), site_config.booking.as_ref(), site_config.newsletter.as_ref(), on_moss_host, output_dir, pending)?;
     crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
+    crate::build::features::comment::link_block::emit(site_config.comment_moderation.as_ref(), output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
     crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
     drop(site_files_phase);
@@ -2720,11 +2721,12 @@ pub fn generate_blocking_content_for_build(
         None,
     );
 
-    // Reset before ANY producer registers: the app shares one process-lifetime
-    // `Arc`, and a stale `Failed` strips a live `<source>` in build.rs's tail.
-    if let Some(registry) = services.and_then(|s| s.assets.as_deref()) {
-        registry.clear();
-    }
+    // This build's promises go into a registry of its own, which replaces the
+    // shared one after the last promise below: the preview reads the shared one
+    // meanwhile, and a stale `Failed` there would strip a live `<source>` in
+    // build.rs's tail.
+    let shared_registry = services.and_then(|s| s.assets.as_deref());
+    let build_registry = shared_registry.map(|_| crate::types::assets::AssetRegistry::new());
 
     // Non-blocking video conversion:
     // Collect video items for background processing instead of converting inline.
@@ -2740,7 +2742,7 @@ pub fn generate_blocking_content_for_build(
 
             // Populate AssetRegistry with pending assets for placeholder support.
             // This allows the preview server to serve SVG placeholders while videos convert
-            if let Some(registry) = services.and_then(|s| s.assets.as_deref()) {
+            if let Some(registry) = build_registry.as_ref() {
                 for item in &items {
                     // Map source path through dir_overrides, then derive mp4 key.
                     // This ensures registry keys match HTML <video src> paths.
@@ -2986,11 +2988,13 @@ pub fn generate_blocking_content_for_build(
         .iter()
         .filter_map(|f| Some((ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?, f.path.as_str())))
         .collect();
-    let notebook_viewers: Vec<ServedPath> = project_structure
-        .notebook_files
-        .iter()
-        .filter_map(|f| crate::build::notebook::viewer_path(&f.path).ok())
-        .collect();
+    // The publish record reads each notebook's address from here.
+    let mut notebook_viewers: Vec<ServedPath> = Vec::new();
+    for f in &project_structure.notebook_files {
+        let Ok(copy) = crate::build::notebook::copy_path(&f.path, &dir_overrides) else { continue };
+        pending.record_asset_output(&f.path, copy.as_str());
+        notebook_viewers.extend(crate::build::notebook::viewer_of(copy.as_str()).ok());
+    }
 
     // Gap #3 fix: emit the redirect table into the pending manifest so the seal
     // (and therefore the generation-id) covers it. The baseline is the record
@@ -3020,11 +3024,14 @@ pub fn generate_blocking_content_for_build(
         folder_plan.passthrough_stubs.clone(),
     ]
     .concat();
+    if has_rss {
+        site_files.sitemap();
+    }
     let table_inputs = crate::build::feeds::redirects::TableInputs {
         term_stubs,
         has_deployed_url: site_url.is_deployed(),
         declared: site_config.declared_redirects.clone(),
-        written_later: static_pages.iter().map(|(sp, _)| sp).chain(&notebook_viewers).map(|sp| sp.as_str().to_string()).collect(),
+        written_later: static_pages.iter().map(|(sp, _)| sp).chain(&notebook_viewers).map(|sp| sp.as_str().to_string()).chain(site_files.addresses()).collect(),
     };
     match crate::build::feeds::redirects::emit_redirect_table(
         &paths,
@@ -3044,8 +3051,11 @@ pub fn generate_blocking_content_for_build(
         // the previous `article_map` on disk with `current_article_map` before
         // `article_map.save()` overwrites it. Deferred deliberately, not
         // forgotten (2026-08-29).
-        Ok(health) => {
+        Ok((health, later_copies)) => {
             use crate::build::feeds::redirects::BaselineHealth;
+            for (from, to) in later_copies {
+                site_files.keep_copy(from, &to);
+            }
             // A missing record is a note: it says nothing about the content, and
             // the next publish ends it. A record that exists and cannot be used
             // stays a problem.
@@ -3071,13 +3081,9 @@ pub fn generate_blocking_content_for_build(
             listed.then(|| sp.as_str().to_string())
         }));
         sitemap_pages.extend(notebook_viewers.iter().map(|sp| sp.as_str().to_string()));
-        let entries = crate::build::feeds::sitemap::entries_for_pages(&sitemap_pages, &documents);
-        let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&entries, site_url.as_str());
-        // Site 11 (Pattern A): emit sitemap.xml.
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&ServedPath::for_sitemap(), sitemap_content.into_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit sitemap.xml: {}", e))?;
+        site_files.list_in_sitemap(sitemap_pages);
     }
+    site_files.promise(pending);
 
     // Debug-only safety net for the publish classifier's lockstep invariant:
     // every source that got an output mapping also got a source hash. A page
@@ -3210,7 +3216,6 @@ pub fn generate_blocking_content_for_build(
                 homepage_description.as_deref().unwrap_or(""),
                 &site_root_url,
                 None,
-                None,
                 "", // locale; empty skips og:locale
                 &site_url,
             ))
@@ -3320,7 +3325,7 @@ pub fn generate_blocking_content_for_build(
         // paint, and a source this build cannot encode is settled instead:
         // `media/promise.rs`.
         let items = crate::build::media::promise::promise_image_variants(
-            services.and_then(|s| s.assets.as_deref()),
+            build_registry.as_ref(),
             pending,
             items,
             project_structure,
@@ -3328,6 +3333,12 @@ pub fn generate_blocking_content_for_build(
             &rung_plan,
             source_path,
         );
+        site_files.never_made(pending.never_made_originals());
+        // No page of this build is servable yet: pages reach the stage only in
+        // `emit::slots::apply_to_stage_and_manifest`, after this function returns.
+        if let (Some(shared), Some(own)) = (shared_registry, build_registry) {
+            shared.replace_with(own);
+        }
 
         (items, rung_plan)
     };
@@ -3337,6 +3348,7 @@ pub fn generate_blocking_content_for_build(
     // Thread ffmpeg_bin_path from scan so build.rs doesn't re-download
     let background_ctx = BackgroundContext {
         og_requests,
+        site_files: Some(site_files),
         video_items,
         image_items,
         source_path: source_path.to_string(),
@@ -3371,9 +3383,11 @@ pub fn generate_blocking_content_for_build(
             hashes: site_hashes,
             deferred_paths,
             missing_references,
+            remote_pictures,
             term_index,
             now,
             places_data,
+            placeholders_deferred: verdict.defers_to_settle(),
         },
         background_ctx,
         // Surface the parsed page slice to the caller so
@@ -3459,11 +3473,7 @@ pub(super) fn resolve_favicon(
     crate::build::io_utils::create_output_dir_all(&favicon_dest_dir)
         .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
-    let candidates = ["favicon.svg", "favicon.png", "favicon.ico"];
-    let user_favicon = candidates
-        .iter()
-        .find(|name| assets_dir.join(name).exists())
-        .map(|s| s.to_string());
+    let user_favicon = crate::build::site_meta::favicon::own_icon_file(source_path).map(str::to_string);
 
     // Read it here, because an unreadable favicon must not fail the build.
     // This runs *before* the cloud gate is computed, so a hard error returns

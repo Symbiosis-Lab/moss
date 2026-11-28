@@ -68,7 +68,7 @@ fn cover_url(cover: &str, site_url: &str, dir_overrides: &HashMap<String, String
 
 /// A feed date carries the day only, as the RSS feed's does.
 fn rfc3339(date: &str) -> Option<String> {
-    let d = crate::build::components::date::parse_partial_date(date)?;
+    let d = moss_core::date::parse_partial_date(date)?;
     Some(format!("{:04}-{:02}-{:02}T00:00:00Z", d.year, d.month.unwrap_or(1), d.day.unwrap_or(1)))
 }
 

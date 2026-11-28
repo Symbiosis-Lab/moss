@@ -5,7 +5,7 @@
  * that has an aspect ratio and only absolutely placed content 0 px wide unless
  * it has an explicit inline-size.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const WIDE = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };

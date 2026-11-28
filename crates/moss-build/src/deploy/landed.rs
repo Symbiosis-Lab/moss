@@ -11,9 +11,10 @@
 //! The two things are: record what went live, and **recompute** what is left to
 //! publish. Recompute, not discard — a landed publish moves one of the change
 //! set's two inputs, so it owes the same re-derivation a seal does. Recording
-//! includes writing each published page's uid into the page itself: a build
-//! never writes a source, so the publish is the first moment a uid is anchored
-//! to something outside the folder.
+//! includes writing the uid into a published page whose frontmatter has none: a
+//! build never writes a source, so the publish is the first moment a uid is
+//! anchored to something outside the folder. A uid already in a file is never
+//! changed.
 //!
 //! **Call only once the publish is known to have landed.** Each path has its
 //! own proof of that — the server's commit returning 200, or the plugin
@@ -100,6 +101,36 @@ pub async fn record_landed(
     ports.after_landing(folder, target, &summary).await;
 
     summary
+}
+
+/// Record a publish that landed: the folder's deployment state, which is
+/// what reads as "published" afterwards, and what went live. `site_url` is
+/// the address the next build bakes in, when the host minted it.
+pub async fn record_publish_landed(
+    folder: &Path,
+    sealed: &SealedManifest,
+    deployment: &crate::plugins::types::DeploymentInfo,
+    site_url: Option<String>,
+    ports: &dyn crate::build::ports::deploy::DeployPorts,
+) {
+    let outcome = crate::vault::deployment_state::PublishOutcome {
+        url: deployment.url.clone(),
+        deployed_at: deployment.deployed_at.clone(),
+        site_url,
+        dns_target: deployment.dns_target.clone(),
+        metadata: (!deployment.metadata.is_empty()).then(|| deployment.metadata.clone()),
+        addresses: deployment.addresses.clone(),
+        generation_id: Some(sealed.generation_id().to_string()),
+    };
+    if let Err(e) = crate::vault::deployment_state::record_publish(&folder.to_string_lossy(), outcome) {
+        log::warn!("failed to save deployment info to state.toml: {}", e);
+    }
+    // Keyed by `slot_for`, never the deployment URL: a target that re-mints
+    // its URL on every publish would orphan the record it just wrote.
+    if let Some(target) = crate::config::deployment::slot_for(&deployment.method, None) {
+        let history = crate::deploy::history::HistoryStore::in_vault(folder);
+        record_landed(folder, sealed, &target, ports, &history).await;
+    }
 }
 
 /// Write the publish record, including which note ID is live at which page.
@@ -193,7 +224,7 @@ async fn record_what_is_live(
     // Rebuilt rather than moved: `MossPaths` is a path wrapper, and this keeps
     // the borrow out of the blocking task.
     let root = mp.project_root().to_path_buf();
-    let tree = crate::deploy::history::SourceTree::from_sealed(sealed);
+    let tree = crate::deploy::history::SourceTree::from_sealed(sealed).with_hashes(stamped);
     let target_owned = target.to_string();
     let history_owned = history.clone();
     let written = tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {
@@ -225,10 +256,13 @@ struct Stamps {
     failed: HashMap<String, String>,
 }
 
-/// Write each published page's uid into its frontmatter, creating the block
-/// when the note has none, so from now on the uid moves with the file through
-/// renames. The uid is the one the sealed generation was built under, so the
-/// file and its live comment thread agree.
+/// Write the uid each published page was built under into its frontmatter when
+/// it names none, creating the block if needed, so from then on the uid moves
+/// with the file through renames.
+///
+/// A uid already in a file is the author's and is never changed, even where the
+/// page was built under another (a duplicated note's copy): the record keeps
+/// that one, and the copy is built under it again (`uid_dedup`).
 ///
 /// Only a file that still holds the bytes that were published is stamped: one
 /// edited since the build may carry a newer uid, or an edit the record must
@@ -268,21 +302,25 @@ async fn stamp_published_uids(folder: &Path, sealed: &SealedManifest) -> Stamps 
 
 /// Write `uid` into the page at `source_path` if it still holds the published
 /// bytes: the stamped bytes' hash, or `None` when the page was edited since
-/// the build or already names the uid.
+/// the build or already names a uid.
 fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) -> Result<Option<String>, String> {
     let hash = |b: &[u8]| crate::build::render::blocking::source_metadata(None, b).hash;
     let written = crate::build::cloud_readiness::rewrite_input(&on_disk(root, source_path), |bytes| {
         if hash(bytes) != published_hash {
             return Ok(None);
         }
-        let before = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        if crate::build::markdown::parse_typed_frontmatter(before).uid.as_deref() == Some(uid) {
-            return Ok(None);
-        }
-        let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
-        moss_core::frontmatter::edit_fields(before, &[set]).map(Some)
+        with_uid_stamp(std::str::from_utf8(bytes).map_err(|e| e.to_string())?, uid)
     })?;
     Ok(written.map(|after| hash(after.as_bytes())))
+}
+
+/// `before` with the note ID written in, or `None` when it already names one.
+pub(crate) fn with_uid_stamp(before: &str, uid: &str) -> Result<Option<String>, String> {
+    if crate::build::markdown::parse_typed_frontmatter(before).uid.is_some() {
+        return Ok(None);
+    }
+    let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
+    moss_core::frontmatter::edit_fields(before, &[set]).map(Some)
 }
 
 /// Write the publish record for a prebuilt tree that just went live.

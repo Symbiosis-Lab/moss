@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { openCrateDir } from "../../support/crate-paths";
 import { resolveMossBin } from "../../support/moss-bin";
 import { pruneUnnamed } from "./prune-unnamed.mjs";
+import { takeOrAwait } from "./build-lock.mjs";
 
 // The dirs moss-build embeds its site scripts from, two of the outputs of
 // `scripts/build-backend-scripts.mjs`'s BUNDLES table, so the stamp below
@@ -130,12 +131,8 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   if (fresh) return fresh;
 
   const lock = `${stampPath}.lock`;
-  try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    fs.mkdirSync(lock); // atomic: throws if another process is already building
-  } catch {
-    return awaitStamp(stampPath, stamp, tag);
-  }
+  const taken = takeOrAwait(lock, () => readStamp(stampPath, stamp), { tag });
+  if (!taken.held) return taken.value;
   try {
     // A failed build must leave no stamp: the old one would let a gate's
     // input check hash the last good build and skip the gate.
@@ -144,13 +141,15 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
     // The build's own cache is keyed by file content, not by the binary, so a
     // changed binary would otherwise reuse what the old one cached (an image's
     // measurements, say) and a gate could not go red for a change in how they
-    // are computed.
+    // are computed. It lives in the folder's stores under the build's HOME.
     fs.rmSync(path.join(siteDir, ".moss/cache"), { recursive: true, force: true });
+    const home = `${siteDir}.home`;
+    fs.rmSync(home, { recursive: true, force: true });
     const report = execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins --json`, {
       cwd: siteDir,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
-      env: buildEnv(spec, siteDir),
+      env: mossEnv(home, spec.siteUrl ? { MOSS_SITE_URL: spec.siteUrl } : {}),
     });
     const builtDir: string | undefined = JSON.parse(report.toString("utf8")).output;
     if (!builtDir) {
@@ -206,11 +205,14 @@ function siteScriptsHash(): string {
   return h.digest("hex");
 }
 
-/** The environment the build runs under — this process's, plus `MOSS_SITE_URL` for a gate that names one. */
-function buildEnv(spec: ScratchSiteSpec, _siteDir: string): NodeJS.ProcessEnv {
-  return spec.siteUrl
-    ? { ...process.env, MOSS_SITE_URL: spec.siteUrl }
-    : process.env;
+/**
+ * The environment a gate's moss runs under: this process's, with HOME and
+ * XDG's data and cache roots moved to `home`. moss keeps each folder's stores
+ * under the user's app data, so without this every gate run would add its
+ * sites' stores to the person's own.
+ */
+export function mossEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...process.env, HOME: home, XDG_DATA_HOME: path.join(home, "data"), XDG_CACHE_HOME: path.join(home, "cache"), ...extra };
 }
 
 /** The built dir a previous run recorded for this exact input set, if usable. */
@@ -222,19 +224,6 @@ function readStamp(stampPath: string, stamp: string): string | null {
   } catch {
     return null; // absent or malformed — rebuild
   }
-}
-
-/** Block until the process holding the lock publishes a matching stamp. */
-function awaitStamp(stampPath: string, stamp: string, tag: string): string {
-  const deadline = Date.now() + 150_000;
-  while (Date.now() < deadline) {
-    const built = readStamp(stampPath, stamp);
-    if (built) return built;
-    // Sync sleep: playwright parses configs synchronously, so there is no
-    // event loop to yield to here.
-    execSync("sleep 0.5");
-  }
-  throw new Error(`${tag} timed out waiting for another process to build the scratch site`);
 }
 
 /**

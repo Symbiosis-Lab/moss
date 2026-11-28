@@ -444,6 +444,9 @@ jobs:
       - name: Diagram check tests
         run: node --test scripts/__tests__/gen-architecture-diagrams.test.mjs
 
+      - name: Release notes check tests
+        run: node --test scripts/__tests__/release-notes-check.test.mjs
+
       - name: Render gate selection tests
         run: node --test scripts/__tests__/render-gate-select.test.mjs
 
@@ -452,6 +455,9 @@ jobs:
 
       - name: Scratch-site prune tests
         run: node --test scripts/__tests__/scratch-site-prune.test.mjs
+
+      - name: Scratch-site build lock tests
+        run: node --test scripts/__tests__/build-lock.test.mjs
 
       - name: Merge driver tests
         run: node --test scripts/__tests__/merge-drivers.test.mjs

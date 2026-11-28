@@ -19,7 +19,7 @@
  * aspect-ratio resolution too, in a way that looks like an engine gap and
  * isn't one).
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test.describe("video embed shape", () => {
   test("the box matches the video's own decoded ratio, and fills the column", async ({ page }) => {

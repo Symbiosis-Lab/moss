@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 
 use super::super::crawl_state::HostPacer;
-use crate::build::components::nav::is_navigational_page;
+use moss_core::page::nav::is_navigational_page;
 use crate::build::media::decode::sniff_decode_bytes;
 use super::super::crawler::host_of;
 use super::super::fetch::{download_asset, fetch_raw_bytes, observe_pace};

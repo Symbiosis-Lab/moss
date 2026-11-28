@@ -8,42 +8,11 @@ mod desktop;
 mod edit;
 mod bundle;
 
-/// Commands implemented by the windowless engine.
-const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
-    ("sessions", moss_build::ops::serve::ui::sessions::run),
-    ("guide", moss_build::cli::guide::run),
-    ("agents", moss_build::cli::agents::run),
-    ("list", moss_build::cli::list::run),
-    ("doctor", moss_build::cli::doctor::run),
-    // Lives beside `doctor`, whose `--surface` findings it rewrites (file budget).
-    ("migrate", moss_build::cli::doctor::migrate::run),
-    ("render", moss_build::cli::render::run),
-    ("root", moss_build::cli::root::run),
-    ("plugin", moss_build::plugins::install::hash_cli::run),
-    ("describe", |args| moss_build::cli::describe::run(args, env!("CARGO_PKG_VERSION"))),
-    ("env", moss_build::cli::env::run),
-    ("tools", moss_build::cli::tools::run),
-    ("domain", moss_build::cli::domain::run),
-    ("site", moss_build::cli::site::run),
-    ("map", moss_build::cli::map::run),
-    ("import", moss_build::cli::import::run),
-    ("deploy", moss_build::cli::deploy::run),
-    // `mv` is the app binary's alias for `rename` (`startup/run_mode.rs`).
-    ("rename", moss_build::cli::rename::run),
-    ("new", moss_build::cli::new::run),
-    ("mv", moss_build::cli::rename::run),
-    ("expand", moss_build::cli::expand::run),
-    // Lives beside the cloud-wait loop it shares with `build`, not in `cli/` (file budget).
-    ("fetch", moss_build::build::cloud_readiness::fetch::run),
-    // Lives under `deploy/history/`, not `cli/` (file budget — see the
-    // publish-history design's "Placement and budgets").
-    ("history", moss_build::deploy::history::cli::run),
-    // Lives beside the comment feature, not in `cli/` (file budget).
-    ("comments", moss_build::build::features::comment::cli::run),
-];
+/// Verbs this binary answers itself; every other one is the shared table's.
+const OWN_ARMS: &[&str] = &["build", "desktop", "edit"];
 
 fn answers(name: &str) -> bool {
-    matches!(name, "build" | "desktop" | "edit") || CROSSED.iter().any(|(crossed, _)| *crossed == name)
+    OWN_ARMS.contains(&name) || moss_build::cli::commands::verb(name).is_some()
 }
 
 /// Help and describe share the engine's command table.
@@ -60,15 +29,8 @@ fn main() {
         dotenvy::dotenv().ok();
     }
 
-    // `build`, `deploy` and `history` already install this logger themselves
-    // (inside moss-build, since the app binary's own headless interception
-    // needs it too), but the rest of the `CROSSED` table — `import` among
-    // them — never did, so every `log::warn!`/`log::info!` a crossed command
-    // raised (the importer's rate-limit and unrecognized-variant warnings,
-    // for instance) was silently dropped by `log`'s default no-op logger.
-    // Installing it once, here, before any dispatch, covers every verb this
-    // binary can run; `install_headless_logger` is `Once`-guarded, so the
-    // three verbs that already call it internally are unaffected.
+    // Without it every `log::warn!` a shared verb raises is dropped by `log`'s
+    // no-op default; it is `Once`-guarded, so verbs that install it too are unaffected.
     moss_build::build::cli_output::install_headless_logger();
 
     // `--help` only when it is the whole request, so `<cmd> --help` falls
@@ -118,7 +80,7 @@ fn main() {
     // What moss-build already owns, dispatched exactly as the app binary
     // dispatches it (`startup/run_mode.rs`); the parity test compares the two
     // binaries' answers byte for byte.
-    if let Some((_, run)) = args.get(1).and_then(|verb| CROSSED.iter().find(|(name, _)| name == verb)) {
+    if let Some(run) = args.get(1).and_then(|verb| moss_build::cli::commands::verb(verb)) {
         std::process::exit(run(&args[2..]));
     }
     match args.get(1).map(String::as_str) {

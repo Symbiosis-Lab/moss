@@ -11,6 +11,11 @@ export function pageAddress(answer: PageAnswer): string | undefined {
   return answer.address + answer.page.path;
 }
 
+/** The page's channels, then any channel it no longer names that still holds a copy. */
+function channelsWithCopies(page: PageStatus): string[] {
+  return [...new Set([...page.channels, ...Object.keys(page.copies)])];
+}
+
 /** Unknown says nothing: a guess either way would be wrong half the time. */
 export function publishLabel(page: PageStatus): string {
   if (page.draft) return "Draft";
@@ -66,7 +71,7 @@ export class PublishState {
     menu.addItem((i) => i.setTitle("Open in preview").setIcon("globe").onClick(() => this.actions.preview()));
     const address = pageAddress(answer);
     if (address) menu.addItem((i) => i.setTitle(`Copy ${address}`).setIcon("copy").onClick(() => void navigator.clipboard.writeText(`https://${address}`)));
-    for (const channel of answer.page.channels) {
+    for (const channel of channelsWithCopies(answer.page)) {
       const copy = answer.page.copies[channel];
       menu.addItem((i) => {
         i.setTitle(`On ${channel}`).setIcon("send");

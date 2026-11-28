@@ -50,6 +50,17 @@ class SourceBoundaryTests(unittest.TestCase):
         with self.assertRaises(generate.VerificationError):
             generate.validate_countries_manifest(foreign)
 
+    def test_region_packs_have_their_own_source_manifest(self):
+        manifest, digest = generate.load_manifest(generate.ADMIN1_MANIFEST)
+        sources = generate.validate_countries_manifest(manifest, generate.ADMIN1_NAMES)
+        self.assertEqual({source["name"] for source in sources}, generate.ADMIN1_NAMES)
+        _, countries_digest = generate.load_manifest(generate.COUNTRIES_MANIFEST)
+        self.assertNotEqual(digest, countries_digest)
+        foreign = deepcopy(manifest)
+        foreign["sources"][0]["url"] = "https://example.org/ne_10m_admin_1_states_provinces.zip"
+        with self.assertRaises(generate.VerificationError):
+            generate.validate_countries_manifest(foreign, generate.ADMIN1_NAMES)
+
     def test_duplicate_sources_are_rejected(self):
         manifest, _ = generate.load_manifest()
         duplicate = deepcopy(manifest)

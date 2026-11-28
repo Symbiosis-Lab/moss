@@ -142,10 +142,7 @@ export class PublishReadout {
   labelInput(stage: PublishStage): PublishLabelInput {
     switch (stage) {
       case 'idle':
-      case 'waiting':
-        // idle is unreachable — activePrimaryLabel only asks when engaged —
-        // but it falls through to the waiting label for exhaustiveness.
-        return { stage: 'waiting' };
+        // Unreachable: activePrimaryLabel only asks when engaged.
       case 'preparing':
         return { stage: 'preparing' };
       case 'rebuilding':

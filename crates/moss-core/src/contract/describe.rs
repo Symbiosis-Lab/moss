@@ -271,9 +271,11 @@ pub struct RetiredJson {
     pub name: &'static str,
     pub retired_in: Option<&'static str>,
     pub replaced_by: Option<&'static str>,
-    /// Whether moss still writes the old name beside its replacement.
     pub aliased: bool,
     pub note: &'static str,
+    /// The day the build first said the name was going, when it is recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecated_on: Option<&'static str>,
     pub migration: Option<MigrationJson>,
 }
 
@@ -296,6 +298,7 @@ fn retired_rows() -> Vec<RetiredJson> {
             replaced_by: r.replaced_by(),
             aliased: r.aliased,
             note: r.note,
+            deprecated_on: r.deprecated_on,
             migration: (r.migrate != Migrate::Gone).then(|| MigrationJson { id: r.id(), keeps_look: r.keeps_look() }),
         })
         .collect()

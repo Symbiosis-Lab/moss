@@ -25,4 +25,20 @@ export function siteTextPaths(files: string[]): string[] {
   return JSON.parse(textPaths(JSON.stringify(files)));
 }
 
+const stylesheets = new WeakMap<MossSite, string>();
+
+/** The site's stylesheet, read across the wasm boundary once per site rather than once per preview. */
+export function stylesheetOf(site: MossSite): string {
+  const cached = stylesheets.get(site);
+  if (cached !== undefined) return cached;
+  const css = site.stylesheet();
+  stylesheets.set(site, css);
+  return css;
+}
+
+/** A preview document with the site's stylesheet in its head. */
+export function styledDocument(site: MossSite, html: string): string {
+  return html.replace("</head>", () => `<style>${stylesheetOf(site)}</style></head>`);
+}
+
 export { MossSite, fieldSpans, siteBundle };

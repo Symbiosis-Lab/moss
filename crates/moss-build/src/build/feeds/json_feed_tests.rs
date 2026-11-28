@@ -2,7 +2,7 @@ use super::*;
 use moss_core::PageKind;
 
 fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_lang: &str, dir_overrides: &HashMap<String, String>) -> String {
-    json_feed(&feed_items(documents, site_url), site_title, site_url, site_lang, dir_overrides)
+    json_feed(&feed_items(documents, site_url, &Default::default()), site_title, site_url, site_lang, dir_overrides)
 }
 
 const SITE: &str = "https://example.org";

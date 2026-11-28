@@ -8,7 +8,7 @@ license = "MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-moss-core = { path = "crates/moss-core", version = "0.29.0" }
+moss-core = { path = "crates/moss-core", version = "0.30.0" }
 
 [workspace.lints.clippy]
 disallowed_methods = "warn"
@@ -27,6 +27,10 @@ too_many_lines = "warn"
 # this block, `cargo update -p pulldown-cmark`, keep the gated insert.
 [patch.crates-io]
 pulldown-cmark = { git = "https://github.com/Symbiosis-Lab/pulldown-cmark", rev = "8cd9653dee49cfc242f3aef423b43f15eb0a899d" }
+# pagefind: the 1.5.2 release plus `add_html_files`, which parses a batch of
+# pages in parallel, and parallel gzip of the bundle; both produce the same
+# bundle bytes as stock 1.5.2. RETIRE when a pagefind release carries them.
+pagefind = { git = "https://github.com/Symbiosis-Lab/pagefind", rev = "262e9eb5ef727ec64666e0b381dd871f17211e38" }
 
 # The profile release assets ship with. opt-level stays 3: "z" and "s" cut a
 # few more MB but made site builds slower. Panics keep unwinding because the

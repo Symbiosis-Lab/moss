@@ -3,6 +3,7 @@ title: Getting Started
 uid: "09fc682b"
 nav: true
 weight: 1
+series: true
 cascade:
   breadcrumb: true
 ---

@@ -101,16 +101,6 @@ pub(crate) fn accent(color: &str, segment: String) -> Option<SectionAccent> {
     })
 }
 
-/// The inline declarations that publish a section's colour: the accent itself
-/// and its two readable text variants. The default stylesheet picks the one for
-/// the current theme as `--moss-section-text`.
-pub(crate) fn section_style(accent: &SectionAccent) -> String {
-    format!(
-        "--moss-section-color: {}; --moss-section-text-light: {}; --moss-section-text-dark: {}",
-        accent.color, accent.text_light, accent.text_dark
-    )
-}
-
 #[cfg(test)]
 #[path = "section_text_tests.rs"]
 mod tests;

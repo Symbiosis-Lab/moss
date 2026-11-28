@@ -12,20 +12,21 @@ import {
   EditorSuggestTriggerInfo,
   TFile,
 } from "obsidian";
-import { fieldCompletions, type FieldCompletion, type SchemaProvider } from "./cm-frontmatter";
+import { fieldCompletions, type FieldCompletion } from "./cm-frontmatter";
 import { editorFieldSpans } from "./core";
 import type MossPlugin from "./main";
+import type { SiteNote } from "./site-context";
 
 export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
   constructor(
     plugin: MossPlugin,
-    private getSchema: SchemaProvider,
+    private getSite: (path: string) => SiteNote | null,
   ) {
     super(plugin.app);
   }
 
-  onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
-    if (this.getSchema().fields.size === 0) return null;
+  onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
+    if (!file || !this.getSite(file.path)?.schema.fields.size) return null;
     const doc = editor.getValue();
     const before = editor.getLine(cursor.line).slice(0, cursor.ch);
     const m = /^([A-Za-z_-]+)$/.exec(before);
@@ -48,7 +49,8 @@ export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
     const from = editor.posToOffset(context.start);
     const to = from + editor.getLine(context.start.line).length;
     // Omit the incomplete line while asking the core which keys already exist.
-    return fieldCompletions(this.getSchema(), doc.slice(0, from) + doc.slice(to), context.query);
+    const schema = this.getSite(context.file.path)?.schema;
+    return schema ? fieldCompletions(schema, doc.slice(0, from) + doc.slice(to), context.query) : [];
   }
 
   renderSuggestion(item: FieldCompletion, el: HTMLElement): void {

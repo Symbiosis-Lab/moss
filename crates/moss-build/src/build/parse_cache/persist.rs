@@ -16,7 +16,7 @@ use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 1);
+const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 5);
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -30,6 +30,7 @@ struct SavedEntry {
     content_hash: String,
     reads: Vec<Read>,
     doc: SavedDoc,
+    problems: Vec<crate::build::cli_output::Problem>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -78,7 +79,7 @@ struct Rest {
     lists_folders: bool,
     hero_image_url: Option<String>,
     body_cover_path: Option<String>,
-    body_cover_candidates: Vec<String>,
+    body_cover_candidates: Vec<crate::build::page::cover::BodyPicture>,
     opening_heading: Option<String>,
     hero_overlay_text: Option<String>,
     citations: Vec<moss_core::ast::quote_source::QuoteSource>,
@@ -103,12 +104,13 @@ struct Rest {
     body_plan: Option<SavedPlan>,
     outgoing_links: Vec<moss_core::resolve::OutgoingLink>,
     embed_deps: Vec<(String, String)>,
-    missing_reference_occurrences: Vec<crate::build::types::MissingReferenceOccurrence>,
+    missing_reference_occurrences: Vec<crate::build::types::ReferenceOccurrence>,
+    remote_picture_occurrences: Vec<crate::build::types::ReferenceOccurrence>,
 }
 
-/// A body plan of HTML and folder-embed sections only. A plan with a grid or an
-/// inline subscribe form keeps typed AST blocks for the render phase, and the
-/// file never reads the AST back: that page is parsed again instead.
+/// A body plan of HTML, folder-embed sections and inline subscribe forms. A plan
+/// with a grid keeps typed AST blocks for the render phase, and the file never
+/// reads the AST back: that page is parsed again instead.
 #[derive(Serialize, Deserialize)]
 struct SavedPlan {
     segments: Vec<SavedSegment>,
@@ -123,6 +125,7 @@ struct SavedPlan {
 enum SavedSegment {
     Html(String),
     Section(crate::build::markdown::body_plan::SectionEmission),
+    Subscribe(crate::build::markdown::body_plan::SubscribeEmission),
 }
 
 impl SavedPlan {
@@ -134,7 +137,8 @@ impl SavedPlan {
             .map(|segment| match segment {
                 BodySegment::Html(html) => Some(SavedSegment::Html(html.clone())),
                 BodySegment::Section(section) => Some(SavedSegment::Section(section.clone())),
-                BodySegment::Grid(_) | BodySegment::Subscribe(_) => None,
+                BodySegment::Subscribe(form) => Some(SavedSegment::Subscribe(form.clone())),
+                BodySegment::Grid(_) => None,
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
@@ -155,6 +159,7 @@ impl SavedPlan {
             .map(|segment| match segment {
                 SavedSegment::Html(html) => BodySegment::Html(html),
                 SavedSegment::Section(section) => BodySegment::Section(section),
+                SavedSegment::Subscribe(form) => BodySegment::Subscribe(form),
             })
             .collect();
         BodyPlan { segments, lede_segments, first_text_segments, after_first_text_segments, has_text, heading_names }
@@ -165,7 +170,7 @@ impl SavedDoc {
     /// `None` for a document holding something this file does not keep: its
     /// translation links, which the passes after the parse set, and typed
     /// field values, whose serde shape cannot be read back, a hero drawn from
-    /// another page or a grid or subscribe form, which hold typed AST blocks.
+    /// another page or a grid, which hold typed AST blocks.
     /// Term cards, term lines and section accents belong to later passes and
     /// are also refused if present. The page is parsed again instead.
     fn split(doc: &ParsedDocument) -> Option<Self> {
@@ -300,6 +305,7 @@ impl SavedDoc {
             outgoing_links,
             embed_deps,
             missing_reference_occurrences,
+            remote_picture_occurrences,
         } = doc;
         if !translations.is_empty() || !placed_fields.is_empty() || !declared.is_empty() || hero_from.is_some() {
             return None;
@@ -381,6 +387,7 @@ impl SavedDoc {
                 outgoing_links: outgoing_links.clone(),
                 embed_deps: embed_deps.clone(),
                 missing_reference_occurrences: missing_reference_occurrences.clone(),
+                remote_picture_occurrences: remote_picture_occurrences.clone(),
             },
         })
     }
@@ -451,6 +458,7 @@ impl SavedDoc {
             outgoing_links,
             embed_deps,
             missing_reference_occurrences,
+            remote_picture_occurrences,
         } = rest;
         doc.logo = logo;
         doc.card_cover = card_cover;
@@ -515,6 +523,7 @@ impl SavedDoc {
         doc.outgoing_links = outgoing_links;
         doc.embed_deps = embed_deps;
         doc.missing_reference_occurrences = missing_reference_occurrences;
+        doc.remote_picture_occurrences = remote_picture_occurrences;
         doc
     }
 }
@@ -529,7 +538,7 @@ pub(super) fn write(dir: &Path, generation: &str, cache: &ParseCache) {
         .iter()
         .filter_map(|(path, entry)| {
             let reads = entry.reads.iter().filter(|read| !matches!(read, Read::GraphIdentity(_))).cloned().collect();
-            Some((path.clone(), SavedEntry { content_hash: entry.content_hash.clone(), reads, doc: SavedDoc::split(&entry.doc)? }))
+            Some((path.clone(), SavedEntry { content_hash: entry.content_hash.clone(), reads, doc: SavedDoc::split(&entry.doc)?, problems: entry.problems.clone() }))
         })
         .collect();
     let skipped = cache.entries.len() - entries.len();
@@ -548,7 +557,7 @@ pub(super) fn read(dir: &Path, generation: &str) -> Option<ParseCache> {
     let entries = saved
         .entries
         .into_iter()
-        .map(|(path, entry)| (path, ParseCacheEntry { content_hash: entry.content_hash, reads: entry.reads, doc: entry.doc.join() }))
+        .map(|(path, entry)| (path, ParseCacheEntry { content_hash: entry.content_hash, reads: entry.reads, doc: entry.doc.join(), problems: entry.problems }))
         .collect();
     Some(ParseCache { inputs_fingerprint: saved.inputs_fingerprint, entries })
 }
@@ -557,7 +566,7 @@ pub(super) fn read(dir: &Path, generation: &str) -> Option<ParseCache> {
 mod tests {
     use super::*;
     use crate::build::terms::TermLine;
-    use crate::build::types::{SectionAccent, TermCard};
+    use crate::build::types::{SectionAccent, TermCardFacts};
 
     #[test]
     fn saved_shape_omits_later_pass_fields() {
@@ -580,7 +589,7 @@ mod tests {
     #[test]
     fn capture_refuses_each_later_pass_value_including_members() {
         let cases = [
-            ParsedDocument { term_card: Some(TermCard::default()), ..Default::default() },
+            ParsedDocument { term_card: Some(TermCardFacts::default()), ..Default::default() },
             ParsedDocument { term_lines: vec![TermLine {
                 term: "tags".into(), field: "tags".into(), label: "Tags".into(),
                 separator: ": ".into(), links: "[Notes](/tags/notes/)".into(), is_place: false,

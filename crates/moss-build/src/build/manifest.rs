@@ -117,11 +117,12 @@ pub enum HashBucket {
 // PendingManifest
 // ---------------------------------------------------------------------------
 
-/// How far the asset walk got. A walk stops early when a newer render of the
-/// folder is admitted; it registers its assets only at the end, so such a
-/// render's generation lacks them and must never be promoted.
+/// Whether a newer render of the folder was admitted before this render's
+/// background work finished. The asset walk then stops early and registers
+/// nothing, and the site-files worker writes nothing, so such a render's
+/// generation lacks them and must never be promoted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum WalkOutcome {
+pub(crate) enum RenderOutcome {
     #[default]
     Complete,
     Superseded,
@@ -167,13 +168,18 @@ pub struct PendingManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
+    /// Variant URLs promised that this build will never encode.
+    never_made: std::collections::BTreeSet<String>,
     /// Whether a page this build rendered is restricted to members.
     restricts_pages: bool,
+    /// Where the process's problems stood when this build began; see [`SealedManifest::note_problems`].
+    problems_at_entry: crate::build::cli_output::ProblemMark,
     /// Redirect stub output → the page it forwards to, for each old address of
     /// one of the author's pages.
     page_stubs: std::collections::BTreeMap<String, String>,
     /// Link cards this build showed with no entry in the folder.
     waiting_link_cards: std::collections::BTreeSet<String>,
+    unlinked_folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -230,8 +236,13 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
-    /// Whether the asset walk reached the end; see [`WalkOutcome`].
-    walk: WalkOutcome,
+    /// Outputs the render declared and a background worker writes. One this
+    /// build never wrote is unverified at seal: the previous build's entry
+    /// would otherwise drop out of the generation, and publishing it would
+    /// take the file off the site.
+    promised: std::collections::BTreeSet<String>,
+    /// See [`RenderOutcome`].
+    outcome: RenderOutcome,
     /// The article map this render built, which its generation's publish reads
     /// (`publish_view::read_articles`).
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -331,9 +342,9 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
-    /// The asset walk stopped before the end; this render must not promote.
-    pub(crate) fn mark_walk_superseded(&mut self) {
-        self.walk = WalkOutcome::Superseded;
+    /// A newer render superseded this one's background work; it must not promote.
+    pub(crate) fn mark_superseded(&mut self) {
+        self.outcome = RenderOutcome::Superseded;
     }
 
     pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
@@ -393,9 +404,12 @@ impl PendingManifest {
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
             restricts_pages: false,
+            problems_at_entry: Default::default(),
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
+            unlinked_folders: Vec::new(),
             preview_originals: std::collections::BTreeMap::new(),
+            never_made: std::collections::BTreeSet::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             late: None,
@@ -404,7 +418,8 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
-            walk: WalkOutcome::Complete,
+            promised: std::collections::BTreeSet::new(),
+            outcome: RenderOutcome::Complete,
             articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
@@ -450,9 +465,18 @@ impl PendingManifest {
         self.waiting_link_cards.extend(urls);
     }
 
+    pub(crate) fn note_unlinked_folders(&mut self, folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>) {
+        self.unlinked_folders = folders;
+    }
+
     /// Record that `rel_path`'s output could not be verified this build.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
+    }
+
+    /// Expect a background worker to register `path` before the seal.
+    pub(crate) fn promise(&mut self, path: &crate::build::served_path::ServedPath) {
+        self.promised.insert(path.as_str().to_string());
     }
 
     pub(crate) fn record_articles(&mut self, articles: std::sync::Arc<crate::build::scan::article_map::ArticleMap>) {
@@ -603,8 +627,16 @@ impl PendingManifest {
     /// the ones `register_page_source_hash` just wrote. Re-inserting them here
     /// keeps the fix inside the type that owns the invariant, rather than
     /// asking the asset walk to know about pages.
+    /// Outputs recorded for a page source (a notebook's copy, which the
+    /// render phase places) survive this replacement.
     pub(crate) fn replace_sources(&mut self, sources: HashMap<String, crate::build::types::SourceMetadata>, asset_outputs: HashMap<String, String>) {
+        let page_outputs: Vec<(String, String)> = self
+            .page_sources
+            .iter()
+            .filter_map(|k| self.inner.asset_outputs.get(k).map(|o| (k.clone(), o.clone())))
+            .collect();
         self.inner.asset_outputs = asset_outputs;
+        self.inner.asset_outputs.extend(page_outputs);
         let pages: Vec<(String, crate::build::types::SourceMetadata)> = self
             .page_sources
             .iter()
@@ -612,6 +644,11 @@ impl PendingManifest {
             .collect();
         self.inner.sources = sources;
         self.inner.sources.extend(pages);
+    }
+
+    /// Record that the folder file `source` was published at `out`.
+    pub(crate) fn record_asset_output(&mut self, source: &str, out: &str) {
+        self.inner.record_output(source, out);
     }
 
     /// Register a source-path → output-path mapping for a markdown page.
@@ -698,7 +735,9 @@ impl PendingManifest {
         &mut self,
         inputs: Option<crate::build::inputs::BuildInputs>,
         carried_env: Option<std::collections::BTreeMap<String, String>>,
+        problems_at_entry: crate::build::cli_output::ProblemMark,
     ) {
+        self.problems_at_entry = problems_at_entry;
         self.inner.build_inputs = inputs.map(|mut inputs| {
             let options = std::mem::take(&mut inputs.env);
             inputs.env = carried_env.unwrap_or_default().into_iter().chain(options).collect();
@@ -892,6 +931,14 @@ impl PendingManifest {
         self.inner.files.get(rel_path.as_str()).cloned()
     }
 
+    /// Ship `rel_path` from `oid` if `entry` is still what it is registered as:
+    /// a later registration of other bytes wins.
+    pub(crate) fn attach_blob(&mut self, rel_path: String, entry: &str, oid: String) {
+        if self.inner.files.get(&rel_path).is_some_and(|current| current == entry) {
+            self.ship_sources.insert(rel_path, ShipSource::Cas(oid));
+        }
+    }
+
     fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         // Mark-and-sweep mark step: record that this build owns `rel_path`.
         // Every output-bucket entry must pass through this chokepoint
@@ -1012,6 +1059,12 @@ impl PendingManifest {
             }
         }
         let touched = self.touched;
+        let mut unverified = self.unverified;
+        // Superseded or not: a tail that does not yield to the newer render
+        // seals this one, and must find it unverified.
+        for key in self.promised.into_iter().filter(|key| !touched.contains(key)) {
+            unverified.entry(key).or_insert_with(|| "promised by the render and never written".to_string());
+        }
         // A page the previous build hashed and this build neither re-read nor
         // carried forward is a deleted page. Its hash must go with it, or the
         // classifier reports the same deletion on every publish forever.
@@ -1042,13 +1095,16 @@ impl PendingManifest {
             preview_uses_places: self.preview_uses_places,
             preview_originals: self.preview_originals,
             restricts_pages: self.restricts_pages,
+            problems_at_entry: self.problems_at_entry,
             page_stubs: self.page_stubs,
             waiting_link_cards: self.waiting_link_cards,
+            unlinked_folders: self.unlinked_folders,
             blocking_keys: self.blocking_keys,
             generation_id,
-            unverified: self.unverified,
-            walk: self.walk,
+            unverified,
+            outcome: self.outcome,
             articles: self.articles,
+            removed: HashSet::new(),
             ship_sources,
             late: self.late,
         }
@@ -1073,8 +1129,10 @@ pub struct SealedManifest {
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     restricts_pages: bool,
+    problems_at_entry: crate::build::cli_output::ProblemMark,
     page_stubs: std::collections::BTreeMap<String, String>,
     waiting_link_cards: std::collections::BTreeSet<String>,
+    unlinked_folders: Vec<crate::build::scan::sort_inference::UnlinkedFolder>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1083,7 +1141,7 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
-    walk: WalkOutcome,
+    outcome: RenderOutcome,
     /// The render's own article map, written beside the generation when it is
     /// materialized; never persisted with the manifest.
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -1104,6 +1162,9 @@ pub struct SealedManifest {
     ship_sources: HashMap<String, ShipSource>,
     /// See [`PendingManifest::late`].
     late: Option<HashSet<String>>,
+    /// Keys `remove_entries` took out after seal: bytes this build may have
+    /// staged that no manifest names.
+    removed: HashSet<String>,
 }
 
 impl SealedManifest {
@@ -1121,6 +1182,12 @@ impl SealedManifest {
     /// Whether this generation restricted at least one page to members.
     pub fn restricts_pages(&self) -> bool {
         self.restricts_pages
+    }
+
+    /// The folders this build found without the previous and next links an
+    /// older moss drew from their order: what `moss migrate` gives `series: true`.
+    pub(crate) fn unlinked_folders(&self) -> &[crate::build::scan::sort_inference::UnlinkedFolder] {
+        &self.unlinked_folders
     }
 
     /// Redirect stubs this build serves for old addresses of the author's
@@ -1194,9 +1261,9 @@ impl SealedManifest {
         &self.unverified
     }
 
-    /// Whether this render's asset walk reached the end.
-    pub(crate) fn walk(&self) -> WalkOutcome {
-        self.walk
+    /// See [`RenderOutcome`].
+    pub(crate) fn outcome(&self) -> RenderOutcome {
+        self.outcome
     }
 
     /// Record an output the presence pass could not verify. Its entry is kept:
@@ -1236,6 +1303,15 @@ impl SealedManifest {
     /// manifest predates the field (pre-upgrade hashes.json).
     pub fn site_url(&self) -> Option<&str> {
         self.inner.site_url.as_deref()
+    }
+
+    /// Whether `.moss/state.toml` holds something a page reads that this
+    /// generation was not built with, such as a sign-in or sign-out whose
+    /// account an identity tag comes from, or the file's removal. A publish's own bookkeeping does
+    /// not count. A manifest with no record of it answers `false`.
+    pub fn state_moved(&self, folder: &std::path::Path) -> bool {
+        let Some(sealed) = self.inner.build_inputs.as_ref().and_then(|i| i.state_rest.as_ref()) else { return false };
+        crate::build::inputs::state_rest(folder).map(|(now, _)| now).as_ref() != Some(sealed)
     }
 
     /// See [`SiteHashes::mount`].
@@ -1344,7 +1420,14 @@ impl SealedManifest {
             self.blocking_keys.remove(key);
             self.ship_sources.remove(key);
         }
+        self.removed.extend(keys.iter().cloned());
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
+    }
+
+    /// The keys `remove_entries` took out: bytes this build may have staged
+    /// that no manifest names.
+    pub(crate) fn dropped(&self) -> &HashSet<String> {
+        &self.removed
     }
 
     /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
@@ -1352,6 +1435,53 @@ impl SealedManifest {
         if let Some(inputs) = self.inner.build_inputs.as_mut() {
             inputs.media_settled = settled;
         }
+    }
+
+    /// See [`BuildInputs::problems`](crate::build::inputs::BuildInputs::problems).
+    pub(crate) fn note_problems(&mut self) {
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            let since = crate::build::cli_output::problems_since(self.problems_at_entry);
+            inputs.warned = since.is_none();
+            inputs.problems = since.unwrap_or_default();
+        }
+    }
+
+    /// See [`BuildInputs::evidence`](crate::build::inputs::BuildInputs::evidence).
+    /// The render's half comes in; the seal's own reads and members flag are
+    /// added here, and a seal without read evidence keeps none.
+    pub(crate) fn set_evidence(&mut self, evidence: Option<crate::build::inputs::SealEvidence>) {
+        let (read, root, restricts_pages) = (self.input_evidence.clone(), self.input_root.clone(), self.restricts_pages);
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.evidence = evidence.zip(read).map(|(evidence, read)| crate::build::inputs::SealEvidence { inputs: read, root, restricts_pages, ..evidence });
+        }
+    }
+
+    /// The generation the last seal kept, as a build that ended at its entry
+    /// hands it over: `None` unless that seal left its evidence.
+    pub(crate) fn kept(inner: SiteHashes) -> Option<Self> {
+        let evidence = inner.build_inputs.as_ref()?.evidence.clone()?;
+        let generation_id = compute_manifest_generation_id(&inner.files);
+        Some(SealedManifest {
+            inner,
+            input_root: evidence.root,
+            input_evidence: Some(evidence.inputs),
+            preview_embeds: Default::default(),
+            preview_uses_places: false,
+            preview_originals: Default::default(),
+            restricts_pages: evidence.restricts_pages,
+            problems_at_entry: Default::default(),
+            page_stubs: Default::default(),
+            waiting_link_cards: Default::default(),
+            unlinked_folders: Vec::new(),
+            blocking_keys: Default::default(),
+            generation_id,
+            unverified: Default::default(),
+            outcome: RenderOutcome::default(),
+            articles: None,
+            removed: HashSet::new(),
+            ship_sources: Default::default(),
+            late: None,
+        })
     }
 
     /// Serialize `inner` as pretty JSON and write to `path`.

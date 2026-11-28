@@ -176,20 +176,20 @@ fn the_budget_is_a_quarter_of_the_cores_while_a_folder_is_open() {
 fn the_pool_shares_its_budget_between_a_video_and_pictures() {
     let pool = CorePool::new();
     let budget = || 4;
-    let video = pool.take(budget, Encoder::Video, &|| false).unwrap();
+    let video = pool.take(budget, Encoder::Video, false, &|| false).unwrap();
     assert_eq!(video.count(), 2);
-    let pictures: Vec<_> = (0..2).map(|_| pool.take(budget, Encoder::Picture, &|| false).unwrap()).collect();
-    assert!(pool.take(budget, Encoder::Picture, &|| true).is_none(), "a full pool makes the next taker wait");
+    let pictures: Vec<_> = (0..2).map(|_| pool.take(budget, Encoder::Picture, false, &|| false).unwrap()).collect();
+    assert!(pool.take(budget, Encoder::Picture, false, &|| true).is_none(), "a full pool makes the next taker wait");
 
     std::thread::scope(|scope| {
-        let waiter = scope.spawn(|| pool.take(budget, Encoder::Picture, &|| false).map(|c| c.count()));
+        let waiter = scope.spawn(|| pool.take(budget, Encoder::Picture, false, &|| false).map(|c| c.count()));
         std::thread::sleep(Duration::from_millis(150));
         assert!(!waiter.is_finished());
         drop(video);
         assert_eq!(waiter.join().unwrap(), Some(1));
     });
     drop(pictures);
-    assert_eq!(*pool.lock(), 0, "every core given back");
+    assert_eq!(pool.lock().in_use, 0, "every core given back");
 }
 
 /// A publish waits on the encodes, so one that starts while pictures wait for
@@ -205,12 +205,12 @@ async fn a_publish_started_mid_batch_widens_the_budget_to_every_core() {
     let (_tx, rx) = watch::channel(Cadence::Live);
     let gate = DerivedWorkGate::following(rx);
     let pool = CorePool::own();
-    let open: Vec<_> = (0..gate.cores()).map(|_| pool.take(|| gate.cores(), Encoder::Picture, &|| false).unwrap()).collect();
+    let open: Vec<_> = (0..gate.cores()).map(|_| pool.take(|| gate.cores(), Encoder::Picture, false, &|| false).unwrap()).collect();
 
     let waiter = {
         let gate = gate.clone();
         let give_up = std::time::Instant::now() + Duration::from_secs(10);
-        std::thread::spawn(move || pool.take(|| gate.cores(), Encoder::Picture, &|| std::time::Instant::now() > give_up).map(|c| c.count()))
+        std::thread::spawn(move || pool.take(|| gate.cores(), Encoder::Picture, false, &|| std::time::Instant::now() > give_up).map(|c| c.count()))
     };
     std::thread::sleep(Duration::from_millis(250));
     assert!(!waiter.is_finished(), "the folder-open budget is full");

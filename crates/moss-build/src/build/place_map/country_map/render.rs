@@ -1,8 +1,8 @@
-//! A country map as HTML: inline SVG with one path per country, a legend, the
-//! as-of stamp, the panel the site script fills, and, when embedded on another
-//! page, the rows as a list grouped by level.
+//! A country map as HTML: inline SVG with one path per country (or, under
+//! `within`, per region of one country), a legend, the as-of stamp, the panel
+//! the site script fills, and, when embedded on another page, the rows as a
+//! list grouped by level.
 
-use super::matching::Atlas;
 use super::projection::{self, NORTH, SOUTH};
 use super::resolve::Model;
 use super::search;
@@ -95,21 +95,29 @@ fn graticule(project: &impl Fn(f64, f64) -> (f64, f64)) -> String {
 }
 
 pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Language, place: Place<'_>) -> String {
-    let atlas = Atlas::get();
-    let (height, project) = projection::frame(WIDTH);
+    let atlas = model.atlas();
+    let regions = atlas.regions_of.is_some();
+    let (height, project): (f64, Box<dyn Fn(f64, f64) -> (f64, f64)>) = if regions {
+        let (height, project) = projection::fitted_frame(WIDTH, atlas.shapes.countries.iter().flat_map(|c| &c.rings).map(Vec::as_slice));
+        (height, Box::new(project))
+    } else {
+        let (height, project) = projection::frame(WIDTH);
+        (height, Box::new(project))
+    };
     let n = model.spec.levels.len();
     let by_country: std::collections::HashMap<usize, &super::resolve::Row> = model.rows.iter().map(|r| (r.country, r)).collect();
-    let stamp = date.map(|d| (d, t(lang, "country_map_as_of").replace("{date}", &crate::build::components::date::format_display_date(d, lang, None))));
+    let stamp = date.map(|d| (d, t(lang, "country_map_as_of").replace("{date}", &moss_core::i18n::dates::format_display_date(d, lang, None))));
 
     let vars = shares(n);
 
-    let search_index = ServedPath::for_place_map_asset(&atlas.shapes.digest, search::FILE).map(|p| format!("/{}", p.as_str())).unwrap_or_default();
+    let search_index = ServedPath::for_place_map_asset(&atlas.shapes.digest, &search::file(atlas)).map(|p| format!("/{}", p.as_str())).unwrap_or_default();
     let key = match place {
         Place::EmbeddedListApart(key) => html_escape(key),
         _ => String::new(),
     };
     let own = if place == Place::OwnPage { " moss-country-own" } else { "" };
-    let mut out = format!(r#"<figure class="moss-country-map{own}" data-moss-country-map="{key}" data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
+    let kind = if regions { " moss-country-regions" } else { "" };
+    let mut out = format!(r#"<figure class="moss-country-map{own}{kind}" data-moss-country-map="{key}" data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
     if model.spec.search {
         let _ = write!(out, r#" data-search="{}""#, html_escape(&search_index));
     }
@@ -128,13 +136,16 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
             r##"<a class="moss-country-search" href="#moss-country-rows" data-count-one="{}" data-count-other="{}" data-none="{}" data-see-list="{}">{}</a>"##,
             html_escape(t(lang, "country_map_result_one")),
             html_escape(t(lang, "country_map_result_other")),
-            html_escape(t(lang, "country_map_no_match")),
+            html_escape(t(lang, if regions { "country_map_no_match_region" } else { "country_map_no_match" })),
             html_escape(t(lang, "country_map_see_list")),
-            html_escape(t(lang, "country_map_search")),
+            html_escape(t(lang, if regions { "country_map_search_region" } else { "country_map_search" })),
         );
     }
     let _ = write!(out, r#"<div class="moss-country-stage"><svg viewBox="0 0 {} {}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{}">"#, num(WIDTH), num(height), html_escape(title));
-    let _ = write!(out, r#"<path class="moss-country-graticule" d="{}"/><g class="moss-country-land">"#, graticule(&project));
+    if !regions {
+        let _ = write!(out, r#"<path class="moss-country-graticule" d="{}"/>"#, graticule(&project));
+    }
+    out.push_str(r#"<g class="moss-country-land">"#);
     let _ = write!(out, r#"<path class="moss-country-disputed" d="{}"/>"#, rings_path(&atlas.shapes.disputed, &project));
     for (i, c) in atlas.shapes.countries.iter().enumerate() {
         if c.rings.is_empty() {
@@ -229,7 +240,7 @@ fn safe_link(link: &str) -> bool {
 /// The rows grouped by level, lowest first, each an anchor the panel opens from.
 /// Apart from its map (`key` set) it carries the map's shares for its swatches.
 pub(crate) fn list(model: &Model, lang: Language, key: &str) -> String {
-    let atlas = Atlas::get();
+    let atlas = model.atlas();
     let mut out = if key.is_empty() {
         String::from(r#"<div class="moss-country-list" id="moss-country-rows">"#)
     } else {
@@ -251,4 +262,39 @@ pub(crate) fn list(model: &Model, lang: Language, key: &str) -> String {
     }
     out.push_str("</div>");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_yaml::Value;
+
+    fn laender() -> String {
+        let settings: Value = serde_yaml::from_str("by: Count\nbinned: [1, 5, 10, 20]\nwithin: Germany").unwrap();
+        let body = "| Land | Count |\n|---|---|\n| DE-BY | 12 |\n| Hessen | 3 |\n| Baden-Württemberg | 25 |\n".to_string();
+        let (model, _) = super::super::resolve::prepare("laender.md", body, Some(&settings));
+        render(&model.unwrap(), "Länder", None, Language::default(), Place::OwnPage)
+    }
+
+    #[test]
+    fn a_region_map_draws_each_region_in_its_bin_inside_a_frame_fitted_to_the_country() {
+        let html = laender();
+        assert_eq!(html.matches(r#"<path class="moss-country" "#).count(), 16, "every Land is drawn");
+        for (slug, level) in [("bayern", 3), ("hessen", 1), ("baden-wurttemberg", 4)] {
+            assert!(html.contains(&format!(r#"data-slug="{slug}" data-name="#)), "{slug}");
+            let path = html.split(&format!(r#"data-slug="{slug}""#)).nth(1).unwrap().split("/>").next().unwrap();
+            assert!(path.contains(&format!(r#"data-level="{level}""#)), "{slug}: {path}");
+        }
+        let unrated = html.split(r#"data-slug="sachsen""#).nth(1).unwrap().split("/>").next().unwrap();
+        assert!(!unrated.contains("data-level"), "a Land with no row is plain");
+        let height: f64 = html.split(r#"viewBox="0 0 1000 "#).nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+        assert!(height > 1000.0, "Germany's frame is taller than wide, the world's is not: {height}");
+        assert!(!html.contains("moss-country-graticule"));
+        assert!(html.contains(r#"<figure class="moss-country-map moss-country-own moss-country-regions""#));
+        assert!(html.contains("region-search-DEU.json"));
+        assert!(html.contains(">Search a region</a>"));
+        for name in ["1–4", "5–9", "10–19", "20+"] {
+            assert!(html.contains(&format!("</span>{name}</li>")), "legend {name}");
+        }
+    }
 }

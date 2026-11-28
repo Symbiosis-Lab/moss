@@ -411,6 +411,21 @@ fn warned_aliases() -> &'static std::sync::Mutex<std::collections::HashSet<PathB
     WARNED.get_or_init(Default::default)
 }
 
+/// An alias in a copy of a folder still names the file in the original
+/// folder. The ancestor of the target that holds the same alias at the same
+/// place is that original, and the target's place under it names the same
+/// file in this folder.
+#[cfg(target_os = "macos")]
+fn same_file_in_this_folder(alias_rel: &Path, target: &Path, canonical_root: &Path) -> Option<PathBuf> {
+    target.ancestors().skip(1).find_map(|original| {
+        if original == canonical_root || !is_bookmark_alias_file(&original.join(alias_rel)) {
+            return None;
+        }
+        let here = canonical_root.join(target.strip_prefix(original).ok()?).canonicalize().ok()?;
+        here.starts_with(canonical_root).then_some(here)
+    })
+}
+
 /// macOS-only: handle a regular file that is a Finder Bookmark Alias.
 /// Resolves it, runs the same containment + processable checks as
 /// `handle_symlink_entry`, and writes a real POSIX symlink in the output.
@@ -468,6 +483,12 @@ pub fn handle_alias_entry(
             log::warn!("[copy] canonicalize failed for alias {}: {}", rel_path, e);
             return Some(SymlinkOutcome::SkippedBroken { rel_path });
         }
+    };
+    let canonical_target = match entry_path.strip_prefix(source_root) {
+        Ok(rel) if !canonical_target.starts_with(canonical_root) => {
+            same_file_in_this_folder(rel, &canonical_target, canonical_root).unwrap_or(canonical_target)
+        }
+        _ => canonical_target,
     };
     if !canonical_target.starts_with(canonical_root) {
         crate::build::cli_output::log_note!(

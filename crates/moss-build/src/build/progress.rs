@@ -568,7 +568,6 @@ mod tests {
             message: "Converting videos (0/3)".to_string(),
             completed: false,
             advisories: vec![Advisory {
-                lifetime: Default::default(),
                 scope: Scope::Environment,
                 severity: Severity::NeedsAction,
                 item: None,
@@ -583,7 +582,6 @@ mod tests {
     #[test]
     fn advisory_serializes_per_file_and_build_wide() {
         let per_file = Advisory {
-            lifetime: Default::default(),
             scope: Scope::File,
             severity: Severity::ShippedDegraded,
             item: Some("clip.MOV".into()),
@@ -595,7 +593,6 @@ mod tests {
         assert!(json.contains("\"what\":\"unsupported codec\""));
 
         let build_wide = Advisory {
-            lifetime: Default::default(),
             scope: Scope::Environment,
             severity: Severity::NeedsAction,
             item: None,
@@ -613,7 +610,6 @@ mod tests {
     #[test]
     fn advisory_round_trips_with_command_action() {
         let adv = Advisory {
-            lifetime: Default::default(),
             scope: Scope::Environment,
             severity: Severity::NeedsAction,
             item: None,
@@ -925,7 +921,6 @@ mod tests {
                 message: "Converting".to_string(),
                 completed: false,
                 advisories: vec![Advisory {
-                    lifetime: Default::default(),
                     scope: Scope::File,
                     severity: Severity::ShippedDegraded,
                     item: Some("nb1.ipynb".into()),
@@ -1021,7 +1016,6 @@ mod tests {
             PipelineEvent::BackgroundProgress {
                 task: "assets".into(), current: 10, total: 10,
                 message: "done".into(), completed: true, advisories: vec![Advisory {
-                    lifetime: Default::default(),
                     scope: Scope::File,
                     severity: Severity::ShippedDegraded,
                     item: Some("a.mov".into()),
@@ -1083,7 +1077,6 @@ mod tests {
 
     fn degraded() -> Advisory {
         Advisory {
-            lifetime: Default::default(),
             scope: Scope::File,
             severity: Severity::ShippedDegraded,
             item: Some("clip.mov".into()),
@@ -1239,7 +1232,6 @@ pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
     advisory_event(
         "assets",
         vec![Advisory {
-            lifetime: Default::default(),
             scope: Scope::Config,
             severity: Severity::NeedsAction,
             item: None,
@@ -1286,7 +1278,6 @@ pub fn report_moss_requirement(
             advisory_event(
                 "config",
                 vec![Advisory {
-                    lifetime: Default::default(),
                     scope: Scope::Config,
                     severity: Severity::NeedsAction,
                     item: None,
@@ -1318,7 +1309,6 @@ pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
     advisory_event(
         "config",
         vec![Advisory {
-            lifetime: Default::default(),
             scope: Scope::Config,
             severity: Severity::NeedsAction,
             item: None,
@@ -1358,7 +1348,6 @@ pub fn make_removed_addresses_advisory(
             vec![]
         } else {
             vec![Advisory {
-                lifetime: Default::default(),
                 scope: Scope::Config,
                 severity: Severity::NeedsAction,
                 item: None,
@@ -1483,7 +1472,6 @@ mod route_tests {
     #[test]
     fn media_job_carries_task_and_advisories_through() {
         let advisory = Advisory {
-            lifetime: Default::default(),
             scope: Scope::File,
             severity: Severity::ShippedDegraded,
             item: Some("clip.mov".into()),
@@ -1547,7 +1535,6 @@ mod route_tests {
     fn media_child_job_state_carries_advisories_into_done() {
         // Invariant #2: a degraded advisory flows into Done.advisories.
         let advisory = Advisory {
-            lifetime: Default::default(),
             scope: Scope::File,
             severity: Severity::ShippedDegraded,
             item: Some("clip.mov".into()),
@@ -1568,7 +1555,6 @@ mod route_tests {
         // Invariant #1: a Blocking advisory makes the media child Job Failed,
         // via the TaskState::done smart constructor (no re-decision in the ACL).
         let blocking = Advisory {
-            lifetime: Default::default(),
             scope: Scope::Account,
             severity: Severity::Blocking,
             item: None,

@@ -73,6 +73,7 @@ fn legacy_bytes(pages: &[(&str, &str, &str)]) -> String {
                 uid: Some((*uid).to_string()),
                 syndicate: None,
                 untitled: false,
+                hidden_from_search_engines: false,
             },
         );
     }
@@ -297,6 +298,24 @@ fn the_earliest_landed_record_names_a_pages_uid() {
     let uids = live.uid_by_path();
     assert_eq!(uids["a.md"], "aaaa1111");
     assert_eq!(uids["b.md"], "cccc3333");
+}
+
+/// A page published by one record and republished with other bytes by a later
+/// one: both versions count as published from that path.
+#[test]
+fn every_records_bytes_for_a_page_are_kept() {
+    let dir = tmp();
+    let paths = MossPaths::new(dir.path());
+    let mut earlier = record_with_triples("onionpress:abc.onion", &[("a.md", "a/index.html", "aaaa1111")]);
+    earlier.published_at = "2026-09-01T00:00:00Z".into();
+    let mut later = record_with_triples("moss:site-1", &[("a.md", "a/index.html", "aaaa1111")]);
+    later.published_at = "2026-09-02T00:00:00Z".into();
+    later.sources.insert("a.md".into(), "h-edited".into());
+    published_record::save(&paths, &earlier).unwrap();
+    published_record::save(&paths, &later).unwrap();
+
+    let Baseline::Present(live) = load(&paths) else { panic!("readable") };
+    assert_eq!(live.hashes["a.md"], ["h".to_string(), "h-edited".to_string()].into_iter().collect());
 }
 
 /// Until the migration has run, the old file is the only baseline a folder
@@ -558,6 +577,7 @@ fn from_article_map_carries_the_title_through() {
             uid: Some("aaaa1111".into()),
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 

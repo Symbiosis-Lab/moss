@@ -224,6 +224,25 @@ fn a_first_paragraph_edit_moves_the_contents_digest_and_a_later_one_does_not() {
 }
 
 #[test]
+fn unlisting_the_only_folder_inside_a_card_moves_the_contents_digest() {
+    let docs = vec![
+        folder("index.html"),
+        folder("writings/index.html"),
+        article("writings/alpha/index.html", "Alpha."),
+        folder("writings/deep/index.html"),
+        folder("writings/deep/inner/index.html"),
+    ];
+    let before = digest(&docs, &key("writings"));
+    let mut unlisted = docs.clone();
+    unlisted[4].listed = Some(false);
+    assert_ne!(
+        digest(&unlisted, &key("writings")).contents,
+        before.contents,
+        "the deep card stops leading the pages, so the listing reorders"
+    );
+}
+
+#[test]
 fn a_child_with_a_frontmatter_description_prunes_on_every_body_edit() {
     let mut described = vault();
     described[ALPHA].description = Some("Fixed blurb.".into());
@@ -587,24 +606,16 @@ fn a_step_that_opted_out_is_not_a_series_member() {
 }
 
 #[test]
-fn a_step_is_a_series_member_via_an_inferred_weight_axis_when_the_parent_leaves_series_unset() {
-    // `series_vault()` sets `parent.series = Flag(true)` explicitly, which
-    // never exercises `series_chrome_on`'s `None` arm (`resolved.series_default`).
-    // `resolve_for_direct_children` reads the scan-time `direct_children_sort`
-    // cache, not a live re-inference — `populate_direct_children_sorts` is
-    // what normally fills it from a weight axis or an explicit list order
-    // (`moss_core::sort::resolve_folder_sort`), so a hand-built fixture sets
-    // the cache directly, the same "this folder looks ordered" reading.
+fn an_ordered_folder_that_leaves_series_unset_has_no_series_members() {
     let mut docs = series_vault();
     let parent_idx = docs.iter().position(|d| d.url_path == "series/index.html").unwrap();
     docs[parent_idx].series = None;
     docs[parent_idx].direct_children_sort = Some(moss_core::sort::ResolvedSort {
         axis: moss_core::sort::SortAxis::Weight,
-        explicit_order: None,
-        series_default: true,
+        explicit_order: Some(vec!["part-1".to_string()]),
     });
     let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap().clone();
-    assert!(is_series_member(&part1, &docs), "a weight-inferred sort axis implies series chrome on");
+    assert!(!is_series_member(&part1, &docs), "ordering a folder does not make it a series");
 }
 
 #[test]

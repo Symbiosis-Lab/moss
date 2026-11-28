@@ -1,8 +1,8 @@
 // Stylesheet injection, no site built: the partials the build appends inside the
 // shortcodes layer are appended the same way, and the comments sheet stays
-// unlayered, as it is linked. The subscribe script is moss's real bundle against
+// unlayered, as it is linked. The form script is moss's real bundle against
 // a mocked service.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';
@@ -14,7 +14,7 @@ const SITE = read('css/site.css');
 const PARTIALS = ['forms', 'search', 'country-map'].map((n) => read(`css/site/${n}.css`)).join('\n');
 const COMMENTS = read('css/comments.css');
 const EMAIL = read('css/email.css');
-const SUBSCRIBE_JS = read('js/subscribe.js');
+const FORMS_JS = read('js/forms.js');
 
 const PALETTE = {
   light: { bg: '#fff', text: '#2c2825', muted: '#716d69', accent: '#2d5a2d', strong: '#8e8b85', surface: '#f4f1ec' },
@@ -75,7 +75,7 @@ async function mockService(page: Page, answer: { status: number; body: object })
 async function openSubscribe(page: Page, scheme: 'light' | 'dark', css: string, placement: 'card' | 'footer' = 'card') {
   const card = `<div class="moss-subscribe">${SUBSCRIBE_FORM}</div>`;
   await page.setContent(document_(scheme, placement === 'footer' ? `<footer>${card}</footer>` : `<main>${card}</main>`, css));
-  await page.addScriptTag({ content: SUBSCRIBE_JS });
+  await page.addScriptTag({ content: FORMS_JS });
 }
 
 const settled = (page: Page, state: string) =>
@@ -134,7 +134,8 @@ for (const scheme of ['light', 'dark'] as const) {
 <div class="lightbox"><button class="lightbox-close">&times;</button><button class="lightbox-nav lightbox-prev">&lsaquo;</button><button class="lightbox-nav lightbox-next">&rsaquo;</button></div>
 <div class="moss-ambient-video"><button class="moss-ambient-toggle">II</button></div>
 <div class="immersive-fs-active"><button class="immersive-fullscreen-btn">x</button></div>
-<div class="media-item" data-type="video" style="position:relative;width:200px;height:120px"></div>`,
+<div class="media-item" data-type="video" style="position:relative;width:200px;height:120px"></div>
+<label class="moss-form__choice"><input id="choice-radio" type="radio" name="q" checked><span>Yes</span></label>`,
           ),
         );
         await page.locator('#dot').focus();
@@ -185,7 +186,7 @@ for (const scheme of ['light', 'dark'] as const) {
             `<main style="display:grid;gap:16px;max-width:360px">
 <input id="underline" class="moss-input" aria-label="a">
 <form class="moss-subscribe-form" data-moss-hosted="true"><input id="subscribe" class="moss-input" aria-label="b"></form>
-<form class="moss-form"><textarea id="boxed" class="moss-input moss-input--boxed" aria-label="c"></textarea></form>
+<form class="moss-form"><textarea id="boxed" class="moss-input moss-input--boxed" aria-label="c"></textarea><input id="request" class="moss-input" aria-label="h"></form>
 <form class="comment-form"><textarea id="comment-text" aria-label="d"></textarea><input id="comment-field" class="comment-field" aria-label="e"></form>
 <div class="moss-country-search"><input id="country" class="moss-input--boxed" type="text" aria-label="f"></div>
 <div id="search-panel" class="moss-search__panel"><div class="moss-search__field"><input id="search" class="moss-search__input" aria-label="g"></div></div>
@@ -263,6 +264,8 @@ const ROUND_MARKS: Record<string, { at: string; pseudo?: string; from?: number }
   '.lightbox-nav': [{ at: '.lightbox-prev', from: 768 }, { at: '.lightbox-next', from: 768 }],
   '.moss-ambient-toggle': [{ at: '.moss-ambient-toggle' }],
   '.immersive-fs-active .immersive-fullscreen-btn': [{ at: '.immersive-fullscreen-btn' }],
+  '.moss-form__choice input[type="radio"]': [{ at: '#choice-radio' }],
+  '.moss-form__choice input[type="radio"]::before': [{ at: '#choice-radio', pseudo: '::before' }],
 };
 // Measured above against the real script instead.
 const COVERED_ELSEWHERE = ['.moss-subscribe-form[data-state="success"] .moss-btn-slot .moss-btn'];
@@ -272,6 +275,7 @@ const FOCUS_RULES: Record<string, string[]> = {
   '.moss-input:where(:not(select)):focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input:focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input--boxed.moss-input--boxed:focus': ['boxed', 'country'],
+  '.moss-form .moss-input:where(:not(select, textarea)):focus': ['request'],
   '.moss-search__panel:has(.moss-search__input:focus)': ['search'],
 };
 // Focus rules whose selector names an input that is a checkbox, not a text field.

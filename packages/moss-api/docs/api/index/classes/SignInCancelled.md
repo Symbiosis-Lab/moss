@@ -2,7 +2,7 @@
 
 # Class: SignInCancelled
 
-The person stopped the sign-in: they closed it, or another sign-in started.
+The person stopped the sign-in: they pressed Sign in again, or another sign-in started.
 A `login` answers `{ status: "cancelled" }` for it rather than a failure.
 
 ## Example

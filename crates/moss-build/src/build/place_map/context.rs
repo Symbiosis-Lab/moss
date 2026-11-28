@@ -328,7 +328,7 @@ impl PlaceMapRenderContext {
         place_children_html: &str,
     ) -> (bool, String) {
         let is_explorer_root = maps.is_some_and(|m| m.is_explorer_root(true, is_place_namespace_root, map_disabled));
-        let heading = crate::build::components::folder_title::render(page_title, false, is_explorer_root);
+        let heading = moss_core::heading::folder_title(page_title, false, is_explorer_root);
         // No `ParsedDocument` backs this synthetic folder index, so there is
         // no frontmatter to carry a `route: true` from — this listing's map
         // is always an aggregate anyway, which `render_term_map` never draws

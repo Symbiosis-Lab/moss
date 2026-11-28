@@ -252,7 +252,7 @@ fn blockers(
 
 /// Does `name` resolve to an executable on this machine's PATH? The manifest
 /// declares basenames, so this asks exactly what `executeBinary` will.
-fn binary_on_path(name: &str) -> bool {
+pub(crate) fn binary_on_path(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else { return false };
     std::env::split_paths(&path).any(|dir| {
         let candidate = dir.join(name);

@@ -13,7 +13,7 @@
  *
  * Site: tests/e2e/helpers/gate-sites.ts → CARD_COVER_AUTO_GATE.
  */
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "../../support/browser-test";
 
 const DESKTOP = { width: 1280, height: 900 };
 const PHONE = { width: 390, height: 844 };

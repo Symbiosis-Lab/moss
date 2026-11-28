@@ -1,3 +1,4 @@
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
@@ -23,7 +24,7 @@ function makeState(doc: string, anchor: number, head?: number) {
   return EditorState.create({
     doc,
     selection: { anchor, head: head ?? anchor },
-    extensions: [slashMenuField],
+    extensions: [slashMenuField, shortcodeBlockExtension()],
   });
 }
 
@@ -84,7 +85,7 @@ describe('insertBarContext', () => {
 // from the line alone.
 
 function stateWithDoc(doc: string) {
-  return EditorState.create({ doc, extensions: [markdown({ extensions: [TaskList, wikilinkConfig] }), slashMenuField] });
+  return EditorState.create({ doc, extensions: [shortcodeBlockExtension(), markdown({ extensions: [TaskList, wikilinkConfig] }), slashMenuField] });
 }
 
 describe('insertBarContext — only the line decides', () => {
@@ -205,7 +206,7 @@ describe('picker-backed builders', () => {
 
   test('mediaEmbeds writes the standard form from the engine destination', async () => {
     const dest = async (t: string) => `../${t}`;
-    expect(await mediaEmbeds(['assets/a.jpg', 'assets/b 2.png'], async (t) => `../${t.replace(' ', '%20')}`))
+    expect(await mediaEmbeds(['assets/a.jpg', 'assets/b 2.png'], async (t) => `../${t.replaceAll(' ', '%20')}`))
       .toEqual(['![](../assets/a.jpg)', '![](../assets/b%202.png)']);
     expect(await mediaEmbeds(['assets/a.jpg'], dest)).toEqual(['![](../assets/a.jpg)']);
   });
@@ -624,7 +625,7 @@ describe('insertBarExtension lifecycle', () => {
       state: EditorState.create({
         doc: '',
         selection: { anchor: 0 },
-        extensions: [slashMenuField, insertBarExtension(hooks)],
+        extensions: [slashMenuField, shortcodeBlockExtension(), insertBarExtension(hooks)],
       }),
       parent: container,
     });

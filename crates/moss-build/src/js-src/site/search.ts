@@ -67,6 +67,7 @@ interface PagefindResult {
 interface PagefindApi {
   options: (opts: { baseUrl?: string }) => Promise<void>;
   init: () => Promise<void>;
+  mergeIndex: (indexPath: string, opts: { baseUrl?: string }) => Promise<void>;
   search: (query: string) => Promise<{ results: PagefindResult[] }>;
 }
 
@@ -96,6 +97,36 @@ let pagefind: PagefindApi | null = null;
 let pagefindLoad: Promise<PagefindApi | null> | null = null;
 /** Bumped on every morph; cache-busts the `pagefind.js` import after a reindex. */
 let indexVersion = 0;
+/** Results the preview's delta replaces or removes, by fragment id. */
+let superseded = new Set<string>();
+
+/** Where the preview serves the pages edited since its index was built. */
+const DELTA_PATH = BUNDLE_PATH.replace(/\/$/, "-delta/");
+
+interface DeltaManifest {
+  bundle: boolean;
+  supersede: string[];
+}
+
+/**
+ * Merge the preview's delta into a loaded index. Only the preview has one:
+ * Pagefind cannot fold edited pages into a built index, so the preview indexes
+ * them on their own and names the pages of the index they replace.
+ */
+export async function mergeDelta(mod: PagefindApi): Promise<Set<string>> {
+  if (!document.body.hasAttribute("data-moss-preview")) return new Set();
+  try {
+    const response = await fetch(siteUrl(DELTA_PATH + "moss-delta.json"), { cache: "no-store" });
+    if (!response.ok) return new Set();
+    const delta = (await response.json()) as DeltaManifest;
+    if (delta.bundle) await mod.mergeIndex(siteUrl(DELTA_PATH), { baseUrl: BASE });
+    return new Set(delta.supersede);
+  } catch (err) {
+    // The index as built still answers, without the latest edits.
+    console.warn("[moss] search delta unavailable", err);
+    return new Set();
+  }
+}
 
 /** Element focus returns to on close (the trigger that opened the panel). */
 let returnFocusTo: HTMLElement | null = null;
@@ -137,11 +168,15 @@ function loadPagefind(): Promise<PagefindApi | null> {
       // yields `/_moss/`. Pin it to the site's mount instead.
       await mod.options({ baseUrl: BASE });
       await mod.init();
+      const replaced = await mergeDelta(mod);
       // Guarded for the same reason as the failure branch: a reindex may have
       // landed while this import was in flight, and this module's entry
       // manifest now names chunk files that were renamed. Publishing it would
       // wire search to dead chunks with no failure to retry from.
-      if (attempt === indexVersion) pagefind = mod;
+      if (attempt === indexVersion) {
+        pagefind = mod;
+        superseded = replaced;
+      }
       return mod;
     } catch (err) {
       console.warn("[moss] search index unavailable", url, err);
@@ -346,7 +381,8 @@ function runQuery(): void {
     let data: PagefindResultData[];
     try {
       const search = await api.search(query);
-      data = await Promise.all(search.results.slice(0, MAX_RESULTS).map((r) => r.data()));
+      const results = search.results.filter((r) => !superseded.has(r.id));
+      data = await Promise.all(results.slice(0, MAX_RESULTS).map((r) => r.data()));
     } catch (err) {
       console.warn("[moss] search failed", err);
       if (token === queryToken) {
@@ -436,7 +472,7 @@ const SPACE_BEFORE_HAN = new RegExp(
 );
 
 /**
- * Undo the indexer's jieba word segmentation for display.
+ * Undo the indexer's word segmentation for display.
  *
  * The index is built from a copy of each page whose Han runs were re-joined
  * with spaces (`segment_han_runs`) so the non-`extended` Pagefind build gets

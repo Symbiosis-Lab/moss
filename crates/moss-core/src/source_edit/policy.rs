@@ -322,6 +322,12 @@ pub fn language_tree_split(rel_path: &str) -> (Option<String>, &str) {
 }
 
 
+/// Whether the file fills a slot or is mail, never a page of its own.
+pub fn is_excluded_from_pages(rel_path: &str) -> bool {
+    let (_, within_tree) = language_tree_split(rel_path);
+    slot_from_filename(within_tree).is_some() || within_tree == WELCOME_EMAIL_FILE
+}
+
 /// Reserved-name slot at a language-tree root.
 pub fn slot_from_filename(rel_path: &str) -> Option<&'static str> {
     (rel_path == "footer.md").then_some("footer-left")
@@ -374,6 +380,28 @@ pub fn compute_passthrough_roots(html_files: &[&str], config_entries: &[String])
         if negate { roots.remove(&key); } else { roots.insert(key); }
     }
     roots
+}
+
+/// Folders whose `index.html` is copied verbatim: those holding a file of
+/// exactly that name inside a passthrough root. Such a folder has no room for a
+/// page of its own at its address, so no markdown file or generated listing may
+/// take it. Paths are site-relative, without a trailing `/`.
+pub fn verbatim_index_dirs<'a>(html_files: impl IntoIterator<Item = &'a str>, passthrough_roots: &HashSet<String>) -> HashSet<String> {
+    html_files.into_iter()
+        .filter(|path| is_in_passthrough(path, passthrough_roots))
+        .filter_map(|path| path.strip_suffix("/index.html"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The folders whose markdown cannot be the home: [`verbatim_index_dirs`]
+/// except a language tree's root whose `index.html` is named exactly in
+/// `[build].passthrough`. That pair behaves like the site root's: the
+/// `index.md` stays the home and is the document's metadata.
+pub fn reserved_home_dirs<'a>(html_files: impl IntoIterator<Item = &'a str>, passthrough_roots: &HashSet<String>) -> HashSet<String> {
+    let mut dirs = verbatim_index_dirs(html_files, passthrough_roots);
+    dirs.retain(|d| !(crate::home::is_known_language_code(d) && passthrough_roots.contains(&format!("{d}/index.html"))));
+    dirs
 }
 
 /// Whether `path` is inside a passthrough root: under a folder root (the

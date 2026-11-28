@@ -5,7 +5,7 @@
  * See tests/e2e/helpers/gate-sites.ts → HERO_TONE_GATE for why these run in a
  * browser rather than as Rust assertions on emitted markup.
  */
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page } from "../../support/browser-test";
 import { luminanceOfCss as luminance } from "../../e2e/helpers/wcag-contrast";
 
 const PROBE = "/hero-tone.html";

@@ -2700,29 +2700,29 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   z-index: 1; /* paint above the centered identity absolute block */
 }
 
-/* ── Login failure overlay ────────────────────────────────────
+/* ── Panel cover ───────────────────────────────────────────────
  *
- * Shell-owned div rendered over the panel region below the 48 px titlebar when
- * the login webview renders blank (GFW / network failure).  The login webview is
- * hidden (webview.hide()) so the shell region below the titlebar is fully exposed,
- * and this overlay covers exactly that region.
- *
- * Positioned: fixed, top = titlebar height, left = 0, width = --action-panel-width,
- * height = remaining window height.  Stays behind the titlebar (z-index < titlebar).
- *
- * The Matters titlebar chrome stays visible throughout.
+ * A shell-owned surface over the panel region below the titlebar while the
+ * panel's page is hidden: the view of a sign-in page that rendered blank, and
+ * the countdown after a sign-in works. It stays below the titlebar, whose
+ * chrome remains visible.
  */
-.moss-login-failure-overlay {
-  display: none; /* hidden until .moss-login-failure-overlay--visible */
+.moss-panel-cover {
   position: fixed;
   top: var(--moss-titlebar-height, 48px);
   left: 0;
   width: var(--action-panel-width, 440px);
   bottom: 0;
-  z-index: var(--z-modal); /* it IS a modal surface: covers the panel until dismissed */
+  z-index: var(--z-modal); /* a modal surface: covers the panel until dismissed */
   background: var(--moss-color-bg);
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+
+.moss-login-failure-overlay {
+  display: none; /* hidden until .moss-login-failure-overlay--visible */
 }
 
 .moss-login-failure-overlay--visible {
@@ -2751,12 +2751,9 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   margin: 0;
 }
 
-/* Neutral (grayscale) recovery action — a failure state doesn't warrant the
-   brand accent; the accent is reserved for meaningful, affirmative moments.
-   Uses moss's standard neutral-button idiom (surface fill + border-medium),
-   matching the quiet gray icon + gray message above it. Tokens only. */
-.moss-login-failure-overlay__retry {
-  margin-top: 4px;
+/* A neutral button for a panel cover's one action: the accent is kept for
+   affirmative moments, and neither a failed nor a finished sign-in is one. */
+.moss-quiet-button {
   padding: 8px 22px;
   border-radius: 8px;
   border: 1px solid var(--moss-border-medium);
@@ -2768,8 +2765,12 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   transition: background 120ms, border-color 120ms;
 }
 
-.moss-login-failure-overlay__retry:hover {
+.moss-quiet-button:hover {
   border-color: var(--moss-color-text-secondary);
+}
+
+.moss-login-failure-overlay__retry {
+  margin-top: 4px;
 }
 
 /* Vertical divider in titlebar - absolutely positioned to align with webview divider.
@@ -4635,8 +4636,7 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
        - overflow-wrap: anywhere — a pathologically-long single token (URL, path,
                              content hash) still wraps rather than overflowing the
                              panel (break-all's original intent), but only when it
-                             genuinely can't fit. Same pattern as
-                             .moss-unavailable-images-list__filename in this file.
+                             genuinely can't fit.
      Intentionally NOT `html[lang^="zh"]`-gated to restore justify: the gate keys
      on UI locale, but the detail under a zh locale is still predominantly
      English, so a locale-keyed justify would re-break the exact reported bug.
@@ -5356,6 +5356,18 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   align-self: flex-start;
 }
 
+/* The form's `display: flex` beats the UA's `[hidden]` while "Your own server" stands in for it. */
+.first-publish-form[hidden] {
+  display: none;
+}
+/* The switch between mosspub.com and "Your own server", under the sheet's actions. */
+.fp-switch {
+  margin-block-start: var(--moss-space-md);
+}
+.fp-server .moss-info-grid {
+  margin-block-end: var(--moss-space-md);
+}
+
 /* A revealed block fades and rises into the space the height morph just made.
    The delay is 58% of the morph, so content lands AFTER the space exists. */
 /* `backwards`, NOT `both`. The class is never removed (revealRow re-adds it to
@@ -5757,13 +5769,16 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   overflow-wrap: anywhere;
 }
 /* The Copies line: a summary row, then its places on the receipt's own grid,
-   their labels indented one step so they read as belonging to it. */
-.receipt-copies-group {
+   their labels indented one step so they read as belonging to it. Gone
+   pictures stack the same way, their rows the preflight's. */
+.receipt-copies-group,
+.receipt-pictures-group {
   display: flex;
   flex-direction: column;
   gap: var(--moss-space-xs);
 }
 .receipt-copies-group > .receipt-row,
+.receipt-pictures-group > .receipt-row,
 .receipt-copies > .receipt-row {
   list-style: none;
 }
@@ -6213,6 +6228,34 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   color: var(--moss-color-text-secondary);
 }
 
+/* A reader's answers to the subscribe form's questions, under her address */
+.moss-subscribers__answers {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+}
+
+.moss-subscribers__answers div {
+  display: flex;
+  gap: 0.5em;
+}
+
+.moss-subscribers__answers dt {
+  flex: none;
+  color: var(--moss-color-text-secondary);
+}
+
+/* A long answer keeps its row to two lines; the export carries it whole. */
+.moss-subscribers__answers dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .moss-subscribers__td-actions {
   width: 2rem;
   text-align: right;
@@ -6469,38 +6512,6 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   margin-bottom: var(--moss-space-sm);
   font-size: 0.8125rem;
   color: var(--moss-color-text-secondary);
-}
-
-/* Matters "Unavailable Images" list (PluginSection.buildUnavailableImagesSection).
-   Peers separate via the container's own `gap` (xs, 8px) rather than per-item
-   margin — the gap-model's default. Each entry stacks its filename above its
-   source-file reference (own `gap`, 2xs/4px — tighter, since they're one
-   unit) instead of one run-on line; a hash-like filename has no natural break
-   point, so it wraps at any character (`overflow-wrap: anywhere`) instead of
-   being ellipsis-truncated, which would make it useless for identifying the
-   broken file. */
-.moss-unavailable-images-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moss-space-xs);
-}
-
-.moss-unavailable-images-list__entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moss-space-2xs);
-}
-
-.moss-unavailable-images-list__filename {
-  font-size: 0.875rem;
-  color: var(--moss-color-text);
-  overflow-wrap: anywhere;
-}
-
-.moss-unavailable-images-list__source {
-  font-size: 0.8125rem;
-  color: var(--moss-color-text-secondary);
-  overflow-wrap: anywhere;
 }
 
 /* Deploy-target Host row: pill-combo trigger (shared primitive) + chevron; the

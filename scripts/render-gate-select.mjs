@@ -3,6 +3,7 @@
 //
 //   node scripts/render-gate-select.mjs check <gate> [project]          exit 0: skip (prints why), 1: run
 //   node scripts/render-gate-select.mjs record <gate> [project] <log>   store a green run's input set
+//   node scripts/render-gate-select.mjs missed <gate> [project] <digest> <log>   inputs a run read that the green record lacks
 //
 // The store, MOSS_RENDER_GATE_CACHE (default ~/.cache/moss/render-gates), is
 // shared by worktrees: paths are relative and the digest covers content only.
@@ -181,6 +182,14 @@ export function check(root, gate, project, { env = process.env, mossBin = env.MO
   return null;
 }
 
+/** The inputs a run read that the stored green entry `digest` lacks: a dependency the record would have skipped past. */
+export function missed(root, gate, project, logText, digest, { env = process.env, mossBin = env.MOSS_BIN || '' } = {}) {
+  const entry = load(storePath(gate, project, env)).find((e) => e.digest === digest);
+  if (!entry) return null;
+  const had = new Set(entry.inputs.map((i) => i.join('\t')));
+  return inputsFromLog(root, logText, mossBin, gate).filter((i) => !had.has(i.join('\t')));
+}
+
 export function record(root, gate, project, logText, { env = process.env, mossBin = env.MOSS_BIN || '', head = '' } = {}) {
   const inputs = inputsFromLog(root, logText, mossBin, gate);
   // A run whose recorder never loaded would store an empty set that matches forever.
@@ -203,15 +212,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const root = process.cwd();
   if (cmd === 'check' && gate) {
     const hit = check(root, gate, rest[0] || '');
-    if (hit) console.log(`SKIP ${gate}: its ${hit.inputs.length} inputs are those of a green run (${hit.head || 'unknown head'}, ${hit.at})`);
+    // The digest is the last word: --select-shadow passes it to `missed`.
+    if (hit) console.log(`SKIP ${gate}: its ${hit.inputs.length} inputs are those of a green run (${hit.head || 'unknown head'}, ${hit.at}) ${hit.digest}`);
     process.exit(hit ? 0 : 1);
   } else if (cmd === 'record' && gate && rest.length) {
     const log = rest.pop();
     const head = process.env.GATE_HEAD || '';
     const e = record(root, gate, rest[0] || '', fs.readFileSync(log, 'utf8'), { head });
     console.log(`recorded ${gate}: ${e.inputs.length} inputs`);
+  } else if (cmd === 'missed' && gate && rest.length >= 2) {
+    const log = rest.pop();
+    const digest = rest.pop();
+    const gone = missed(root, gate, rest[0] || '', fs.readFileSync(log, 'utf8'), digest);
+    if (gone === null) console.log(`MISSED-INPUT ${gate}: its green record ${digest} is no longer stored`);
+    for (const [kind, rel] of gone || []) console.log(`MISSED-INPUT ${gate}\t${kind}\t${rel}`);
   } else {
-    console.error('usage: render-gate-select.mjs check <gate> [project] | record <gate> [project] <log>');
+    console.error('usage: render-gate-select.mjs check <gate> [project] | record <gate> [project] <log> | missed <gate> [project] <digest> <log>');
     process.exit(2);
   }
 }

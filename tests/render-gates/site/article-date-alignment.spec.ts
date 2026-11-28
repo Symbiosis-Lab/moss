@@ -17,7 +17,7 @@
 //
 // Self-contained: injects the real site.css + vertical.css into
 // `page.setContent`. No server, no MOSS_BIN.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openCrateDir } from '../../support/crate-paths';

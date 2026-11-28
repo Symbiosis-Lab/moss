@@ -405,6 +405,10 @@ struct RunLedger {
     /// Output keys a detached run put in staging that no build has registered
     /// yet. The staging sweep keeps them until a dispatch registers them.
     landed: HashSet<String>,
+    /// A run's outputs stopped being protected without being registered or
+    /// landed (its source went, it was superseded or cancelled): staging may
+    /// hold a file no manifest names. Read once per seal by `take_abandoned`.
+    abandoned: bool,
 }
 
 /// One video a spawned conversion run still owns.
@@ -525,12 +529,13 @@ impl VideoConversionState {
     /// supersedes every earlier run, so their entries go.
     pub fn begin_run(&self, epoch: u64, items: impl IntoIterator<Item = (String, String, Vec<String>)>) {
         let mut runs = self.runs.lock().unwrap();
-        runs.running.clear();
-        runs.running.extend(
-            items
-                .into_iter()
-                .map(|(path, fingerprint, outputs)| (path, RunningItem { fingerprint, epoch, outputs })),
-        );
+        let next: HashMap<String, RunningItem> = items
+            .into_iter()
+            .map(|(path, fingerprint, outputs)| (path, RunningItem { fingerprint, epoch, outputs }))
+            .collect();
+        let carried: HashSet<&String> = next.values().flat_map(|r| r.outputs.iter()).collect();
+        runs.abandoned |= runs.running.values().flat_map(|r| r.outputs.iter()).any(|key| !carried.contains(key));
+        runs.running = next;
     }
 
     /// `path` ended in run `epoch`; `landed` names what it put in staging that
@@ -551,7 +556,9 @@ impl VideoConversionState {
         let mut runs = self.runs.lock().unwrap();
         runs.landed.extend(landed);
         if runs.running.get(path).is_some_and(|r| r.epoch == epoch) {
-            if let Some(item) = runs.running.remove(path).filter(|_| delivered) {
+            let item = runs.running.remove(path);
+            runs.abandoned |= !delivered;
+            if let Some(item) = item.filter(|_| delivered) {
                 self.record_item_fingerprint(path, &item.fingerprint);
                 self.item_advisories.lock().unwrap().insert(path.to_string(), advisories.to_vec());
             }
@@ -560,7 +567,16 @@ impl VideoConversionState {
 
     /// Run `epoch` returned: whatever it still owned is no longer running.
     pub fn end_run(&self, epoch: u64) {
-        self.runs.lock().unwrap().running.retain(|_, r| r.epoch != epoch);
+        let mut runs = self.runs.lock().unwrap();
+        let before = runs.running.len();
+        runs.running.retain(|_, r| r.epoch != epoch);
+        runs.abandoned |= runs.running.len() < before;
+    }
+
+    /// Whether an encode's outputs left protection unregistered since the last
+    /// call.
+    pub fn take_abandoned(&self) -> bool {
+        std::mem::take(&mut self.runs.lock().unwrap().abandoned)
     }
 
     /// A build registered these keys, so they need no protection any more.
@@ -691,6 +707,27 @@ mod redact_tests {
     fn test_redact_home_dir_exact_home() {
         let home = dirs::home_dir().unwrap();
         assert_eq!(redact_home_dir(&home.to_string_lossy()), "~");
+    }
+}
+
+#[cfg(test)]
+mod run_ledger_tests {
+    use super::*;
+
+    fn item(path: &str, out: &str) -> (String, String, Vec<String>) {
+        (path.to_string(), "fp".to_string(), vec![out.to_string()])
+    }
+
+    /// A new run that re-claims a running video still protects its output, so
+    /// the seal need not walk the whole stage; one that drops it does not.
+    #[test]
+    fn a_new_run_abandons_only_the_outputs_it_no_longer_carries() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [item("a.mov", "a.mp4"), item("b.mov", "b.mp4")]);
+        state.begin_run(2, [item("a.mov", "a.mp4"), item("b.mov", "b.mp4")]);
+        assert!(!state.take_abandoned(), "re-claiming every video abandoned nothing");
+        state.begin_run(3, [item("a.mov", "a.mp4")]);
+        assert!(state.take_abandoned(), "dropping b.mov left its output unprotected");
     }
 }
 
@@ -1149,7 +1186,6 @@ mod tests {
 
     fn test_advisory(what: &str) -> crate::advisory::Advisory {
         crate::advisory::Advisory {
-            lifetime: Default::default(),
             scope: crate::advisory::Scope::File,
             severity: crate::advisory::Severity::ShippedDegraded,
             item: Some("a.mov".to_string()),

@@ -30,7 +30,7 @@
 //!    (`sweep_staging`) — `staging/` itself is deliberately never deleted; it
 //!    persists between rebuilds so mtime+size checks can skip unchanged
 //!    bytes. A one-shot CLI build gets no next build to sweep on, so its exit
-//!    path runs the same removal once, immediately (`ship::reclaim_staging_now`).
+//!    path runs the same removal once, immediately, in its seal tail.
 //!
 //! The server rests on `staging/` (annotated) while a preview session is live;
 //! `current` is always clean production HTML. Background workers write their
@@ -359,6 +359,7 @@ fn run_notebook_processing(
     evidence: &super::cloud_ledger::InputEvidence,
     robots_tag: Option<String>,
     color_scheme: crate::build::page::color_scheme::ColorScheme,
+    dir_overrides: &std::collections::HashMap<String, String>,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -612,14 +613,10 @@ fn run_notebook_processing(
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
         let robots_tag = robots_tag.clone();
+        let Ok(ipynb_out) = crate::build::notebook::copy_path(&item.source_path, dir_overrides) else { continue };
+        let Ok(viewer_relative) = crate::build::notebook::viewer_of(ipynb_out.as_str()) else { continue };
         let notebook_paths = with_io_timeout(&item.source_path, move || {
             let mut produced = Vec::new();
-            // Copy .ipynb to its natural served path. Both this path and the
-            // viewer .html below normalize through ServedPath so the manifest
-            // registration matches what's on disk regardless of source-folder
-            // casing.
-            // .unwrap(): source_path comes from the notebook scanner — known valid.
-            let ipynb_out = crate::build::notebook::copy_path(&item_source_path).unwrap();
             let hash = stage_copy(&source, &ipynb_out, &staging_owned)
                 .map_err(|e| format!("Failed to copy notebook: {}", e))?;
             produced.push((ipynb_out, hash));
@@ -649,7 +646,6 @@ fn run_notebook_processing(
                 robots_tag.as_deref(),
                 color_scheme,
             );
-            let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
                 Ok(hash) => produced.push((viewer_relative, hash)),
                 Err(e) => log::info!("Failed to write viewer HTML: {}", e),
@@ -859,11 +855,13 @@ fn run_notebook_processing(
 pub struct PipelineRunOutput {
     pub is_empty: bool,
     pub bg_handle: Option<BackgroundHandle>,
-    pub build_documents: Vec<ParsedDocument>,
+    pub build_documents: std::sync::Arc<Vec<ParsedDocument>>,
     pub content_hashes: SiteHashes,
     /// Missing authored asset evidence from this exact build. Empty is the
     /// completed clean answer and is meaningful.
-    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub missing_references: Vec<crate::build::types::ReferenceOccurrence>,
+    /// Pictures from other sites in this build, for the publish to probe.
+    pub remote_pictures: Vec<crate::build::types::ReferenceOccurrence>,
     /// Structural inputs this attempt still needs before its generation can
     /// replace the durable baseline.
     pub unresolved_inputs: Vec<String>,
@@ -1258,7 +1256,7 @@ fn build_inner(
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
     // Step 2b: sweep the previous build's residue out of staging.
-    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref()) });
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, crate::build::lifecycle::unless_tail_swept(&paths, locked_at_nanos, sweep_permit.as_ref())) });
 
     // Step 3: Build to staging directory using internal generator
     //
@@ -1322,7 +1320,7 @@ fn build_inner(
     // ONE resolve for the whole build, off the ONE config parse above (see
     // `site_comments` just below too) — two ladders that could drift is how
     // this presented before, as English email chrome on a Chinese site.
-    let site_lang = crate::i18n::detect::resolve_site_default_lang(
+    let crate::i18n::detect::SiteLang { code: site_lang, declared: site_lang_declared } = crate::i18n::detect::resolve_site_lang(
         cfg.as_ref().and_then(|c| c.site_lang()),
         project_structure.homepage_file.as_deref(),
         &project_structure.markdown_files,
@@ -1354,7 +1352,9 @@ fn build_inner(
             None
         }
     });
-    let forms_endpoint = services_config.as_ref().and_then(|s| s.forms_endpoint());
+    let seta = crate::build::site_config::SetaSite::read(folder_path);
+    // A site with no `[services]` still gets the moss host's default.
+    let forms = services_config.as_ref().unwrap_or(&Default::default()).forms_endpoint(seta.hosted());
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1441,7 +1441,7 @@ fn build_inner(
     // Read site-level config from .moss/config.toml [site] section
     // Declarations are data, read even when plugin code is skipped, so a CI
     // build ships what the app's build does.
-    let enabled_plugins = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
+    let crate::plugins::discovery::Declaring { loaded: enabled_plugins, untrusted } = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
     let (public_files, withheld) = crate::plugins::contributions::public_data::project(
         &enabled_plugins,
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
@@ -1452,6 +1452,7 @@ fn build_inner(
     }
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
+        lang_declared: site_lang_declared,
         typesetting: site_str("typesetting"),
         content_width: site_str("content_width"),
         comments: site_comments,
@@ -1505,10 +1506,11 @@ fn build_inner(
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
         header_scroll: crate::build::components::nav::HeaderScroll::from_config(site_str("header_scroll").as_deref()),
+        share_cover: crate::build::page::cover::ShareCover::from_config(site_str("share_cover").as_deref())?,
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
-        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &enabled_plugins),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &[enabled_plugins.as_slice(), untrusted.as_slice()].concat(), root.path()),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
@@ -1527,11 +1529,15 @@ fn build_inner(
         term_kinds: kinds,
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
-        forms_endpoint,
+        forms,
+        seta,
+        email_installed: cfg.as_ref().is_some_and(|c| c.channels().is_installed("email")),
         blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,
         booking: core_booking(cfg.as_ref(), &enabled_plugins),
+        newsletter: crate::plugins::contributions::provider::for_build(cfg.as_ref(), folder_path),
         members: cfg.as_ref().map(crate::config::services::MembersConfig::read).transpose()?.unwrap_or_default(),
+        comment_moderation: crate::build::features::comment::link_block::CommentModeration::for_build(folder_path, services_config.as_ref()),
         place_maps,
         incremental,
         derivations: derived.clone(),
@@ -1546,8 +1552,8 @@ fn build_inner(
     // stands; a full render reads every one again.
     let carried_env = previous_hashes.build_inputs.as_ref().filter(|_| incremental.render_skip).map(|inputs| inputs.env.clone());
     // A carrying build's record is only as complete as the one it carries from.
-    let record = last_seal.and_then(|seal| seal.record()).filter(|_| !incremental.render_skip || previous_hashes.build_inputs.is_some());
-    pending.set_build_inputs(record, carried_env);
+    let record = last_seal.as_ref().and_then(|seal| seal.record()).filter(|_| !incremental.render_skip || previous_hashes.build_inputs.is_some());
+    pending.set_build_inputs(record, carried_env, last_seal.map_or(Default::default(), |seal| seal.problems_at_entry()));
     // Register exactly the bytes parsed above; a second read here could
     // certify different bytes from those that shaped the rendered pages.
     if let Some(content) = places_content.as_ref() {
@@ -1569,7 +1575,9 @@ fn build_inner(
     let build_now = site_result.now;
     let build_day = crate::build::inputs::BuildDay { date: build_now.date(), zone: crate::build::inputs::site_zone(&documents).map(str::to_string) };
     let reused = (incremental.render_skip || incremental.parse_cache).then_some(previous_hashes.build_inputs.as_ref());
-    pending.set_render_facts(build_day, crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused));
+    if site_result.placeholders_deferred { crate::build::media::image::promise_settled_build(root.as_str()); }
+    let complete = crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused) && !site_result.placeholders_deferred;
+    pending.set_render_facts(build_day, complete);
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the
@@ -1615,7 +1623,7 @@ fn build_inner(
     }
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
-    crate::build::emit::slots::apply_to_stage_and_manifest(
+    let slot_batch = crate::build::emit::slots::apply_to_stage_and_manifest(
         &paths,
         &stage_dir,
         &resolved_slots,
@@ -1629,6 +1637,8 @@ fn build_inner(
         services.and_then(|s| s.assets.clone()),
     );
     staged_html.apply_to(&mut pending);
+    #[cfg(debug_assertions)]
+    crate::build::emit::slots::assert_every_page_filled(&stage_dir, &resolved_slots, &pending);
 
     pending.set_builder_fingerprint(Some(cache_keys.builder.clone()));
     // Include every synchronous output and the builder fingerprint in change detection.
@@ -1647,6 +1657,7 @@ fn build_inner(
     // detached seal task writes later.
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
+    let remote_pictures_for_publish = site_result.remote_pictures.clone();
     let (changed, new, deleted) = (
         site_result.hashes.get_changed_files(&previous_hashes),
         site_result.hashes.get_new_files(&previous_hashes),
@@ -1704,9 +1715,10 @@ fn build_inner(
         return Ok(PipelineRunOutput {
             is_empty,
             bg_handle: None,
-            build_documents: documents,
+            build_documents: std::sync::Arc::new(documents),
             content_hashes: content_hashes_for_watch,
             missing_references: missing_references_for_publish,
+            remote_pictures: remote_pictures_for_publish,
             unresolved_inputs: input_evidence.unresolved_structural(),
             cancelled: true,
             home_ready,
@@ -1828,6 +1840,7 @@ fn build_inner(
             &input_evidence,
             site_ai.robots_tag(false),
             color_scheme,
+            &background_ctx.dir_overrides,
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the
@@ -1873,8 +1886,7 @@ fn build_inner(
         &stage_dir,
         &mut pending,
     );
-    crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
-    crate::build::emit::place_map_assets::emit_country_search(&documents, &stage_dir, &mut pending);
+    crate::build::emit::place_map_assets::emit_country_assets(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
     let used_places = place_maps_after_render.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(
@@ -1938,10 +1950,13 @@ fn build_inner(
          migrate to #[tokio::test]"
     );
 
+    // Shared with the site-files worker; nothing changes a page after render.
+    let documents = std::sync::Arc::new(documents);
     let bg_handle = {
         // Clone what we need before consuming background_ctx by video dispatch.
-        let image_items_empty = background_ctx.image_items.is_empty();
         let og_requests = std::mem::take(&mut background_ctx.og_requests);
+        let site_files = background_ctx.site_files.take().and_then(|files| files.after_paint(&documents, &background_ctx.staging_dir, services.and_then(|s| s.session.clone())));
+        let slot_batch = slot_batch.after_paint(services.and_then(|s| s.session.clone()));
         let og_output = background_ctx.staging_dir.clone();
         let og_session = services.and_then(|s| s.session.clone());
         let video_items_empty = background_ctx.video_items.is_empty();
@@ -1959,15 +1974,10 @@ fn build_inner(
         // caches its id on the shared `build_parent` cell. A content-only rebuild
         // never reaches that → no parent → zero Jobs (invariant #6 / the heartbeat).
         //
-        // Stash the render-phase `html_total` (= `documents.len()`, the html_pages
-        // task total) into the shared atomic so the post-join barrier sources the
-        // Build receipt's `Amount { count, "pages" }` from the SAME count the legacy
-        // media-less frontend receipt reports (FIX 3 — page-count consistency). The
-        // narrower `SiteResult.page_count` would diverge with vs without media.
-        let html_total = documents.len();
+        // The Build receipt's page count is every rendered document, the same
+        // count the media-less receipt reports; `SiteResult.page_count` is narrower.
         if let Some(s) = services {
-            s.page_count
-                .store(html_total, std::sync::atomic::Ordering::Relaxed);
+            s.page_count.store(documents.len(), std::sync::atomic::Ordering::Relaxed);
         }
 
         // Owned Arc<BuildServices> handles for the 'static worker closures.
@@ -2017,6 +2027,8 @@ fn build_inner(
             if let Some(job) = search_job {
                 job.spawn(workers, tx.clone());
             }
+            if let Some(job) = site_files { job.spawn(workers, tx.clone(), render.clone()); }
+            if let Some(batch) = slot_batch { batch.spawn(workers, tx.clone()); }
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
@@ -2033,7 +2045,8 @@ fn build_inner(
             // run_image_conversion completes. When it joined another build's worker,
             // this worker stays until that work is done, so the seal holds it too,
             // or leaves it to a newer build and this build does not seal.
-            if !image_items_empty {
+            // Also with no pictures: the dispatch ends what the ones that left had marked.
+            {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
@@ -2138,6 +2151,7 @@ fn build_inner(
         build_documents: documents,
         content_hashes: content_hashes_for_watch,
         missing_references: missing_references_for_publish,
+        remote_pictures: remote_pictures_for_publish,
         unresolved_inputs: input_evidence.unresolved_structural(),
         cancelled: false,
         home_ready,
@@ -2192,6 +2206,7 @@ pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, gene
     let permit = crate::build::lifecycle::park_for_rebuild(paths, true, encode_outputs)?;
     crate::phase!("staging_sweep", { sweep_staging(&stage_dir, sealed, Some(&permit)) });
     let (render, _) = crate::build::lifecycle::show_render(paths, true);
+    render.close_unsealed();
     crate::build::lifecycle::promote(paths, crate::build::ship::next_promotion_epoch(), Some(&render), generation, false).ok()?;
     Some(render.seq())
 }
@@ -2203,20 +2218,25 @@ pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, gene
 /// Staging is the tree the preview reads, so this needs a
 /// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers never
 /// reach a generation, because `ship_phase` copies `sealed.files()` and
-/// nothing else, but the preview serves them until the next caught-up build.
+/// nothing else, but the preview serves them until a build may sweep.
 /// The one leftover that must not wait, the page of a deleted source, goes
-/// through `lifecycle::StaleHtml` instead. A one-shot build
-/// never gets a next build, so `ship::reclaim_staging_now` is its last chance.
+/// through `lifecycle::StaleHtml` instead.
+///
+/// The seal tail sweeps against the manifest it just sealed; a build sweeps
+/// before it renders unless the tail of the last build to enter swept, and an
+/// unchanged entry before it reveals staging. The pre-render sweep must
+/// stay: a producer trusts a file already at its address, so a stub the
+/// presence pass dropped has to go before render.
 ///
 /// An empty previous manifest (first build, or one that could not be read)
 /// authorizes nothing either.
-fn sweep_staging(
+pub(crate) fn sweep_staging(
     stage_dir: &Path,
     previous: &SiteHashes,
     permit: Option<&crate::build::lifecycle::SweepPermit>,
-) {
+) -> usize {
     let Some(permit) = permit.filter(|_| !previous.files.is_empty()) else {
-        return;
+        return 0;
     };
     let files = remove_stale_files(stage_dir, previous, "staging", permit);
     let dirs = remove_stale_dirs(stage_dir, &compute_expected_dirs(previous), permit);
@@ -2224,6 +2244,39 @@ fn sweep_staging(
     if files.removed() > 0 || dirs > 0 {
         log::info!("staging sweep: {}, {} dir(s)", files.describe(), dirs);
     }
+    files.removed()
+}
+
+/// The seal tail's reclaim: unlink what `sealed` leaves unnamed. Walks staging
+/// only when `SweepPermit::claim_whole_sweep` says residue the manifests
+/// cannot name may be there; otherwise it removes the entries `previous` had
+/// and `sealed` lacks, and those this build dropped after sealing. Returns
+/// how many files it removed.
+pub(crate) fn reclaim_staging(
+    stage_dir: &Path,
+    sealed: &crate::build::manifest::SealedManifest,
+    previous: Option<&SiteHashes>,
+    folder: &Path,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> usize {
+    let view = sealed.site_hashes_view();
+    let whole = permit.claim_whole_sweep(folder);
+    let Some(previous) = previous.filter(|p| !whole && !p.files.is_empty()) else {
+        return sweep_staging(stage_dir, view, Some(permit));
+    };
+    let gone: std::collections::HashSet<String> = previous
+        .output_keys()
+        .filter(|key| !view.names(key))
+        .chain(sealed.dropped())
+        .cloned()
+        .collect();
+    let files = crate::build::media::pipeline::remove_stale_named(stage_dir, &gone, view, permit);
+    let dirs = crate::build::media::pipeline::remove_emptied_dirs(stage_dir, &gone, permit);
+    crate::build::phase::record_count("swept", files.removed());
+    if files.removed() > 0 || dirs > 0 {
+        log::info!("staging reclaim: {}, {} dir(s)", files.describe(), dirs);
+    }
+    files.removed()
 }
 
 /// Load previous hashes from .moss/build.nosync/hashes.json.

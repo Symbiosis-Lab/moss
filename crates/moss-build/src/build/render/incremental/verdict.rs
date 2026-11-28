@@ -127,10 +127,19 @@ pub enum VerdictBasis {
         /// Pages added because an image they show gained or changed its
         /// dominant colour or LQIP (`listing::image_placeholders`).
         by_image_placeholder: usize,
+        /// Pages left to the settled build that would have been added by
+        /// image placeholder (`IncrementalPolicy::defer_image_placeholders`).
+        deferred_to_settle: usize,
         /// Pages unchanged since the last render, which a render after the
         /// manifest the carry reads from left on the stage.
         by_unsealed: usize,
     },
+}
+
+impl VerdictBasis {
+    fn defers_to_settle(&self) -> bool {
+        matches!(self, VerdictBasis::Incremental { deferred_to_settle, .. } if *deferred_to_settle > 0)
+    }
 }
 
 /// The one authority on "which pages must this build re-render".
@@ -178,6 +187,12 @@ impl RenderVerdict {
         &self.basis
     }
 
+    /// Whether this build left pages to the settled build, which it then owes
+    /// a promise of (`media::image::promise_settled_build`).
+    pub fn defers_to_settle(&self) -> bool {
+        self.basis.defers_to_settle()
+    }
+
     /// A verdict that is not logged is a third copy of Finding 1 (FM-5).
     pub fn log(&self) {
         match &self.basis {
@@ -199,13 +214,15 @@ impl RenderVerdict {
                 groups,
                 by_dependents,
                 by_image_placeholder,
+                deferred_to_settle,
                 by_unsealed,
             } => log::info!(
                 target: "incremental",
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
                  ({groups} groups), +{by_dependents} by surface dependents, \
-                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {} \
+                 +{by_image_placeholder} by image placeholder ({deferred_to_settle} left to the settled build), \
+                 +{by_unsealed} not yet sealed, skipping {} \
                  ({} re-read from the stage)",
                 self.skip.len(),
                 self.reread.len(),
@@ -315,7 +332,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .par_iter()
         .map(|doc| (
             crate::build::facade::PageKey::for_document(doc).cache_key().into_owned(),
-            PageFingerprints::of(doc, facade::ShellFacts { nav_island: crate::build::render::page_chrome::shows_nav_island(inputs.layout, Some(doc)) }),
+            PageFingerprints::of(doc, crate::build::render::page_chrome::shell_facts(inputs.layout, doc)),
         ))
         .collect();
 
@@ -635,14 +652,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 }
             }
 
-            let shows_one = pages_showing(
-                &image_placeholders_changed,
-                documents,
-                &render_set,
-                inputs,
-            );
-            let by_image_placeholder = shows_one.len();
-            render_set.extend(shows_one);
+            let shows_one = pages_showing(&image_placeholders_changed, documents, &render_set, inputs);
+            let (by_image_placeholder, deferred_to_settle) = if inputs.policy.defer_image_placeholders { (0, shows_one.len()) } else {
+                let n = shows_one.len(); render_set.extend(shows_one); (n, 0)
+            };
 
             // `hashes.json` does not describe a page a newer render left on the
             // stage. When that render's slot pass finished, the stage holds its
@@ -662,12 +675,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 groups: groups.len(),
                 by_dependents,
                 by_image_placeholder,
+                deferred_to_settle,
                 by_unsealed,
             };
             (skip, reread, basis)
         }
     };
 
+    let kept = if basis.defers_to_settle() { image_placeholders_changed.as_slice() } else { &[] };
+    let image_placeholders = previous.restore_previous_digests(DigestMap::ImagePlaceholders, image_placeholders, kept);
     let unsealed: std::collections::BTreeSet<String> =
         current.keys().filter(|p| unsealed.contains(*p) || !skip.contains(*p)).cloned().collect();
     let new_cache = FacadeCache::from_facades(current)

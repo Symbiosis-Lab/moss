@@ -13,7 +13,9 @@ use serde_json::Value;
 use std::path::Path;
 
 /// An account on a channel, as moss records it: `id` is the provider's stable
-/// identifier, opaque to moss; `name` is only shown.
+/// identifier, opaque to moss; `name` is shown, and where a channel's `acct`
+/// setting is filled by sign-in it is also the address an identity proof
+/// writes, so it must be `@name@host` on `host`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AccountBinding {
     pub id: String,
@@ -123,7 +125,9 @@ fn slot(project_path: &str, plugin: &str) -> Option<Slot> {
     (!binding.id.trim().is_empty()).then_some(Slot::Bound(binding))
 }
 
-fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
+/// The folder's typed record for `plugin`: a sign out reads as none, and the
+/// legacy `boundUserName` is not consulted.
+pub(crate) fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
     match slot(project_path, plugin)? {
         Slot::Bound(binding) => Some(binding),
         Slot::SignedOut => None,
@@ -132,11 +136,12 @@ fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
 
 /// The account `plugin` is signed in to in this folder, if any.
 pub fn account_binding(project_path: &str, plugin: &str) -> Option<BoundAccount> {
-    recorded(project_path, plugin).map(BoundAccount::from).or_else(|| {
+    let bound = recorded(project_path, plugin).map(BoundAccount::from).or_else(|| {
         let config = crate::plugins::discovery::get_plugin_config(project_path, plugin).ok()?;
         let bound = BoundAccount { id: text(config.get("boundUserId"), true), name: text(config.get("boundUserName"), true) };
         (bound.id.is_some() || bound.name.is_some()).then_some(bound)
-    })
+    })?;
+    Some(BoundAccount { name: super::copies::shown_name(bound.name, bound.id.as_deref()), ..bound })
 }
 
 /// The server of the account `plugin` is signed in to in this folder, when
@@ -186,8 +191,7 @@ const LEGACY_BINDING_KEYS: [&str; 3] = ["boundUserId", "boundUserName", "boundUs
 /// Forget which account this folder is signed in to on `plugin`. A folder
 /// with nothing to forget is left byte for byte as it was.
 pub fn unbind_account(project_path: &str, plugin: &str) -> Result<(), String> {
-    let config = Path::new(project_path).join(".moss").join("plugins").join(plugin).join("config.json");
-    let forgot_legacy = forget_legacy_binding(&config)?;
+    let forgot_legacy = forget_legacy_binding(&Path::new(project_path).join(".moss").join("plugins").join(plugin))?;
     if recorded(project_path, plugin).is_none() && !forgot_legacy {
         return Ok(());
     }
@@ -197,8 +201,27 @@ pub fn unbind_account(project_path: &str, plugin: &str) -> Result<(), String> {
     })
 }
 
-/// Whether `config` held a legacy binding, now removed.
-fn forget_legacy_binding(config: &Path) -> Result<bool, String> {
+/// Whether the plugin's folder held a legacy binding, now removed. The
+/// binding is read from `config.json` and `config.toml` together, so both
+/// are cleared.
+fn forget_legacy_binding(plugin_dir: &Path) -> Result<bool, String> {
+    let json = forget_legacy_json(&plugin_dir.join("config.json"))?;
+    let toml = forget_legacy_toml(&plugin_dir.join("config.toml"))?;
+    Ok(json || toml)
+}
+
+fn forget_legacy_toml(config: &Path) -> Result<bool, String> {
+    let Ok(text) = std::fs::read_to_string(config) else { return Ok(false) };
+    let Ok(mut table) = toml::from_str::<toml::Table>(&text) else { return Ok(false) };
+    if LEGACY_BINDING_KEYS.iter().filter_map(|k| table.remove(*k)).count() == 0 {
+        return Ok(false);
+    }
+    let out = crate::infra::toml_rewrite::apply_changes(&text, &table)?;
+    crate::infra::atomic_write::write_atomic(config, &out).map_err(|e| format!("could not clear {}: {e}", config.display()))?;
+    Ok(true)
+}
+
+fn forget_legacy_json(config: &Path) -> Result<bool, String> {
     let Ok(text) = std::fs::read_to_string(config) else { return Ok(false) };
     let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(&text) else { return Ok(false) };
     if LEGACY_BINDING_KEYS.iter().filter_map(|k| map.remove(*k)).count() == 0 {
@@ -210,23 +233,26 @@ fn forget_legacy_binding(config: &Path) -> Result<bool, String> {
 }
 
 /// What a channel's account row shows: the folder's binding read against the
-/// session this computer holds.
+/// session this computer holds. A `name` is only ever a name the channel or
+/// the binding gave: an account id is never shown in its place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum AccountState {
-    SignedIn { name: String },
-    /// The folder is bound to `name`, and this computer has no session for it.
-    SignedOut { name: String },
+    SignedIn { name: Option<String> },
+    /// The folder is bound, to `name` when it has one, and this computer has
+    /// no session for it.
+    SignedOut { name: Option<String> },
     /// This computer could not read its session: `why` is the channel's error,
-    /// or none when no runtime here may run the channel. `name` is the
-    /// binding's, if the folder has one.
-    Unread { name: Option<String>, why: Option<String> },
+    /// or none when no runtime here may run the channel. `bound` says the
+    /// folder has a binding, and `name` is its name, if it has one.
+    Unread { name: Option<String>, bound: bool, why: Option<String> },
     NoAccount,
 }
 
 /// The row for a channel whose session was not read, from the binding alone.
 pub fn account_unread(project_path: &str, plugin: &str, why: Option<String>) -> AccountState {
-    AccountState::Unread { name: account_binding(project_path, plugin).and_then(|b| b.name.or(b.id)), why }
+    let bound = account_binding(project_path, plugin);
+    AccountState::Unread { bound: bound.is_some(), name: bound.and_then(|b| b.name), why }
 }
 
 impl PluginManager {
@@ -235,15 +261,14 @@ impl PluginManager {
     /// the last word, and a channel without one is taken at its binding.
     pub async fn account_state(&self, plugin: &str) -> AccountState {
         let bound = account_binding(&self.project_path, plugin);
-        let shown = |b: &BoundAccount| b.name.clone().or_else(|| b.id.clone());
         match self.copy_account(plugin).await {
             super::copies::Account::Known { id, name } => {
-                let same = bound.as_ref().filter(|b| b.id.as_deref() == Some(id.as_str()));
-                AccountState::SignedIn { name: name.or_else(|| same.and_then(shown)).unwrap_or(id) }
+                let same = bound.filter(|b| b.id.as_deref() == Some(id.as_str()));
+                AccountState::SignedIn { name: name.or_else(|| same.and_then(|b| b.name)) }
             }
-            super::copies::Account::SignedOut => bound.as_ref().and_then(shown).map_or(AccountState::NoAccount, |name| AccountState::SignedOut { name }),
+            super::copies::Account::SignedOut => bound.map_or(AccountState::NoAccount, |b| AccountState::SignedOut { name: b.name }),
             super::copies::Account::Unknown(why) => account_unread(&self.project_path, plugin, Some(why)),
-            super::copies::Account::Unsaid => bound.as_ref().and_then(shown).map_or(AccountState::NoAccount, |name| AccountState::SignedIn { name }),
+            super::copies::Account::Unsaid => bound.map_or(AccountState::NoAccount, |b| AccountState::SignedIn { name: b.name }),
         }
     }
 
@@ -255,6 +280,7 @@ impl PluginManager {
     pub async fn sign_out(&self, plugin: &Plugin, context_json: &str, secrets: &crate::identity::secrets::SecretStore) -> Vec<String> {
         let name = &plugin.manifest.name;
         let mut failed = Vec::new();
+        let context_json = &self.with_plugin_config(plugin, context_json);
         match self.execute_plugin_javascript(plugin, "logout", context_json, super::AskedBy::Person).await {
             Err(e) if !crate::engine::is_missing_export(&e) => failed.push(format!("{name} could not sign out: {e}")),
             _ => {}
@@ -276,10 +302,54 @@ impl PluginManager {
         failed
     }
 
+    /// `context_json` with the plugin's own settings as `config`, read now:
+    /// a sign-in or sign-out has no dispatcher to fill them in.
+    fn with_plugin_config(&self, plugin: &Plugin, context_json: &str) -> String {
+        let Ok(mut context) = serde_json::from_str::<Value>(context_json) else { return context_json.to_string() };
+        if let (Some(object), Ok(config)) = (context.as_object_mut(), serde_json::to_value(super::hook_context::hook_config_for_plugin(&self.project_path, plugin))) {
+            object.insert("config".into(), config);
+        }
+        context.to_string()
+    }
+
     /// Run `plugin`'s `login` and record the account it names.
     pub async fn sign_in(&self, plugin: &Plugin, context_json: &str) -> Result<SignedIn, String> {
+        self.sign_in_asking(plugin, context_json, &Default::default()).await
+    }
+
+    /// [`Self::sign_in`] with the answers to the settings the sign-in row asks
+    /// for (`at_sign_in`): written to the plugin's `config.toml` first, so
+    /// `login` reads them as settings; a key the manifest does not ask for at
+    /// sign-in is refused.
+    pub async fn sign_in_asking(&self, plugin: &Plugin, context_json: &str, asked: &std::collections::HashMap<String, String>) -> Result<SignedIn, String> {
         let name = &plugin.manifest.name;
+        if !asked.is_empty() {
+            let asks = plugin.manifest.sign_in_asks();
+            if let Some(key) = asked.keys().find(|k| !asks.iter().any(|f| &f.key == *k)) {
+                return Err(format!("{name} does not ask for `{key}` at sign-in"));
+            }
+            if let Some((key, _)) = asked.iter().find(|(_, v)| v.trim().is_empty()) {
+                return Err(format!("`{key}` is empty"));
+            }
+            let values = asked.iter().map(|(k, v)| (k.clone(), Value::String(v.trim().to_string()))).collect();
+            crate::plugins::discovery::merge_plugin_config_values(&self.project_path, name, &values)?;
+        }
+        let config = super::hook_context::hook_config_for_plugin(&self.project_path, plugin);
+        if let Some(ask) = plugin.manifest.sign_in_asks().into_iter().find(|f| config.get(&f.key).and_then(Value::as_str).is_none_or(|v| v.trim().is_empty())) {
+            let shown = plugin.manifest.display_name_for(&crate::plugins::types::Capability::Login).unwrap_or(name);
+            return Err(format!("{shown} needs its {}", if ask.label.is_empty() { &ask.key } else { &ask.label }));
+        }
+        let context_json = &self.with_plugin_config(plugin, context_json);
         let before = account_binding(&self.project_path, name).is_some();
+        // A press while this login waits on the browser starts it again rather
+        // than joining it. The old run is cancelled, as the watchdog would, since
+        // its code may catch the cancellation and keep waiting. The engine's
+        // answer to the cancel must reach the old run, and its teardown (which
+        // closes the panel) must finish, before the new run registers.
+        if self.host.state.hooks.sign_ins.end_wait(name) {
+            self.engine.cancel_hook(name, "login");
+            self.host.state.hooks.in_flight_hooks.settled(&super::singleflight_key(name, "login", super::AskedBy::Person)).await;
+        }
         let (_, returned) = self.execute_plugin_javascript(plugin, "login", context_json, super::AskedBy::Person).await?;
         let outcome = LoginOutcome::from_returned(returned.as_ref());
         if let LoginOutcome::Completed(account) = &outcome {
@@ -348,6 +418,47 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), modified);
     }
 
+    /// A channel whose `server` setting is asked on the sign-in row; its `login` names the account after the `server` it reads from `ctx.config`.
+    fn folder_asking_for_a_server() -> (tempfile::TempDir, String) {
+        let (dir, project) = folder_with_channel(r#"return { status: "completed", account: { id: "1", name: String(ctx.config.server) } };"#);
+        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js","global_name":"Social","contributes":{"channel":{"login":true,
+            "setup":{"settings":[{"key":"server","type":"string","label":"Server","at_sign_in":true},{"key":"token","type":"secret","label":"Token","hidden":true}]}}}}"#);
+        (dir, project)
+    }
+
+    async fn sign_in_asking(project: &str, asked: &[(&str, &str)]) -> Result<SignedIn, String> {
+        let (manager, plugin) = manager(project);
+        let asked = asked.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        manager.sign_in_asking(&plugin, &context(project), &asked).await
+    }
+
+    #[tokio::test]
+    async fn the_answer_to_a_setting_asked_at_sign_in_is_in_config_toml_when_login_runs() {
+        let (_dir, project) = folder_asking_for_a_server();
+        let signed = sign_in_asking(&project, &[("server", " https://example.social ")]).await.unwrap();
+        assert_eq!(signed.outcome, completed("1", Some("https://example.social")), "login read the answer from its config");
+        let toml = std::fs::read_to_string(std::path::Path::new(&project).join(".moss/plugins/social/config.toml")).unwrap();
+        assert!(toml.contains(r#"server = "https://example.social""#), "{toml}");
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_whose_asked_setting_has_no_value_is_refused_before_login_runs() {
+        let (dir, project) = folder_asking_for_a_server();
+        write(&project, ".moss/plugins/social/main.bundle.js", r#"var Social = { async login(ctx) { await globalThis.__TAURI__.core.invoke("write_plugin_file", { relativePath: "login-ran", content: "yes" }); return { status: "cancelled" }; } };"#);
+        let refused = sign_in_asking(&project, &[]).await.unwrap_err();
+        assert_eq!(refused, "social needs its Server");
+        assert!(!dir.path().join(".moss/plugins/social/login-ran").exists(), "login never ran");
+    }
+
+    #[tokio::test]
+    async fn an_answer_for_a_setting_not_asked_at_sign_in_is_refused_and_written_nowhere() {
+        let (_dir, project) = folder_asking_for_a_server();
+        let refused = sign_in_asking(&project, &[("token", "stolen")]).await.unwrap_err();
+        assert_eq!(refused, "social does not ask for `token` at sign-in");
+        assert!(!std::path::Path::new(&project).join(".moss/plugins/social/config.toml").exists());
+        assert_eq!(sign_in_asking(&project, &[("server", "  ")]).await.unwrap_err(), "`server` is empty");
+    }
+
     /// How Matters and every channel from before `LoginResult` bind: `login`
     /// returns no status and writes the handle into its own config.
     #[tokio::test]
@@ -363,6 +474,29 @@ mod tests {
         let (_dir, project) = folder_with_channel(r#"return { success: false, message: "wrong password" };"#);
         assert_eq!(try_sign_in(&project).await, Err("Hook failed: wrong password".into()), "an older login's failure keeps its message");
         assert_eq!(account_binding(&project, "social"), None);
+    }
+
+    /// Two folders signing in to the same channel at once: each browser's
+    /// return page says how its own folder's login ended.
+    #[tokio::test]
+    async fn the_browsers_return_page_says_how_the_login_ended() {
+        use crate::plugins::runtime::browser_sign_in::tests::get;
+        let (_ok_dir, ok) = folder_with_channel(r#"return { status: "completed", account: { id: "did:plc:1" } };"#);
+        let (_failed_dir, failed) = folder_with_channel(r#"return { status: "failed", message: "no" };"#);
+        let headless = |project: &str| PluginManager::new(project, AdapterHost::headless(crate::build::ports::reporter::discard_owned())).unwrap();
+        let (ok_manager, failed_manager) = (headless(&ok), headless(&failed));
+        let mut browsers = Vec::new();
+        for manager in [&ok_manager, &failed_manager] {
+            let redirect = manager.host.state.hooks.sign_ins.start("social", "X").await.unwrap();
+            browsers.push(tokio::spawn(async move { get(&format!("{redirect}?code=c&state=s")).await.1 }));
+        }
+        let social = |manager: &PluginManager| manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        let (ok_plugin, failed_plugin) = (social(&ok_manager), social(&failed_manager));
+        let (ok_context, failed_context) = (context(&ok), context(&failed));
+        let _ = tokio::join!(ok_manager.sign_in(&ok_plugin, &ok_context), failed_manager.sign_in(&failed_plugin, &failed_context));
+        let [signed_in, not] = [browsers.remove(0).await.unwrap(), browsers.remove(0).await.unwrap()];
+        assert!(signed_in.contains("Signed in to X"), "{signed_in}");
+        assert!(not.contains("didn\u{2019}t finish"), "{not}");
     }
 
     #[tokio::test]
@@ -448,7 +582,7 @@ mod tests {
         let config = crate::config::ConfigFile::parse("").unwrap();
         let records = crate::syndication::record::Records::at(dir.path().join("copies"));
         let none = std::collections::HashSet::new();
-        let plans = decide(&PlanInputs { folder: dir.path(), config: &config, site_url: Some("https://example.org"), articles: &articles, previously_live: None, edited_sources: &none, channels: &channels }, &records);
+        let plans = decide(&PlanInputs { folder: dir.path(), config: &config, site_url: Some("https://example.org"), articles: &articles, previously_live: None, edited_sources: &none, channels: &channels, choices: &Default::default() }, &records);
         let actions: Vec<_> = plans.iter().flat_map(|p| p.entries.iter().map(|e| e.action.clone())).collect();
         assert_eq!(actions, [Action::Adopt { url: listed.into() }], "a copy on the signed-in server is adopted, not posted again");
     }
@@ -468,12 +602,16 @@ mod tests {
     /// A channel whose bundle is `body` (the members of its global), with one
     /// hidden secret, `token`.
     fn folder_with_hooks(body: &str) -> (tempfile::TempDir, String) {
+        folder_with_plugin("social", body)
+    }
+
+    fn folder_with_plugin(name: &str, body: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap().to_string();
-        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js",
-            "global_name":"Social","contributes":{"channel":{"login":true,
-            "setup":{"settings":[{"key":"token","type":"secret","label":"Token","hidden":true}]}}}}"#);
-        write(&project, ".moss/plugins/social/main.bundle.js", &format!("var Social = {{ {body} }};"));
+        write(&project, &format!(".moss/plugins/{name}/manifest.json"), &format!(r#"{{"name":"{name}","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"Social","contributes":{{"channel":{{"login":true,
+            "setup":{{"settings":[{{"key":"token","type":"secret","label":"Token","hidden":true}}]}}}}}}}}"#));
+        write(&project, &format!(".moss/plugins/{name}/main.bundle.js"), &format!("var Social = {{ {body} }};"));
         (dir, project)
     }
 
@@ -545,6 +683,20 @@ mod tests {
     }
 
     #[test]
+    fn signing_out_forgets_a_binding_the_settings_file_still_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_str().unwrap();
+        let settings = "# the person's own note\nlanguage = 'zh'\nboundUserName = \"@ada\"\n";
+        write(project, ".moss/plugins/social/config.toml", settings);
+        write(project, ".moss/plugins/social/config.json", "{\"signedOut\": false}");
+        assert!(account_binding(project, "social").is_some());
+        unbind_account(project, "social").unwrap();
+        assert_eq!(account_binding(project, "social"), None, "the row names no account after Sign out");
+        assert!(marked_signed_out(project, "social"));
+        assert_eq!(std::fs::read_to_string(dir.path().join(".moss/plugins/social/config.toml")).unwrap(), "# the person's own note\nlanguage = 'zh'\n");
+    }
+
+    #[test]
     fn signing_out_a_folder_with_no_account_leaves_its_state_alone() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap();
@@ -599,29 +751,56 @@ mod tests {
         assert!(!marked_signed_out(&project, "social"));
     }
 
-    async fn state_with(copy_account: &str, bound: Option<&str>) -> AccountState {
+    async fn state_with(copy_account: &str, bound: Option<Option<&str>>) -> AccountState {
         let (_dir, project) = folder_with_hooks(&format!("async copy_account(q) {{ return {copy_account}; }}"));
         if let Some(name) = bound {
-            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some(name.into()), host: None }).unwrap();
+            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: name.map(Into::into), host: None }).unwrap();
         }
         manager(&project).0.account_state("social").await
+    }
+
+    const ADA: Option<Option<&str>> = Some(Some("@ada"));
+    const ID_ONLY: Option<Option<&str>> = Some(None);
+
+    fn named(name: &str) -> Option<String> {
+        Some(name.into())
     }
 
     #[tokio::test]
     async fn the_account_row_reads_the_binding_against_this_computers_session() {
         let signed_out = r#"{ success: true, copy: { signed_out: true } }"#;
-        assert_eq!(state_with(signed_out, Some("@ada")).await, AccountState::SignedOut { name: "@ada".into() });
+        assert_eq!(state_with(signed_out, ADA).await, AccountState::SignedOut { name: named("@ada") });
         assert_eq!(state_with(signed_out, None).await, AccountState::NoAccount);
         let same = r#"{ success: true, copy: { account: "acct:1" } }"#;
-        assert_eq!(state_with(same, Some("@ada")).await, AccountState::SignedIn { name: "@ada".into() });
+        assert_eq!(state_with(same, ADA).await, AccountState::SignedIn { name: named("@ada") });
         let other = r#"{ success: true, copy: { account: "acct:9" } }"#;
-        assert_eq!(state_with(other, Some("@ada")).await, AccountState::SignedIn { name: "acct:9".into() }, "another account's session is not shown under this binding's name");
+        assert_eq!(state_with(other, ADA).await, AccountState::SignedIn { name: None }, "another account's session is neither shown under this binding's name nor by its id");
         let (_dir, project) = folder_with_hooks("");
         bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()), host: None }).unwrap();
-        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: "@ada".into() }, "no copy_account: the binding");
+        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: named("@ada") }, "no copy_account: the binding");
         let failed = r#"{ success: false, error: "rate limited" }"#;
-        assert!(matches!(state_with(failed, Some("@ada")).await, AccountState::Unread { name: Some(n), why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
-        assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, why: Some(_) }));
+        assert!(matches!(state_with(failed, ADA).await, AccountState::Unread { name: Some(n), bound: true, why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
+        assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, bound: false, why: Some(_) }));
+        let refused = r#"{ success: false, message: "Sign in first", copy: { refused: { cause: "auth", message: "Sign in first" } } }"#;
+        assert_eq!(state_with(refused, None).await, AccountState::NoAccount, "a refusal for want of a credential is signed out, not an error");
+        assert_eq!(state_with(refused, ADA).await, AccountState::SignedOut { name: named("@ada") });
+        let offline = r#"{ success: false, message: "offline", copy: { refused: { cause: "network" } } }"#;
+        assert_eq!(state_with(offline, None).await, AccountState::Unread { name: None, bound: false, why: Some("offline".into()) }, "any other refusal keeps the channel's own words");
+    }
+
+    #[tokio::test]
+    async fn an_account_row_never_shows_an_id_as_its_name() {
+        let same = r#"{ success: true, copy: { account: "acct:1" } }"#;
+        assert_eq!(state_with(same, ID_ONLY).await, AccountState::SignedIn { name: None }, "a binding without a name");
+        let echoed = r#"{ success: true, copy: { account: "acct:1", name: "acct:1" } }"#;
+        assert_eq!(state_with(echoed, None).await, AccountState::SignedIn { name: None }, "a channel that answers its id as the name");
+        let signed_out = r#"{ success: true, copy: { signed_out: true } }"#;
+        assert_eq!(state_with(signed_out, ID_ONLY).await, AccountState::SignedOut { name: None });
+        let failed = r#"{ success: false, error: "rate limited" }"#;
+        assert!(matches!(state_with(failed, ID_ONLY).await, AccountState::Unread { name: None, bound: true, why: Some(_) }), "an unread row keeps its binding without a name");
+        let (_dir, project) = folder_with_hooks("");
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("acct:1".into()), host: None }).unwrap();
+        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: None }, "a binding whose name is its id");
     }
 
     /// The desktop as a sign-in page sees it: one browser panel, and an event
@@ -630,6 +809,9 @@ mod tests {
     struct Desk {
         pages: std::sync::Mutex<Vec<String>>,
         closes: std::sync::atomic::AtomicUsize,
+        signed_in_closes: std::sync::atomic::AtomicUsize,
+        /// Addresses opened in the person's own browser.
+        browsed: std::sync::Mutex<Vec<String>>,
         listeners: std::sync::Mutex<Vec<(String, std::sync::Arc<dyn Fn(&str) + Send + Sync>)>>,
     }
 
@@ -643,6 +825,10 @@ mod tests {
 
         fn closes(&self) -> usize {
             self.closes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn signed_in_closes(&self) -> usize {
+            self.signed_in_closes.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         /// Until the plugin has its page open and listens for the click on it.
@@ -668,12 +854,19 @@ mod tests {
             self.pages.lock().unwrap().push(html);
             Ok(())
         }
-        async fn close_action_panel(&self) -> Result<(), String> {
+        async fn close_action_panel(&self, _: Option<String>) -> Result<(), String> {
             self.closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.fire("browser-closed", r#"{"reason":"programmatic"}"#);
             Ok(())
         }
-        async fn open_system_browser(&self, _: String) -> Result<(), String> { unreachable!() }
+        async fn close_signed_in_page(&self) -> Result<(), String> {
+            self.signed_in_closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        async fn open_system_browser(&self, url: String) -> Result<(), String> {
+            self.browsed.lock().unwrap().push(url);
+            Ok(())
+        }
         async fn return_to_editor(&self) -> Result<(), String> { unreachable!() }
         async fn fill_browser_panel(&self, _: &str, _: &str, _: Value) -> Result<Value, String> { unreachable!() }
         async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> Result<Option<String>, String> { unreachable!() }
@@ -687,6 +880,10 @@ mod tests {
     }
 
     fn manager_at_desk(project: &str) -> (PluginManager, Plugin, std::sync::Arc<Desk>) {
+        manager_of_at_desk(project, "social")
+    }
+
+    fn manager_of_at_desk(project: &str, name: &str) -> (PluginManager, Plugin, std::sync::Arc<Desk>) {
         let desk = std::sync::Arc::new(Desk::default());
         let host = AdapterHost {
             state: crate::engine::host_fns::HostState::standalone(),
@@ -696,7 +893,7 @@ mod tests {
         };
         let watchdog = HookWatchdog { limit: std::time::Duration::from_secs(1), check: std::time::Duration::from_millis(100) };
         let manager = PluginManager::new(project, host).unwrap().with_watchdog(watchdog);
-        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == name).unwrap();
         (manager, plugin, desk)
     }
 
@@ -719,19 +916,52 @@ mod tests {
             desk.fire("picker:continue", r#"{"server":"social.example.net"}"#);
         });
         assert_eq!(signed_in.unwrap().outcome, completed("social.example.net/1", Some("@ada")));
-        assert_eq!(desk.closes(), 1, "the sign-in's page closes with it");
+        assert_eq!(desk.signed_in_closes(), 1, "the sign-in's page closes with it");
     }
 
-    /// However the sign-in ends, its page does not outlive it.
+    /// However the sign-in ends, its page does not outlive it; only a sign-in
+    /// that worked closes it as signed in.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_sign_in_that_ends_closes_its_page() {
-        for ending in [r#"return { status: "completed", account: { id: "s/1" } };"#, r#"throw new Error("server refused");"#, r#"return { status: "cancelled" };"#] {
+        let endings = [
+            (r#"return { status: "completed", account: { id: "s/1" } };"#, true),
+            ("return;", true),
+            (r#"throw new Error("server refused");"#, false),
+            (r#"return { status: "cancelled" };"#, false),
+            (r#"return { status: "failed", message: "no" };"#, false),
+        ];
+        for (ending, signed_in) in endings {
             let (_dir, project) = folder_with_channel(&format!(r#"await globalThis.__TAURI__.core.invoke("set_action_panel_html", {{ html: "<p>Pick</p>" }}); {ending}"#));
             let (manager, plugin, desk) = manager_at_desk(&project);
             let _ = manager.sign_in(&plugin, &context(&project)).await;
-            assert_eq!(desk.closes(), 1, "{ending}");
+            assert_eq!((desk.signed_in_closes(), desk.closes()), if signed_in { (1, 0) } else { (0, 1) }, "{ending}");
             assert!(!manager.host.state.hooks.is_making_progress("social", "login"), "{ending}");
         }
+    }
+
+    /// A click on a finished sign-in's page reaches a listener that ended with
+    /// the hook, and the next sign-in runs as usual.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_click_on_a_finished_sign_in_page_reaches_nothing() {
+        let (_dir, project) = folder_with_channel(&format!(r#"{PICKS_A_SERVER}
+            return {{ status: "completed", account: {{ id: server + "/1" }} }};"#));
+        let (manager, plugin, desk) = manager_at_desk(&project);
+        let ctx = context(&project);
+        let (first, ()) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+            desk.page_waiting_for("picker:continue").await;
+            desk.fire("picker:continue", r#"{"server":"one.example"}"#);
+        });
+        assert_eq!(first.unwrap().outcome, completed("one.example/1", None));
+        desk.fire("picker:continue", r#"{"server":"stale.example"}"#);
+        let again = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                desk.fire("picker:continue", r#"{"server":"two.example"}"#);
+            })
+        });
+        let (second, ()) = again.await.expect("a stale click must not wedge the next sign-in");
+        assert_eq!(second.unwrap().outcome, completed("two.example/1", None));
+        assert_eq!(desk.signed_in_closes(), 2);
     }
 
     /// The person closing the page ends the wait: a sign-in still waiting for
@@ -748,6 +978,130 @@ mod tests {
         });
         assert_eq!(signed_in.expect("a closed page must not hold the sign-in forever").unwrap_err(), "Hook 'social::login' timed out - no progress for 1 seconds");
         assert_eq!(desk.closes(), 0, "a page already closed is not closed again");
+    }
+
+    /// `startBrowserSignIn` as moss-api writes it, over the same host calls.
+    const BROWSER_SIGN_IN: &str = r#"
+        const startBrowserSignIn = async () => {
+            const { redirectUri } = await globalThis.__TAURI__.core.invoke("browser_sign_in_start", {});
+            return { redirectUri, open: async (url) => {
+                try {
+                    const { params } = await globalThis.__TAURI__.core.invoke("browser_sign_in_wait", { url });
+                    return Object.fromEntries(params);
+                } catch (e) {
+                    const message = e instanceof Error ? e.message : String(e);
+                    if (message !== "sign-in cancelled") throw e;
+                    const cancelled = new Error(message);
+                    cancelled.name = "SignInCancelled";
+                    throw cancelled;
+                }
+            } };
+        };
+        const authorize = (s) => "https://social.example.net/authorize?redirect_uri=" + encodeURIComponent(s.redirectUri);"#;
+
+    /// The person closes the browser tab, which tells moss nothing, and presses
+    /// Sign in again: the press starts a fresh sign-in instead of joining the
+    /// one left waiting, for each shape a channel's login takes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_press_after_the_browser_tab_closed_starts_a_fresh_sign_in() {
+        // One test with its own plugin name: a waiting sign-in is kept per plugin
+        // name for the whole process, so any other test's press would end it.
+        let shapes = [
+            // Every failure caught and returned as a refusal.
+            ("bluesky", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "did:" + reply.code }} }};
+                }} catch (e) {{ return {{ success: false, message: e.message }}; }}"#)),
+            // A cancelled wait answered as a cancelled sign-in.
+            ("threads", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "threads/" + reply.code }} }};
+                }} catch (e) {{
+                    if (e.name === "SignInCancelled") return {{ status: "cancelled" }};
+                    return {{ status: "failed", message: e.message }};
+                }}"#)),
+            // A cancellation caught, then a page of its own that waits on the person.
+            ("lingers", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "lingers/" + reply.code }} }};
+                }} catch (e) {{
+                    await globalThis.__TAURI__.core.invoke("set_action_panel_html", {{ html: "<p>Stopped</p>" }});
+                    return await new Promise(() => {{}});
+                }}"#)),
+            // A server picked on moss's own page first, then the browser.
+            ("mastodon", format!(r#"{BROWSER_SIGN_IN} {PICKS_A_SERVER}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: server + "/" + reply.code }} }};
+                }} catch (e) {{
+                    if (e.name === "SignInCancelled") return {{ status: "cancelled" }};
+                    return {{ status: "failed", message: e.message }};
+                }}"#)),
+        ];
+        for (shape, login) in shapes {
+            let (_dir, project) = folder_with_plugin("browsing", &format!("async login(ctx) {{ {login} }}"));
+            let (manager, plugin, desk) = manager_of_at_desk(&project, "browsing");
+            let ctx = context(&project);
+            let picks = shape == "mastodon";
+            let browsed = |n: usize| {
+                let desk = desk.clone();
+                async move {
+                    for _ in 0..500 {
+                        if let Some(url) = desk.browsed.lock().unwrap().get(n - 1) {
+                            return url::Url::parse(url).unwrap().query_pairs().find(|(k, _)| k == "redirect_uri").map(|(_, v)| v.into_owned()).unwrap();
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    panic!("{shape}: sign-in {n} never opened the browser");
+                }
+            };
+            let pick = |n: usize| {
+                let desk = desk.clone();
+                async move {
+                    if !picks {
+                        return;
+                    }
+                    for _ in 0..500 {
+                        if desk.pages.lock().unwrap().len() >= n {
+                            desk.fire("picker:continue", r#"{"server":"social.example.net"}"#);
+                            return;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    panic!("{shape}: sign-in {n} never opened its picker");
+                }
+            };
+            let presses = async {
+                let (first, (abandoned, second)) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                    pick(1).await;
+                    let abandoned = browsed(1).await;
+                    let (second, ()) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                        pick(2).await;
+                        let redirect = browsed(2).await;
+                        let client = crate::system::proxy_reqwest::client_builder().no_proxy().build().unwrap();
+                        client.get(format!("{redirect}?code=again")).send().await.unwrap_or_else(|e| panic!("{shape}: the second sign-in's redirect: {e:?}"));
+                    });
+                    (abandoned, second)
+                });
+                (first, abandoned, second)
+            };
+            let (first, abandoned, second) = tokio::time::timeout(std::time::Duration::from_secs(20), presses)
+                .await
+                .unwrap_or_else(|_| panic!("{shape}: the second press joined the sign-in left in the closed tab"));
+            let id = match shape { "mastodon" => "social.example.net/again".to_string(), "bluesky" => "did:again".to_string(), _ => format!("{shape}/again") };
+            assert_eq!(second.unwrap().outcome, completed(&id, None), "{shape}");
+            assert!(!matches!(first.map(|s| s.outcome), Ok(LoginOutcome::Completed(_))), "{shape}: the abandoned sign-in finishes nothing");
+            let port = abandoned.trim_start_matches("http://").split('/').next().unwrap().to_string();
+            assert!(tokio::net::TcpStream::connect(&port).await.is_err(), "{shape}: the abandoned sign-in stopped listening");
+            assert_eq!(account_binding(&project, "browsing").and_then(|b| b.id), Some(id), "{shape}");
+        }
     }
 
     /// A channel that declares its one hidden secret keeps everything a

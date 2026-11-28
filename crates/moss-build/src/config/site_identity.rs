@@ -12,7 +12,9 @@ use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::page::meta::escape_html_attr;
 use crate::config::ConfigFile;
+use crate::build::scan::article_map::to_pretty_url;
 use crate::plugins::contributions::identity::{self, Claim, Supplied};
+use crate::syndication::record::{CopyRecord, VerifyFile, VerifyLink};
 use crate::plugins::types::Plugin;
 use crate::types::content::SiteHashes;
 
@@ -23,12 +25,14 @@ pub struct SiteIdentity {
     /// `.well-known` files as (path, body, supplier). Authors cannot ship
     /// these themselves: the scanner skips every dot-folder.
     files: Vec<(String, String, String)>,
+    /// Head elements for one page, keyed by its pretty url path, from copy records.
+    page_links: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl SiteIdentity {
     /// Read `[site].me`, `[site].atproto_did` and every plugin's proofs,
     /// warning about each value it drops and each path two suppliers claim.
-    pub fn from_config(config: Option<&ConfigFile>, plugins: &[Plugin]) -> Self {
+    pub fn from_config(config: Option<&ConfigFile>, plugins: &[Plugin], project_path: &Path) -> Self {
         let Some(config) = config else { return Self::default() };
         let mut claims: Vec<Supplied> = Vec::new();
         for address in config.site_strings("me") {
@@ -45,7 +49,7 @@ impl SiteIdentity {
                 log_warn_problem!("[site].atproto_did: \"{did}\" does not start with did:plc: or did:web:, so .well-known/atproto-did is not written");
             }
         }
-        let (from_plugins, problems) = identity::supplied(plugins, config);
+        let (from_plugins, problems) = identity::supplied(plugins, config, &project_path.to_string_lossy());
         for sentence in problems {
             log_warn_problem!(target: "plugin", "{sentence}");
         }
@@ -69,6 +73,57 @@ impl SiteIdentity {
             }
         }
         out
+    }
+
+    /// Add what the site's copy records ask it to carry: a link for the page
+    /// each names and a `.well-known` file each. Only records for `site_url`
+    /// count; each ask passes the identity allowlists or is dropped with a
+    /// warning, and where two records give one path two bodies the newest wins.
+    pub fn add_copy_verification(&mut self, mut records: Vec<CopyRecord>, site_url: &str) {
+        let site = site_url.trim_end_matches('/');
+        records.retain(|r| r.verify.is_some() && r.site_url.as_deref().is_some_and(|u| u.trim_end_matches('/') == site));
+        records.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+        let mut from_records: Vec<(String, String, String)> = Vec::new();
+        for record in records {
+            let supplier = format!("the {} copy of {}", record.channel, record.source_path);
+            let Some(verify) = record.verify else { continue };
+            if let Some(VerifyLink { rel, href }) = verify.page_link {
+                match identity::page_link_ok(&rel, &href) {
+                    Ok(()) => {
+                        let tag = identity::page_link_tag(&href);
+                        let links = self.page_links.entry(to_pretty_url(&record.url_path)).or_default();
+                        if !links.contains(&tag) {
+                            links.push(tag);
+                        }
+                    }
+                    Err(why) => log_warn_problem!(target: "plugin", "copy verification: {supplier} asks for a link that is dropped: {why}"),
+                }
+            }
+            if let Some(VerifyFile { path, body }) = verify.site_file {
+                if let Err(why) = identity::site_file_ok(&path, &body) {
+                    log_warn_problem!(target: "plugin", "copy verification: {supplier} asks for {path}, which is dropped: {why}");
+                } else if let Some(at) = from_records.iter().position(|(p, _, _)| *p == path) {
+                    if from_records[at].1 != body {
+                        log_warn_problem!(target: "plugin", "copy verification: {path} is asked for with different bodies; {supplier}'s, the newest, is written");
+                    }
+                    from_records[at] = (path, body, supplier);
+                } else {
+                    from_records.push((path, body, supplier));
+                }
+            }
+        }
+        for (path, body, supplier) in from_records {
+            if let Some((_, _, first)) = self.files.iter().find(|(p, _, _)| *p == path) {
+                log_warn_problem!(target: "plugin", "{path} is supplied by both {first} and {supplier}; {first}'s is written");
+            } else {
+                self.files.push((path, body, supplier));
+            }
+        }
+    }
+
+    /// The head elements for each page that has any, joined as the head wants them.
+    pub fn page_links(&self) -> std::collections::HashMap<String, String> {
+        self.page_links.iter().map(|(page, tags)| (page.clone(), tags.join("\n    "))).collect()
     }
 
     /// The head elements, each with the head's four-space indent after the

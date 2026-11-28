@@ -20,6 +20,7 @@
 //!   (pulldown-cmark passes HTML comments through `Event::Html` as
 //!   `Block::HtmlBlock`).
 
+use crate::contract::retired::{self, RetiredKind};
 use super::attrs::{gather_multi_line_attrs, html_attribute_name};
 use super::cells::split_cells;
 use super::document::{BlockMeta, Document};
@@ -183,7 +184,12 @@ fn parse_shortcode_by_name(
     config: &ParseConfig,
 ) -> (Option<Shortcode>, Diagnostics) {
     match name {
-        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
+        "subscribe" => {
+            let mut sc = parse_subscribe_args(args);
+            let mut problems = Vec::new();
+            sc.fields = super::extract_form::parse_fields("`:::subscribe`", &["scope", "lang", "return", "_hp"], body, &mut problems);
+            (Some(Shortcode::Subscribe(sc)), Diagnostics { warnings: problems, ..Default::default() })
+        }
         "buttons" => {
             let (sc, warnings) = parse_buttons_body(args, body);
             (Some(Shortcode::Buttons(sc)), Diagnostics { warnings, ..Default::default() })
@@ -252,9 +258,12 @@ fn parse_shortcode_by_name(
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
             if let Some(body_line) = legacy {
+                let r = retired::row(RetiredKind::Syntax, "---");
                 warns.advisories.push(format!(
-                    "`---` on line {} divides `:::grid` cells, a spelling moss replaced with `+++` in 0.6.5.",
-                    config.warning_line_offset + body_line + 1
+                    "`---` on line {} divides `:::grid` cells, a spelling moss replaced with `{}` {}.",
+                    config.warning_line_offset + body_line + 1,
+                    r.renamed_to(),
+                    r.when()
                 ));
             }
             (Some(Shortcode::Grid(sc)), warns)
@@ -309,9 +318,12 @@ fn per_line_attr<'a>(parsed: &'a super::attrs::AttrBlock) -> (Option<&'a str>, b
 /// the message can't drift between the two shortcodes. An advisory, not a
 /// problem: the alias still renders, so `--strict` must not fail on it.
 fn cols_alias_warning(shortcode_name: &str) -> String {
+    let r = retired::row(RetiredKind::ShortcodeAttr, "cols");
     format!(
-        "shortcode `:::{shortcode_name}` uses `cols=`, renamed in moss 0.15.1. \
-         The current spelling is `per-line=`, or the positional form `:::{shortcode_name} 3`."
+        "shortcode `:::{shortcode_name}` uses `cols=`, renamed {}. \
+         The current spelling is `{}=`, or the positional form `:::{shortcode_name} 3`.",
+        r.when(),
+        r.renamed_to()
     )
 }
 
@@ -1420,8 +1432,8 @@ fn parse_markdown_image(s: &str) -> Option<(String, String, usize)> {
 
 /// The CommonMark title of a line that starts with a markdown image, if any.
 fn markdown_image_title(line: &str) -> Option<String> {
-    use pulldown_cmark::{Event, Parser, Tag};
-    Parser::new(line).find_map(|e| {
+    use pulldown_cmark::{Event, Options, Tag};
+    super::pulldown(line, Options::empty()).find_map(|e| {
         if let Event::Start(Tag::Image { title, .. }) = e {
             Some(title.to_string()).filter(|t| !t.is_empty())
         } else {
@@ -1448,10 +1460,12 @@ fn parse_buttons_body(args: &str, body: &str) -> (ButtonsShortcode, Vec<String>)
             // first is primary, the rest secondary), but the link is still the
             // author's button: keep it and say the attributes are dropped.
             let (link, dropped_attrs) = match trimmed.strip_suffix('}').and_then(|r| r.rsplit_once('{')) {
-                Some((head, _)) if head.trim_end().ends_with(')') => (head.trim_end(), true),
+                Some((head, _)) if head.trim_end().ends_with(')') || head.trim_end().ends_with("]]") => {
+                    (head.trim_end(), true)
+                }
                 _ => (trimmed, false),
             };
-            match extract_markdown_link(link) {
+            match extract_markdown_link(link).or_else(|| extract_wikilink(link)) {
                 Some((text, url)) => {
                     if url.contains("](") || url.contains(") [") {
                         warnings.push(format!(
@@ -1469,7 +1483,7 @@ fn parse_buttons_body(args: &str, body: &str) -> (ButtonsShortcode, Vec<String>)
                     items.push(ButtonItem { text, url: Url::unresolved(url) });
                 }
                 None => warnings.push(format!(
-                    "shortcode `:::buttons` expects one `[text](url)` link per line; `{}` is not one and is left out",
+                    "shortcode `:::buttons` expects one `[text](url)` or `[[page|text]]` link per line; `{}` is not one and is left out",
                     clip_for_warning(trimmed)
                 )),
             }
@@ -1489,6 +1503,22 @@ fn extract_markdown_link(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((text.to_string(), url.to_string()))
+}
+
+/// Read a `[[page]]` or `[[page|text]]` line as `(text, address)`. The text is
+/// the alias, else the target as written. The fragment is slugged here as a
+/// wikilink's is, because the link pass reads a button address as a markdown
+/// destination and keeps its fragment raw.
+fn extract_wikilink(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    let r = extract_md_references(s).into_iter().next().filter(|r| r.byte_from == 0 && r.byte_to == s.len())?;
+    let text = match r.syntax {
+        RefSyntax::WikilinkAliased { display } => display,
+        RefSyntax::WikilinkStem | RefSyntax::WikilinkPath => s.get(2..s.len() - 2)?.to_string(),
+        _ => return None,
+    };
+    let (path, suffix) = crate::resolve::fuzzy_path::split_url_path(&r.text);
+    Some((text, format!("{path}{}", super::resolve_urls::slug_wikilink_suffix(suffix))))
 }
 
 /// Parse `:::subscribe {placeholder="..." button="..."}` into a typed struct.
@@ -1517,6 +1547,7 @@ fn parse_subscribe_args(args: &str) -> SubscribeShortcode {
         placeholder,
         button,
         members,
+        fields: Vec::new(),
     }
 }
 
@@ -1586,6 +1617,14 @@ pub fn extract_shortcodes_with_config(
     }
 }
 
+/// The lines (0-based) of `markdown` holding a bare `:::` that closes
+/// nothing, as the extractor warns about them: the ones `moss migrate` deletes.
+pub fn stray_closer_lines(markdown: &str) -> Vec<usize> {
+    let mut collected = Collected::default();
+    extract_with_state(markdown, &compute_nonce(markdown), &mut collected, &ParseConfig::default());
+    collected.stray_closers
+}
+
 /// What one extraction pass accumulates across every nesting level. The
 /// levels share one instance, so placeholder indices, the nonce-indexed
 /// `extracted` list and every diagnostic come out flat.
@@ -1595,6 +1634,8 @@ struct Collected {
     warnings: Vec<String>,
     advisories: Vec<String>,
     css_regions: Vec<CssRegionSpan>,
+    /// Lines (0-based, `warning_line_offset` added) of bare `:::` closers that close nothing.
+    stray_closers: Vec<usize>,
 }
 
 /// Recursive worker for [`extract_shortcodes`]. Walks `markdown`
@@ -1659,12 +1700,14 @@ fn extract_with_state(
             // inside a code fence or a comment used to end the shortcode
             // early and strand the rest as prose).
             let Some(j) = find_block_end(&lines, body_start, is_inert) else {
-                // Unclosed block: emit verbatim, and say where it opened.
+                // Unclosed block: show the opener as written, and say where it
+                // opened. Its first colon is escaped: right under a paragraph
+                // the parser would otherwise read `:` as a definition marker.
                 collected.warnings.push(unclosed_opener_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
                 ));
-                output.push_str(line);
+                output.push_str(&line.replacen(':', "\\:", 1));
                 output.push('\n');
                 i += 1;
                 continue;
@@ -1791,8 +1834,10 @@ fn extract_with_state(
                     "`:::{name}` on line {line_number} is declared by more than one plugin, so only its content is shown; write {} instead",
                     owners.iter().map(|o| format!("`:::{o}`")).collect::<Vec<_>>().join(" or ")
                 ),
-                _ if name == "apply" || name == "toc" => format!("`:::{name}` on line {line_number} was removed in moss {}, so only its content is shown. Nothing replaces it.", if name == "apply" { "0.15.13" } else { "0.6.5" }),
-                _ => format!("unknown shortcode `:::{name}` on line {line_number}"),
+                _ => match retired::find(RetiredKind::Shortcode, name) {
+                    Some(r) => format!("`:::{name}` on line {line_number} was removed {}, so only its content is shown. Nothing replaces it.", r.when()),
+                    None => format!("unknown shortcode `:::{name}` on line {line_number}"),
+                },
             });
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
@@ -1810,9 +1855,13 @@ fn extract_with_state(
         // text than a miscount, so it stays quiet there; a list-item
         // continuation is NOT exempt, because the extractor reads that line
         // like any other and an author who wrote it meant a closer.
+        // A warned closer is escaped like an unclosed opener, so it shows as written.
+        let mut shown = None;
         if fence_step(trimmed) < 0 {
             let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
             if !quiet.get(i).copied().unwrap_or(false) {
+                shown = Some(line.replacen(':', "\\:", 1));
+                collected.stray_closers.push(config.warning_line_offset + i);
                 collected.warnings.push(stray_closer_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
@@ -1822,7 +1871,7 @@ fn extract_with_state(
                 ));
             }
         }
-        output.push_str(line);
+        output.push_str(shown.as_deref().unwrap_or(line));
         output.push('\n');
         i += 1;
     }
@@ -1881,7 +1930,7 @@ fn stray_closer_warning(closer: &str, line: usize, last_closed: Option<(usize, u
         None => String::new(),
     };
     format!(
-        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint}",
+        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint} `moss migrate --apply` deletes it.",
         clip_for_warning(closer)
     )
 }

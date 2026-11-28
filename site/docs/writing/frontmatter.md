@@ -193,7 +193,7 @@ cascade:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `also_in` | list | (none) | Folder paths where this article also appears in child lists |
-| `series` | boolean | inferred | Render prev/next chrome on each child of this folder |
+| `series` | boolean | `false` | Render prev/next chrome on each child of this folder |
 
 `also_in` makes an article appear in multiple sections without duplicating the file.
 
@@ -206,15 +206,7 @@ also_in:
 ---
 ```
 
-`series` toggles the prev/next navigation chrome at the bottom of each child article. It defaults to on for folders with `sort: weight` (or an explicit list). moss assumes authored order implies sequential reading. For `sort: date` and `sort: title` it defaults to off. Set it explicitly to override:
-
-```yaml
-# A weighted docs folder, but you don't want prev/next chrome
----
-title: Reference
-series: false
----
-```
+`series: true` on a folder's home page turns on the prev/next navigation chrome at the bottom of each child article. Ordering the folder with `sort:` or `weight:` does not: an order arranges the listing, and a folder is a series only when it says so.
 
 You can also opt a single child out by setting `series: false` on that article's own frontmatter.
 

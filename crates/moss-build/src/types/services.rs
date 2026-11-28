@@ -45,6 +45,8 @@ use super::runtime::{
 pub struct BackgroundContext {
     /// Title-only sharing cards planned during HTML rendering.
     pub og_requests: Vec<crate::build::page::og_card::deferred::CardRequest>,
+    /// The feeds, llms.txt and sitemap.xml, written after the preview paints.
+    pub(crate) site_files: Option<crate::build::feeds::site_files::SiteFiles>,
     /// Videos that need MOV→MP4 conversion
     pub video_items: Vec<String>,
     /// Images that need WebP variant generation
@@ -121,6 +123,7 @@ impl BackgroundContext {
     pub(crate) fn for_test() -> Self {
         Self {
             og_requests: Vec::new(),
+            site_files: None,
             video_items: Vec::new(),
             image_items: Vec::new(),
             source_path: String::new(),
@@ -223,9 +226,10 @@ pub struct BuildServices {
     /// Singleflight dedup for image conversion keyed by source_oid.
     /// When multiple concurrent rebuilds try to convert the same image to WebP,
     /// only the first runs the encoder — all others block until the first completes
-    /// and then receive a clone of its outcome. Generalizes the video-only dedup
-    /// pattern to all pipeline tasks.
-    pub in_flight_images: std::sync::Arc<crate::build::cache::Singleflight<crate::build::media::image::ImageConversionOutcome>>,
+    /// and then receive a clone of its outcome. An outcome of `None` means the
+    /// converter's picture was withdrawn before it encoded; a waiter still
+    /// wanted runs the encode itself.
+    pub in_flight_images: std::sync::Arc<crate::build::cache::Singleflight<Option<crate::build::media::image::ImageConversionOutcome>>>,
     /// Singleflight dedup for metadata extraction keyed by "meta:{content_hash}".
     /// When multiple concurrent scans (build + plugin hooks) hit a TransformCache miss
     /// for the same file, only the first runs the actual extraction (image dimensions,

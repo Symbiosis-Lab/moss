@@ -249,7 +249,8 @@
    OS setting regardless. */
 :root {
   color-scheme: light;
-  --moss-nav-toggle-size: 2.25rem; /* the search, language and theme buttons, and a phone trail's rows */
+  --moss-nav-toggle-size: 2.25rem; /* the search, language and theme buttons, and a breadcrumb trail's rows */
+  --moss-nav-name-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg)); /* the site name and the trail */
 }
 
 :root[data-theme="dark"] {
@@ -1192,29 +1193,18 @@ footer.container p {
 */
 
 /*
- * Footer flex layout when it contains a moss subscribe form.
- *
- * A footer becomes a flex row (links left, subscribe form right-anchored)
- * whenever it DIRECTLY contains a `.moss-subscribe` block — whether moss
- * auto-injected it (no footer.md) OR the author placed `:::subscribe` inside
- * footer.md. Both cases now emit the SAME `<div class="moss-subscribe">`
- * (the unified hosted subscribe form), so keying the layout on its presence
- * covers them uniformly.
- *
- * This replaces the retired `data-moss-shape="default"` attribute — which was
- * stamped only for moss-owned footers, so an authored footer.md `:::subscribe`
- * read as a left-aligned block — AND the even older
- * `:has(> p.footer-default + form)` adjacency selector that misfired on the
- * form-only and link-list-only cases. Keying on `.moss-subscribe` presence
- * handles link+form, form-only, and authored-footer.md alike; a footer with
- * NO subscribe form stays naturally block-stacked (the selector never matches).
+ * A footer becomes a flex row when it directly contains a `.moss-subscribe`
+ * form (moss's own or a footer.md `:::subscribe`, which emit the same block)
+ * or a sentence followed by a `:::buttons` block. Any other footer stays
+ * block-stacked: neither selector matches.
  *
  * `flex-start` keeps the link list at the start edge; the form's own
  * `margin-inline-start: auto` — declared in email.css so it wins the @layer
  * cascade over the base `.moss-subscribe` margin (see the note there) — does
  * the right-anchoring.
  */
-footer.container:has(> .moss-subscribe) {
+footer.container:has(> .moss-subscribe),
+footer.container:has(> p + .moss-buttons) {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -1233,8 +1223,21 @@ footer.container:has(> .moss-subscribe) {
  * row so the divider spans the width and the link list + form wrap below it.
  */
 footer.container:has(> .moss-subscribe)::before,
-footer.container:has(> .moss-subscribe) > .moss-colophon {
+footer.container:has(> .moss-subscribe) > .moss-colophon,
+footer.container:has(> p + .moss-buttons)::before {
   flex-basis: 100%;
+}
+
+/* Every other child takes a row of its own; a subscribe form and the child
+   before it are left out so the links stay beside the form. */
+footer.container:has(> p + .moss-buttons) > :not(p:has(+ .moss-buttons), p + .moss-buttons, .moss-subscribe, :has(+ .moss-subscribe)) {
+  flex-basis: 100%;
+}
+footer.container > p:has(+ .moss-buttons) {
+  flex: 1 1 10rem;
+}
+footer.container > p + .moss-buttons {
+  margin-block: 0;
 }
 
 /*
@@ -2342,7 +2345,10 @@ footer.container hr::before {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--moss-space-md);
+  /* The column gap is the group break, between the name and the links and between the links and the toggles; it holds 32px down to about 800px and floors at 24px. The ink it makes is worked out above .nav-icons. */
+  gap: var(--moss-space-md) var(--moss-nav-group-gap);
+  --moss-nav-group-gap: clamp(var(--moss-space-md), 4vw, var(--moss-space-lg));
+  --moss-nav-float-gap: var(--moss-nav-group-gap);
   /* Containing block for .moss-breadcrumb-menu — the folded-levels panel is
      a sibling of .nav-left (which clips its own overflow) and hangs below
      the nav from here. */
@@ -2392,12 +2398,12 @@ header[data-header="over"] :where(a, button, input, select, textarea, summary, l
   --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
-/* Nav links and the site name set their own colour from the base sheet, which
-   would stay dark over the photo; they take the header's ink back.
+/* Nav links, the site name and the language toggle set their own colour from
+   the base sheet, which would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header[data-header="over"] :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :where(a, button, .site-name, .nav-lang-toggle, .nav-lang-current):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 
@@ -2463,9 +2469,8 @@ article.container > .moss-article-title:has(+ [data-width="screen"][data-header=
    before anything else. Never wraps to a second line internally (that would
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /
    nav-links). The clip removes residue after `flex-shrink` has done its job —
-   e.g., when the parent-page segment (the last ancestor anchor, min-width:
-   5em) still can't fit. On a breadcrumb page below ~320px the site name
-   itself may be clipped.
+   e.g., when even the site name, shrunk to nothing, leaves the parent-page
+   segment no room for its floor.
 
    `clip` rather than `hidden` for the same reason as
    `.moss-nav-island-trail`: `hidden` makes a scroll container, and a hover
@@ -2488,80 +2493,36 @@ article.container > .moss-article-title:has(+ [data-width="screen"][data-header=
   flex: 999 1 auto;
 }
 
-/* nav-right holds the whole right-hand group (nav-links + icons) and wraps to
-   row 2 as a unit when it can't fit beside nav-left.
-   nowrap keeps nav-icons on the same row as nav-links at all times;
-   .nav-content's flex-wrap handles the outer row 2 collapse as a unit.
-   .nav-links retains its own flex-wrap for many-link sites.
-
-   Row 1 vs row 2 — one rule set, two readings. `flex-grow: 1` here against
-   .nav-left's 999 means nav-right absorbs only 1/1000 of row 1's free space,
-   so beside a title or breadcrumb it stays effectively content-sized and sits
-   flush right. When a long breadcrumb pushes it to row 2 it is alone on that
-   row and grows to fill it — and only then does `justify-content:
-   space-between` have space to spread, putting the links at the start edge and
-   the toggles at the end edge. That is the row-2 layout users expect (links
-   read as navigation on the left, controls as chrome on the right) and it
-   costs no wrap detection, no media query, and no JS. Replaces the former
-   `margin-left: auto` + `justify-content: flex-end`, which right-aligned the
-   pair as one clump on row 2 and left a ragged gutter under the links.
-
-   The column gap holds --moss-space-lg (32px) down to ~800px and then ramps to
-   a --moss-space-md (24px) floor, so the boundary between the link list and the
-   toggle cluster always reads as a group break rather than as one long run of
-   items.
-
-   The hierarchy is stated in INK, not in `gap`. `gap` measures box edges, and
-   every toggle box is padded — so box gap ≠ perceived gap, and a hierarchy that
-   looks right in the `gap` values can read as flat on screen. This comment used
-   to claim "16px inside the toggle cluster ≤ 16–24px between links < 24–32px
-   between the two groups"; that was true of the boxes and false of what a
-   reader sees. Measured at 1440px on a real build, the ink-to-ink runs were
-   32 / 25 / 29 px — effectively uniform, four items in a row with no group
-   break — because the search glyph sat ~9px inside its 36px box while the theme
-   glyph, then in a 28px box, sat only ~4px inside its own. The fix was optical,
-   not a gap change: give all three toggles the same --moss-nav-toggle-size box, drop
-   .nav-icons's gap to 4px, and pad .nav-lang-toggle by 8px so its bare text
-   carries an inset too. See .nav-icons for the resulting arithmetic.
-
-   Ink hierarchy after that, at 1440px: ~41px between the links and the toggle
-   cluster against ~21/20px inside it — 1.9×. At the narrow end the clamp floors
-   the group gap at 24px box, so the shipped configurations run 33 ink against
-   21 (search on, 1.57×) and 32 against 20 (search off, 1.60×).
-
-   The 1.5× floor this comment commits to is checked by
-   test_css_nav_toggle_cluster_is_tighter_than_the_group_gap, which deliberately
-   computes a bound NO real configuration hits — smallest edge inset against
-   widest internal pair, 32 against 21, 1.52×. That is a conservative envelope,
-   not a measurement: it is chosen so the test cannot pass a layout that any
-   configuration would fail. Do not read 1.52 as what the nav renders.
-
-   `lg` is the ceiling, not a starting point: --moss-space-xl (48px) here
-   pushes a six-link nav off row 1 at 1440px.
-
-   align-items: flex-end bottom-aligns .nav-links and .nav-icons so a
-   nav-links set that wraps to 2+ lines sits flush with .nav-icons's last
-   row rather than centering awkwardly against a shorter icon box. .nav-links
-   overrides this with align-self: center for its own common case (see the
-   comment there) — flex-end here is a no-op for whichever sibling ends up
-   tallest, so this rule still governs the wrapped-links case. */
+/* nav-right holds the menu button and the links. Its grow of 1 against .nav-left's 999 keeps it content-sized beside a name or trail; alone on a row it fills it. */
 .nav-right {
   display: flex;
-  align-items: flex-end;
   flex-wrap: nowrap;
   flex: 1 1 auto;
   min-inline-size: 0;
+}
+
+/* A themed masthead holds the toggles last inside `.nav-right` (nav.rs), the row its stylesheet was written against: the name and `.nav-right` a plain gap apart, the links starting `.nav-right` and the toggles ending it, with `.nav-right`'s group gap between them. At the base rules' specificity, so the phone band's overrides still apply. */
+.nav-content:where([data-nav-themed]) {
+  gap: var(--moss-space-md);
+}
+
+:where(.nav-content[data-nav-themed]) .nav-right {
+  align-items: flex-end;
   justify-content: space-between;
   gap: var(--moss-space-xs) clamp(var(--moss-space-md), 4vw, var(--moss-space-lg));
 }
 
-/* Site Name — the site root; always fully visible (flex-shrink: 0).
+:where(.nav-content[data-nav-themed]) .nav-links {
+  align-self: center;
+}
+
+/* Site Name — the site root; never shrinks, except on a trail (below).
    Font scales with viewport via clamp(). Where a rule lets it wrap, an
    overlong word still breaks, and its min-content stays the longest word. */
 .site-name {
   flex-shrink: 0;
   color: var(--moss-color-text);
-  font-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg));
+  font-size: var(--moss-nav-name-size);
   font-weight: 500;
   text-decoration: none;
   overflow-wrap: break-word;
@@ -2588,7 +2549,8 @@ body > header .site-name {
 
 /* Breadcrumb Navigation — middle-truncation pattern.
    Industry-standard (macOS Finder path bar, GitHub file tree):
-   - Site root (.site-name) stays fully visible — anchors "where am I"
+   - Site root (.site-name) stays fully visible — anchors "where am I" —
+     until the parent has nothing left to give, then ellipsizes
    - Last breadcrumb segment (parent page) stays fully visible or
      minimally truncated — most contextual piece of info
    - Middle segments shrink first with ellipsis — less contextual
@@ -2616,7 +2578,7 @@ body > header .site-name {
 .breadcrumb-segment {
   color: var(--moss-color-muted);
   text-decoration: none;
-  font-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg));
+  font-size: var(--moss-nav-name-size);
   font-weight: 300;
   /* Middle segments give way first when nav-left is squeezed, but never all
      the way: the 1.4em floor is the width `text-overflow: ellipsis` needs to
@@ -2627,7 +2589,7 @@ body > header .site-name {
      ancestor keeps one "…" token that is still a link and still carries its
      full name in the hover hint. */
   min-inline-size: 1.4em;
-  flex-shrink: 5;
+  flex-shrink: 5000000;
 }
 
 .breadcrumb-label {
@@ -2643,13 +2605,14 @@ body > header .site-name {
    min-inline-size: 5em ≈ 5 characters: preserves a recognizable fragment of the
    parent page name even when the segment is squeezed to its minimum.
 
-   The 5× ratio is expressed as middles=5 / parent=1, NOT middles=1 /
-   parent=0.2, even though the two describe the same priority. Flexbox only
-   distributes the whole overflow when the shrink factors of the still-shrinking
-   items sum to at least 1; once the middles freeze at their floor the parent is
-   the only one left, and a lone 0.2 made the browser absorb 20% of the overflow
-   and let the rest run off the edge — the parent segment stayed full width and
-   spilled past the viewport instead of ellipsizing. A lone 1 absorbs all of it.
+   The factors are scaled up (middles=5e6 / parent=1e6) rather than the site
+   name's scaled down: flexbox distributes the whole overflow only while the
+   still-shrinking items' factors sum to at least 1, so a name left shrinking
+   alone at 1e-6 would absorb almost none of it and the rest would run past
+   the clip. Shrink is shared by factor × base size, so while the parent
+   shrinks the name (1) still takes a share, and any share draws a "…". At 1e6
+   that share stays under one layout unit (1/64px) for a name and overflow up
+   to 1000px over a 100px parent, so it rounds to nothing.
 
    `a.breadcrumb-segment:last-of-type`, not a bare `:last-child`: every
    ancestor/home segment is an `<a>`, but an explorer root's forced-visible
@@ -2669,8 +2632,19 @@ body > header .site-name {
    old `:last-child` form never risked, since the island's last CHILD is
    always its own current `<span>`, never an ancestor. */
 .nav-left a.breadcrumb-segment:not(.breadcrumb-current):last-of-type {
-  flex-shrink: 1;
+  flex-shrink: 1000000;
   min-inline-size: 5em;
+}
+
+/* Last to give way on a trail the CSS ladder sizes: the site name ellipsizes
+   rather than let `.nav-left`'s clip cut the parent below its floor. Not under
+   masthead-fold.ts, which measures the name at its full width. */
+.nav-left:not([data-fold-managed]):has(a.breadcrumb-segment) > .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .breadcrumb-segment:hover {
@@ -2684,7 +2658,7 @@ body > header .site-name {
 
 /* Phone (≤ 32rem): a deep trail — 河灣 · 週刊 / 評選 / 小說組 / 第二屆 /
    雨季裡的一封信… — has no room left for a 5-character parent segment once
-   the site name (which never shrinks) and four separators have taken their
+   the site name and four separators have taken their
    share, so the floor drops to 3em and the separators tighten. Everything else
    about the collapse is width-driven, not breakpoint-driven: the middles reach
    their "…" through the same `min-inline-size: 1.4em` that governs them on a laptop
@@ -2938,12 +2912,12 @@ body > header .site-name {
   flex-wrap: wrap;
   /* A line shorter than the box (the phone band holds a trail masthead's rows at the toggles' height) centres in it, level with the toggles. */
   align-content: center;
-  gap: var(--moss-space-xs) clamp(var(--moss-space-sm), 2vw, var(--moss-space-md));
-  /* .nav-right bottom-aligns its children; one short line of links would read lower than the toggles' taller boxes. */
-  align-self: center;
+  --moss-nav-link-gap: clamp(var(--moss-space-sm), 2vw, var(--moss-space-md));
+  gap: var(--moss-space-xs) var(--moss-nav-link-gap);
 }
 
-.nav-links a {
+.nav-links a,
+.nav-links > .nav-logo-strut::before {
   font-size: clamp(0.875rem, 0.6rem + 0.5vw, 1rem);
 }
 
@@ -3023,8 +2997,8 @@ body > header .site-name {
 
 /* The toggle cluster (search / language / theme). Its gap is the TIGHTEST of
    the three nav spacings — these are sibling controls of one kind, so they
-   should read as a single object that the 32px gap in .nav-right separates
-   from the links.
+   should read as a single object that .nav-content's 32px column gap
+   separates from the links.
 
    4px, not --moss-space-sm (16px), because all three children are padded
    boxes and the gap that matters is ink-to-ink. Each toggle is a --moss-nav-toggle-size
@@ -3033,7 +3007,7 @@ body > header .site-name {
    1.25em → 20px → 8px inset; the language text sits 8px in behind its
    padding-inline. So:
 
-     links text  → search glyph = 32 (nav-right) + 9 = 41px  ← group break
+     links text  → search glyph = 32 (column gap) + 9 = 41px  ← group break
      search glyph → lang text   = 9 + 4 + 8 = 21px
      lang text   → theme glyph  = 8 + 4 + 8 = 20px
      (links text → lang text when search is gated off = 32 + 8 = 40px;
@@ -3041,25 +3015,24 @@ body > header .site-name {
 
    ~41 outside against ~21/20 inside is a 1.95× break measured on ink. With
    gap: 16px it was 32 / 25 / 29 — no break at all, and the two inside gaps
-   unequal. Ink, not `gap`, is the number to reason about here; see the
-   comment above .nav-right.
+   unequal. Ink, not `gap`, is the number to reason about here.
 
    These are not predictions. Measured on a real build at 1440 / 1024 / 768px,
    ink edge to ink edge (glyph bounding box for the buttons, text range for the
    language toggle): 41 / 21 / 20, 41 / 21 / 20, 40 / 21 / 20. All three boxes
    render at 36px, so search no longer stands taller than its siblings.
 
-   `margin-inline-start: auto` end-anchors the cluster inside nav-right. On
-   row 1 nav-right is content-sized, there is no free space, and the auto
-   margin is a no-op — the gap above governs. On row 2 it does the same job as
-   space-between, and keeps working when .nav-links is absent entirely (a
-   site with no nav items has nav-icons as nav-right's only child, where
-   space-between alone would leave it at the start edge). In the split
-   (`data-nav-split`) it holds the toggles at the end of row 1. */
+   The markup puts the cluster first, so a plain name can wrap beside it as a
+   float (below). Wherever the row is flex, `order: 1` puts it after the links,
+   `align-self: flex-end` keeps it flush with the last line of a wrapped
+   link set, and the auto margin holds it at the end edge when it wraps
+   alone (a trail with scripts off). */
 .nav-icons {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  order: 1;
+  align-self: flex-end;
   margin-inline-start: auto;
 }
 
@@ -3075,31 +3048,134 @@ body > header .site-name {
 .nav-content[data-nav-split] {
   display: grid;
   grid-template: "name icons" "links links" / minmax(0, 1fr) auto;
+  column-gap: var(--moss-space-md);
 }
 
 .nav-content[data-nav-split] .nav-right {
   display: contents;
 }
 
-/* On a phone a breadcrumb trail usually needs two rows. Before the script
-   runs, the toggles wrap to row 2 with the links; the split lifts them to
-   row 1. Both rows are held at the toggles' height in either layout, so the
-   split moves only the toggles and the page below does not shift. This is the
-   masthead's phone band; `--moss-nav-phone` tells nav-split.ts it may try the
-   compact row. The hamburger range below places its own trail. */
-@media (20rem < width < 48rem) {
-  .nav-content {
-    --moss-nav-phone: 1;
-  }
-
+/* A breadcrumb trail that needs two rows paints first with the toggles on
+   row 2, beside or after the links; the split lifts them to row 1 and leaves
+   the links on row 2. Both rows are held at the toggles' height in either
+   layout, so the split moves only the links and toggles and the page below
+   does not shift. A one-row masthead is that tall already. The hamburger
+   range places its own trail. */
+@media (20rem < width) {
   .nav-content:has(.breadcrumb-segment) :is(.nav-left, .nav-links) {
     min-block-size: var(--moss-nav-toggle-size);
   }
 }
 
-/* A plain name wraps in the room row 1 leaves beside the toggles. The base
-   rule's flex-shrink: 0 keeps it at its one-line width, `.main-nav a` sets
-   nowrap on it, and .nav-left's overflow: clip would cut the rest off. */
+/* The masthead's phone band: `--moss-nav-phone` tells nav-split.ts it may try
+   the compact row. */
+@media (20rem < width < 48rem) {
+  .nav-content {
+    --moss-nav-phone: 1;
+    --moss-nav-float-gap: var(--moss-space-xs);
+  }
+}
+
+/* A plain site name above the hamburger range: the toggles float at the end of row 1 and the links float in after them, so a short name keeps one row with the links a group gap before the toggles, and links that do not fit beside the name's last line drop to the end edge below. The name wraps beside the toggles at the float gap, the tight one on a phone: the toggles' shape is inset from their margin box by the difference, and only inline text reads a float's shape. This is the final layout from the first paint, with or without the script. The strut adds height above line 1 only, so its text centres on the toggles and the name's later lines keep their pitch. Vertical pages keep the flex strip (vertical.css). A page with a stylesheet of its own (the theme's or the page's) gets `data-nav-themed` from the build and keeps the flex row that stylesheet was written against, which nav-split.ts measures and splits. A masthead laid out by other CSS, flattening `.nav-right` or holding the row to one line (`flex-wrap: nowrap`), gets `data-nav-owned` from nav-split.ts and keeps its own flex row too. */
+@media (20rem < width) {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) {
+    display: flow-root;
+  }
+
+  /* Half the toggles' height above the text's centre, which sits about half a cap height above the baseline. In the name's own font, so a logo whose name has no text sets the line's top itself. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .site-name::before {
+    content: "";
+    display: inline-block;
+    vertical-align: calc(var(--moss-nav-toggle-size) / 2 + 0.35em);
+    vertical-align: calc(var(--moss-nav-toggle-size) / 2 + 0.5cap);
+  }
+
+  /* Line 1 ends above the toggles' bottom; the name's second line keeps the full width from there. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) > .nav-icons {
+    --moss-nav-float-lift: max(0px, calc(var(--moss-nav-toggle-size) / 2 - 0.875em));
+    --moss-nav-float-lift: max(0px, calc(var(--moss-nav-toggle-size) / 2 - 0.5lh));
+    float: inline-end;
+    margin-inline-start: var(--moss-nav-group-gap);
+    shape-outside: inset(0 0 var(--moss-nav-float-lift) calc(var(--moss-nav-group-gap) - var(--moss-nav-float-gap))) margin-box;
+  }
+
+  /* Links that drop start at the bottom of the name's last line, so the strut at its end sets where they start: a clearance below the toggles, enough to keep the links' touch reach (16px above their text) off the theme button's (4px below it), and the 44px submenu toggle off both. It reaches below the line only, so the name keeps its pitch. The two margins cancel on a one-row header, which keeps its height, and keep the padding under a dropped row. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]):has(.nav-links) {
+    --moss-nav-drop-clear: 1rem;
+    margin-block-end: calc(-1 * var(--moss-nav-drop-clear));
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]):has(.nav-links) .nav-left::after {
+    content: "";
+    display: inline-block;
+    block-size: calc(var(--moss-nav-toggle-size) + var(--moss-nav-drop-clear));
+    vertical-align: top;
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-links {
+    margin-block-end: var(--moss-nav-drop-clear);
+  }
+
+  /* With a mouse, links beside a second name line go under the toggles to the end edge: the toggles exclude other floats only as far as line 1 reaches. Where hit areas are enlarged (a touch screen, or a narrow window) they stay before the toggles, since a link's reach there would take taps meant for the toggles. */
+  @media (width >= 48rem) and (pointer: fine) {
+    .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]):has(.nav-links) > .nav-icons {
+      margin-block-end: calc(-1 * var(--moss-nav-float-lift));
+    }
+  }
+
+  /* inset() is physical. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) > .nav-icons:dir(rtl) {
+    shape-outside: inset(0 calc(var(--moss-nav-group-gap) - var(--moss-nav-float-gap)) var(--moss-nav-float-lift) 0) margin-box;
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-left {
+    display: inline;
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-right {
+    display: contents;
+  }
+
+  /* `.main-nav a` sets nowrap on the name. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .site-name {
+    white-space: normal;
+    margin-inline-end: var(--moss-space-md);
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-links {
+    float: inline-end;
+    min-block-size: var(--moss-nav-toggle-size);
+  }
+
+  /* A float sits at the top of line 1, so with a logo taller than the toggles both floats take the logo's height from its hidden copy, which the theme sizes as it sizes the logo, and centre on it. The copy takes no inline room, and its negative margin gives back the gap after it. In the links its text sets the baseline the links align to, at the height of a centred link's. */
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-logo-strut {
+    display: flex;
+    /* The name's size, so a logo sized in em gets the same height. */
+    font-size: var(--moss-nav-name-size);
+    align-items: center;
+    inline-size: 0;
+    overflow: clip;
+    visibility: hidden;
+    margin-inline-end: -0.25rem;
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-links > .nav-logo-strut {
+    margin-inline-end: calc(-1 * var(--moss-nav-link-gap));
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-owned], [data-nav-themed]) .nav-links > .nav-logo-strut::before {
+    content: "\200b";
+  }
+}
+
+.nav-logo-strut {
+  display: none;
+}
+
+/* A plain name on a themed split wraps in the room row 1 leaves beside the
+   toggles. The base rule's flex-shrink: 0 keeps it at its one-line width,
+   `.main-nav a` sets nowrap on it, and .nav-left's overflow: clip would cut
+   the rest off. */
 .nav-content[data-nav-split]:not(:has(.breadcrumb-segment)) .site-name {
   flex-shrink: 1;
   min-inline-size: 0;
@@ -3114,7 +3190,7 @@ body > header .site-name {
   min-inline-size: 0;
 }
 
-/* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
+/* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. On a themed masthead the toggle gap is `.nav-right`'s. */
 .nav-content[data-nav-compact],
 .nav-content[data-nav-compact] .nav-right {
   column-gap: var(--moss-space-xs);
@@ -4239,11 +4315,9 @@ body {
   letter-spacing: 0.08em;
 }
 
-/* Match the masthead trail's own type: segments size with this same clamp
-   (see .breadcrumb-segment), and `font: inherit` alone would give the `…`
-   the root size instead. */
+/* The trail's own size: `font: inherit` alone would give the `…` the root size. */
 .moss-breadcrumb-more {
-  font-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg));
+  font-size: var(--moss-nav-name-size);
   font-weight: 300;
 }
 
@@ -4305,9 +4379,9 @@ body {
   display: none;
 }
 
-/* While the contents ruler is on screen it is the page's one contents list,
-   so a trail island's bar keeps its trail and drops its sections. */
-.moss-nav-island:not([data-header="none"])[data-ruler="on"] :is(.moss-nav-island-sections, [data-island-menu="sections"]) {
+/* Where the contents ruler is the page's contents list, faded or not, a trail
+   island's bar keeps its trail and drops its sections. */
+.moss-nav-island:not([data-header="none"])[data-ruler]:not([data-ruler="off"]) :is(.moss-nav-island-sections, [data-island-menu="sections"]) {
   display: none;
 }
 
@@ -4328,11 +4402,11 @@ body {
    never moved in the DOM, so keyboard focus survives every move:
    - at the top of the page (`data-top`, and with scripting off) they are at
      the end of the bar's place and scroll away with the page's first block;
-   - where the contents ruler is on screen, or its lane is reserved
-     (`data-ruler` `on` or `lane`; the bar never shows), they stand in a column at the
-     foot of the window, starting where the ruler's dashes start, and are
-     hidden whenever the list is away (`lane`): over the opening, a wide block
-     and the closing picture, the top-of-page controls covering the opening;
+   - where the contents ruler is the contents list (`data-ruler` `on` or
+     `away`; the bar never shows), they stand in a column at the foot of the
+     window, starting where the ruler's dashes start, and are hidden whenever
+     the list is faded (`away`): over the opening, a wide block and the
+     closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
    tokens (on `body`), never retyped. A `chrome: none` page has the controls
@@ -4426,7 +4500,7 @@ body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-c
   transition: opacity 250ms ease, visibility 250ms;
 }
 
-.moss-nav-island[data-header="none"][data-ruler="lane"]:not([data-top]) + .nav-icons:not(:focus-within) {
+.moss-nav-island[data-header="none"][data-ruler="away"]:not([data-top]) + .nav-icons:not(:focus-within) {
   opacity: 0;
   visibility: hidden;
 }
@@ -4606,9 +4680,9 @@ body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-c
   display: none;
 }
 
-/* Faded while the article's body is not what is on screen (over a cover above
-   it, over the comments below it). Opacity, not `visibility`: the links stay
-   in the tab order, and focusing one lifts the fade. */
+/* Faded where it would stand over something (contents-ruler.ts). Opacity, not
+   `visibility`: the links stay in the tab order, and focusing one lifts the
+   fade. */
 .moss-contents-ruler[data-away] {
   opacity: 0;
   pointer-events: none;
@@ -6494,7 +6568,7 @@ article a:where(:not(.moss-btn)):focus {
      between the links and the toggles AND 8px between the toggles themselves,
      so `Blog 繁/EN ⌕ ☀` read as one undifferentiated run. It cliffed: 800px
      showed the intended 32/16 and 760px showed 8/8. The narrow end is now
-     handled by the clamp() on .nav-right's column gap, which ramps 32→24 and
+     handled by the clamp() on .nav-content's column gap, which ramps 32→24 and
      keeps the between-groups gap at ≥1.5× the toggle gap at every width. */
 
   .github-link {
@@ -6502,51 +6576,6 @@ article a:where(:not(.moss-btn)):focus {
   }
 
 }
-
-/* ==========================================================================
-   Edge alignment — now unconditional, was ≤ 32rem
-   --------------------------------------------------------------------------
-   `.nav-right { flex: 1 1 auto }` + `.nav-icons { margin-inline-start: auto }`
-   used to live in an `@media (max-width: 32rem)` block here, so a nav row that
-   overflowed on a WIDE screen got the row-1 treatment (whole group clumped
-   right) while the same overflow on a phone got edge alignment. Both rules are
-   now defaults — see `.nav-right` and `.nav-icons` near the top of this file,
-   where the flex-grow ratio against `.nav-left` makes the behaviour depend on
-   whether nav-right actually wrapped rather than on viewport width.
-
-   The old comment's worry — that above 32rem `margin-inline-start: auto` would
-   open a wide gap between the links and the toggles — does not apply now:
-   nav-right only grows when it is alone on row 2, and on row 2 that gap is the
-   point.
-
-   Do NOT use `flex: 1 1 100%` for this. An earlier version did, and the 100%
-   basis silently *forced* nav-right to wrap even when the content fit,
-   splitting minimal-nav sites (a title + a theme toggle) across two rows.
-   `flex: 1 1 auto` keeps wrapping content-driven, not breakpoint-forced.
-
-   Do NOT recommend the obvious opt-out. This block used to offer
-
-       .nav-right { flex: initial; justify-content: flex-end; }
-       .nav-icons { margin-inline-start: 0; }
-
-   to sites that wanted the whole group clumped right. It is a trap on both
-   counts. CSS cannot ask whether a flex item has wrapped, so a rule set scoped
-   by viewport width necessarily applies to BOTH readings — and on row 2 the
-   growth `flex: initial` cancels is exactly what gives space-between something
-   to spread. A site using it measured its toggle cluster stranded 233px short
-   of the right edge at 500px, invisible at 1440px because nav-right never
-   wrapped there. It is also wrong about its own effect: .nav-content declares
-   no justify-content, so a content-sized .nav-right on row 2 sits at the START
-   of the row — clumped left, not right.
-
-   A site that genuinely wants the two groups closer on row 1 should narrow
-   .nav-right's own column gap instead. That is scoped by width without also
-   being scoped by wrap state.
-
-   The footer subscribe form's mobile edge-align (drop the right-anchor, go
-   full-width column) lives in email.css @layer plugins alongside the
-   right-anchor it undoes — see `footer .moss-subscribe` there.
-   ========================================================================== */
 
 /* Mobile menu button - hidden by default, shown only on narrow screens */
 .mobile-menu-button {
@@ -6623,7 +6652,7 @@ article a:where(:not(.moss-btn)):focus {
 @media (width < 48rem), (pointer: coarse) {
   .nav-links {
     row-gap: var(--moss-space-lg);
-    column-gap: 19px;
+    --moss-nav-link-gap: 19px;
   }
 
   .nav-links a {

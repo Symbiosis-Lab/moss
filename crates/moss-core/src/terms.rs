@@ -9,8 +9,8 @@
 //!
 //! This module is the single owner of term identity: how a term name folds
 //! for equality, how it slugs into a URL segment, and how a claim field
-//! (`author_page:` / `tag_page:`) resolves. Pure, zero I/O — the derivation
-//! pass that applies these rules to parsed documents lives in moss-build.
+//! (`author_page:` / `tag_page:`) resolves. Pure, zero I/O; [`index`] applies
+//! these rules to any host's pages and [`lines`] draws a page's terms.
 
 use serde::{Deserialize, Serialize};
 
@@ -95,6 +95,14 @@ pub fn merge_tag_lists(
 
 /// Pure interpretation of the site’s term configuration.
 pub mod config;
+/// The kinds table resolved from that configuration.
+pub mod kinds;
+/// The gazetteer and the place links it gives place-typed kinds.
+pub mod places;
+/// The site's terms, built over any host's pages.
+pub mod index;
+/// A page's terms as lines of links.
+pub mod lines;
 
 /// The frontmatter key a page claims this field's term page with. `<field>_page`,
 /// except `tags` (`tag_page`) and `location` (`place_page`). Anything that writes

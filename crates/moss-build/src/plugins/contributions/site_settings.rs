@@ -19,6 +19,10 @@ pub struct SiteSettingsContribution {
     /// Buttons that each make one call to a moss service on the site's behalf.
     #[serde(default)]
     pub actions: Vec<SiteAction>,
+
+    /// Values moss keeps on this computer for the site and hands to a service.
+    #[serde(default)]
+    pub secrets: Vec<SiteSecret>,
 }
 
 /// One button: a call to a service moss knows the address of, signed with the
@@ -38,14 +42,38 @@ pub struct SiteAction {
     pub path: String,
 }
 
+/// A credential for one site that a moss service needs, such as a calendar's
+/// secret address. It never enters the folder: moss keeps its copy outside
+/// every synced place, posts `{"value": …}` (or `null` to forget) to `path`,
+/// and reads back only the service's state of it from a `GET` on `path`.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SiteSecret {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub group: Option<String>,
+    pub service: String,
+    pub path: String,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    /// moss sends only a value this regular expression accepts.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[serde(default)]
+    pub pattern_message: Option<String>,
+}
+
+fn id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 40 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 impl SiteSettingsContribution {
     pub(crate) fn validate(&mut self) -> Result<(), String> {
         validate_site_fields(&self.settings)?;
         fill_site_defaults(&mut self.settings);
         for (index, action) in self.actions.iter().enumerate() {
             let id = &action.id;
-            let id_ok = !id.is_empty() && id.len() <= 40 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-            if !id_ok {
+            if !id_ok(id) {
                 return Err(format!("site_settings action `{id}`: an id is lowercase letters, digits and hyphens"));
             }
             if self.actions[..index].iter().any(|earlier| earlier.id == *id) {
@@ -58,6 +86,21 @@ impl SiteSettingsContribution {
                 return Err(format!("site_settings action `{id}`: `path` starts with one / and may hold only `{{site}}` as a placeholder"));
             }
         }
+        for (index, secret) in self.secrets.iter().enumerate() {
+            let id = &secret.id;
+            if !id_ok(id) {
+                return Err(format!("site_settings secret `{id}`: an id is lowercase letters, digits and hyphens"));
+            }
+            if self.secrets[..index].iter().any(|earlier| earlier.id == *id) {
+                return Err(format!("site_settings secret `{id}` is declared twice"));
+            }
+            if !service_path_ok(&secret.path) {
+                return Err(format!("site_settings secret `{id}`: `path` starts with one / and may hold only `{{site}}` as a placeholder"));
+            }
+            if let Some(pattern) = &secret.pattern {
+                regex::Regex::new(pattern).map_err(|e| format!("site_settings secret `{id}`: `pattern` is not a regular expression: {e}"))?;
+            }
+        }
         use moss_core::untrusted_text::{bounded, MAX_NAME};
         for action in &mut self.actions {
             action.label = bounded(&action.label, MAX_NAME);
@@ -65,7 +108,17 @@ impl SiteSettingsContribution {
                 *group = bounded(group, MAX_NAME);
             }
         }
+        for secret in &mut self.secrets {
+            secret.label = bounded(&secret.label, MAX_NAME);
+            for text in [&mut secret.group, &mut secret.placeholder, &mut secret.pattern_message].into_iter().flatten() {
+                *text = bounded(text, MAX_NAME);
+            }
+        }
         Ok(())
+    }
+
+    pub fn secret(&self, id: &str) -> Option<&SiteSecret> {
+        self.secrets.iter().find(|s| s.id == id)
     }
 
     pub fn action(&self, id: &str) -> Option<&SiteAction> {

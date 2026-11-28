@@ -21,8 +21,23 @@ pub fn moss_home() -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
+type ThreadPath = std::thread::LocalKey<std::cell::RefCell<Option<PathBuf>>>;
+
+#[cfg(test)]
 thread_local! {
     static THREAD_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static THREAD_ACCOUNT_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn thread_override(slot: &'static ThreadPath, path: &std::path::Path) -> impl Drop {
+    struct Restore(&'static ThreadPath, Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            self.0.with(|cell| *cell.borrow_mut() = self.1.take());
+        }
+    }
+    Restore(slot, slot.with(|cell| cell.borrow_mut().replace(path.to_path_buf())))
 }
 
 /// Points this thread's [`moss_home`] at `home` until the guard drops, without
@@ -31,14 +46,40 @@ thread_local! {
 /// current-thread runtime); a build's worker threads keep the process's home.
 #[cfg(test)]
 pub(crate) fn thread_moss_home(home: &std::path::Path) -> impl Drop {
-    struct Restore(Option<PathBuf>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            THREAD_HOME.with(|home| *home.borrow_mut() = self.0.take());
-        }
-    }
-    Restore(THREAD_HOME.with(|slot| slot.borrow_mut().replace(home.to_path_buf())))
+    thread_override(&THREAD_HOME, home)
 }
+
+/// [`thread_moss_home`] for [`account_home`].
+#[cfg(test)]
+pub(crate) fn thread_account_home(home: &std::path::Path) -> impl Drop {
+    thread_override(&THREAD_ACCOUNT_HOME, home)
+}
+
+/// The home folder the operating system lists for this user, read from the
+/// account database rather than `$HOME`.
+pub fn account_home() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = THREAD_ACCOUNT_HOME.with(|home| home.borrow().clone()) {
+        return Some(home);
+    }
+    os_account_home()
+}
+
+#[cfg(unix)]
+fn os_account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; 4096];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: `buf` outlives every read of `pwd`, and `found` is only read after the call.
+    let rc = unsafe { libc::getpwuid_r(libc::geteuid(), &mut pwd, buf.as_mut_ptr().cast(), buf.len(), &mut found) };
+    if rc != 0 || found.is_null() || pwd.pw_dir.is_null() { return None; }
+    let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(not(unix))]
+fn os_account_home() -> Option<PathBuf> { dirs::home_dir() }
 
 fn resolve(over: Option<std::ffi::OsString>, default: Option<PathBuf>) -> Result<PathBuf, String> {
     match over {
@@ -120,6 +161,13 @@ pub(crate) fn without_moss_home<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_account_home_comes_from_the_account_database_not_the_environment() {
+        let home = account_home().expect("this user has a home folder");
+        assert!(home.is_absolute() && home.is_dir(), "{home:?}");
+    }
 
     #[test]
     fn moss_home_is_the_override_else_the_default() {

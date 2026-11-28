@@ -20,7 +20,7 @@
 // with a cover row and a list of cards, footer.container, colophon) under
 // site.css + vertical.css, the same two files `emit/stylesheet.rs` concatenates
 // for a `typesetting = "vertical"` site.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';

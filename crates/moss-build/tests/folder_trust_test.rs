@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use moss_build::plugins::bundled::{code_hash, read_installed_manifest};
 use moss_build::plugins::install::registry_client::cache::{Anchor, CachedRegistry};
 use moss_build::plugins::install::registry_client::enforce::{
-    folder_answer, install, install_headless, is_trusted, publish, set_folder_trust,
-    verdict, Refusal,
+    carried, folder_answer, forget_folder, install, install_headless, is_trusted, publish,
+    set_folder_trust, verdict, Refusal,
 };
-use moss_build::plugins::install::registry_client::index::accept_revoked;
+use moss_build::identity::keypair::Identity;
+use moss_build::plugins::install::registry_client::index::{accept_index, accept_revoked};
 use moss_build::plugins::install::registry_client::trust;
 
 /// Folders the earlier approvals name live outside the system temporary
@@ -28,6 +29,18 @@ fn plugin(site: &Path, id: &str, entry: &str) -> PathBuf {
     std::fs::write(dir.join("manifest.json"), format!(r#"{{"name":"{id}","version":"1.0.0","entry":"index.js"}}"#)).unwrap();
     std::fs::write(dir.join("index.js"), entry).unwrap();
     dir
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn refusal(dir: &Path) -> Option<Refusal> {
@@ -54,8 +67,51 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     let later = plugin(&a, "later", "var L = 1;");
     std::fs::write(demo.join("index.js"), "var A = 2;").unwrap();
     assert_eq!((refusal(&later), refusal(&demo)), (None, None), "new and changed code in a trusted folder runs");
-    assert_eq!(trust::load(&app_data).answer(&a), Some(true), "recorded in app data");
+    assert_eq!(trust::load(&app_data).answer(&a, None), Some(true), "recorded in app data");
     assert!(!a.join(".moss").read_dir().unwrap().any(|e| e.unwrap().file_name() != "plugins"), "and nothing in the folder");
+
+    // A plugin that brings no code, listed by the registry at these exact
+    // bytes, is not asked about. An edited copy is, and so is one more
+    // contribution that runs code.
+    let unasked = site("unasked");
+    let service = serde_json::json!({
+        "account": {"kind": "key", "env": "MAIL_KEY", "url": "https://mail.example/keys", "prefix": "MK.", "length": 20},
+        "provider": [{"part": "newsletter", "needs": "Full Access",
+            "newsletter": {"steps": ["Open the keys page", "Copy the key and paste it here"]}}]});
+    let with = |id: &str, extra: serde_json::Value| {
+        let dir = unasked.join(".moss/plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut contributes = service.clone();
+        contributes.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({"name": id, "version": "1.0.0", "contributes": contributes});
+        std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+        std::fs::write(dir.join("view.js"), "customElements.define('x-card', class extends HTMLElement {});").unwrap();
+        dir
+    };
+    let listed = with("service", serde_json::json!({}));
+    let edited = with("edited", serde_json::json!({}));
+    let listing = |id: &str| format!(
+        r#"{{"type":"plugin","id":"{id}","display_name":"{id}","version":"1.0.0","download_url":"https://example.invalid/{id}.zip","sha256":"aa","code_sha256":"{}"}}"#,
+        hash(&listed)
+    );
+    let index = format!(r#"{{"schema_version":1,"serial":1,"entries":[{},{}]}}"#, listing("service"), listing("edited"));
+    publish(CachedRegistry { index: Some(accept_index(&index, 0).unwrap()), ..CachedRegistry::default() });
+    assert_eq!(refusal(&listed), None);
+    assert_eq!(refusal(&edited), Some(Refusal::Untrusted), "a copy the registry does not list at these bytes");
+    let artifact = serde_json::json!({"kind": "download", "url": "https://example.invalid/u.tgz", "sha256": "ab", "archive_format": "tar.gz"});
+    let code = [
+        ("derivation", serde_json::json!({"derivations": {"pages": {"accepts": ["pdf"], "noun": {"one": "doc", "other": "docs"},
+            "fragments": {"text": "markdown"}, "stub": ["#text"], "run": {"binary": "ocr", "artifact": [artifact]}}}})),
+        ("stack", serde_json::json!({"stack": {"id": "companion", "version": "1.0.0", "sources": [{"kind": "path", "binary": "companion"}]}})),
+        ("block", serde_json::json!({"blocks": {"card": {"element": "x-card", "script": "view.js"}}})),
+    ];
+    for (id, extra) in code {
+        assert_eq!(refusal(&with(id, extra)), Some(Refusal::Untrusted), "{id}");
+    }
+    let mut asked_about: Vec<_> = carried(&unasked).into_iter().map(|(dir, _)| dir.file_name().unwrap().to_owned()).collect();
+    asked_about.sort();
+    assert_eq!(asked_about, ["block", "derivation", "edited", "stack"], "the folder's question names only what it covers");
+    publish(CachedRegistry::default());
 
     // The record follows the canonical folder.
     #[cfg(unix)]
@@ -85,6 +141,24 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     set_folder_trust(&a, false).unwrap();
     assert_eq!((refusal(&demo), folder_answer(&a)), (Some(Refusal::Untrusted), Some(false)));
 
+    // The answer is the folder's: a rename keeps it, a copy is asked again,
+    // and removing the folder from the app's recent folders ends it.
+    let keyed = site("keyed");
+    Identity::generate().unwrap().save(&keyed).unwrap();
+    plugin(&keyed, "kept", "var K = 1;");
+    set_folder_trust(&keyed, true).unwrap();
+    let renamed = site("keyed-renamed");
+    std::fs::remove_dir_all(&renamed).unwrap();
+    std::fs::rename(&keyed, &renamed).unwrap();
+    assert!(is_trusted(&renamed), "renamed");
+    assert_eq!(folder_answer(&renamed), Some(true));
+    assert_eq!(trust::load(&app_data).folders.iter().filter(|row| row.dir == renamed).count(), 1, "the row moved with it");
+    copy_dir(&renamed, &keyed);
+    assert_eq!(folder_answer(&keyed), None, "a copy put where its original was");
+    assert!(!is_trusted(&keyed));
+    assert_eq!(forget_folder(&renamed).unwrap(), Some(true));
+    assert_eq!(folder_answer(&renamed), None, "removed from the recent folders");
+
     // Migration: a folder whose every plugin was approved at its current code
     // is trusted, and the app records it; one with a plugin never approved,
     // or approved at other code, is asked.
@@ -110,7 +184,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     install(None, Some(&legacy_root));
     assert_eq!(refusal(&x), None, "settled before the app asks");
     assert_eq!(folder_answer(&covered), Some(true));
-    assert_eq!(trust::load(&legacy_root).answer(&covered), Some(true), "and recorded at the app's first ask");
+    assert_eq!(trust::load(&legacy_root).answer(&covered, None), Some(true), "and recorded at the app's first ask");
     assert_eq!((folder_answer(&partly), folder_answer(&moved)), (None, None));
     assert_eq!(refusal(&y), Some(Refusal::Untrusted));
 
@@ -118,7 +192,7 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     install_headless(None, Some(&legacy_root), false);
     assert!(is_trusted(&covered) && !is_trusted(&partly));
     assert!(set_folder_trust(&partly, true).is_err());
-    assert_eq!(trust::load(&legacy_root).answer(&partly), None);
+    assert_eq!(trust::load(&legacy_root).answer(&partly, None), None);
 
     // A record that cannot be saved trusts nothing, in this process too.
     let blocked = scratch.path().join("blocked");

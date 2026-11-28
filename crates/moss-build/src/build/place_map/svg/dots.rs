@@ -22,8 +22,12 @@ impl<'a> DotLinks<'a> {
     /// A place's page, unless that is the page the map is drawn on.
     pub(super) fn url(&self, key: &str) -> Option<&'a str> {
         let url = self.urls.get(key)?.as_str();
+        (!self.is_own_page(key)).then_some(url)
+    }
+
+    fn is_own_page(&self, key: &str) -> bool {
         let own = places_data::page_url(self.own_page);
-        (url.trim_matches('/') != own.trim_matches('/')).then_some(url)
+        self.urls.get(key).is_some_and(|url| url.trim_matches('/') == own.trim_matches('/'))
     }
 
     fn ancestors(&self, key: &str) -> Vec<String> {
@@ -36,13 +40,14 @@ impl<'a> DotLinks<'a> {
         chain
     }
 
-    /// A group's link: the nearest place page all its places share, else the
-    /// explorer, else the first place page.
+    /// A group's link: the nearest place page all its places share below the
+    /// page the map is on, else the explorer, else the first place page.
     fn group_url(&self, group: &[&ResolvedPlace]) -> Option<String> {
         if group.len() > 1 {
             let chains: Vec<Vec<String>> = group.iter().map(|place| self.ancestors(&place.key)).collect();
             let shared = chains[0].iter().filter(|key| chains[1..].iter().all(|chain| chain.contains(key)));
-            if let Some(url) = shared.into_iter().find_map(|key| self.url(key)) { return Some(url.to_string()); }
+            // A page above the one the map is on is not where these dots lead.
+            if let Some(url) = shared.take_while(|key| !self.is_own_page(key)).find_map(|key| self.url(key)) { return Some(url.to_string()); }
             if self.explorer {
                 let url = places_data::root_url(self.namespace);
                 if url != places_data::page_url(self.own_page) { return Some(url); }

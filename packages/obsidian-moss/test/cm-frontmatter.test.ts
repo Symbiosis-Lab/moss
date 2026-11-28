@@ -1,10 +1,11 @@
-import type { Editor, EditorSuggestContext } from "obsidian";
+import type { Editor, EditorSuggestContext, TFile } from "obsidian";
 import { MossFieldSuggest } from "../src/field-suggest";
 import type MossPlugin from "../src/main";
 import { describe, expect, it } from "vitest";
 import { diagnosticsToDecorations, fieldCompletions, fieldInfoText } from "../src/cm-frontmatter";
 import { editorFieldSpans, initializeCore, MossSite, type EditorDiagnostic } from "../src/core";
 import { siteSchema, type SitePlugin } from "../src/schema";
+import type { SiteNote } from "../src/site-context";
 
 initializeCore();
 const site = new MossSite(JSON.stringify({ files: ["note.md"], lang: "en" }));
@@ -111,11 +112,12 @@ it.each([
     getLine: (line: number) => lines[line],
     posToOffset: ({ line, ch }: { line: number; ch: number }) => lines.slice(0, line).reduce((n, text) => n + text.length + 1, 0) + ch,
   } as Editor;
-  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, () => schema);
-  const trigger = suggest.onTrigger({ line, ch: 2 }, editor, null);
+  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, () => ({ schema }) as SiteNote);
+  const file = { path: "note.md" } as TFile;
+  const trigger = suggest.onTrigger({ line, ch: 2 }, editor, file);
   expect(trigger !== null).toBe(inside);
   if (trigger) {
-    const suggestions = suggest.getSuggestions({ ...trigger, editor } as EditorSuggestContext);
+    const suggestions = suggest.getSuggestions({ ...trigger, editor, file } as EditorSuggestContext);
     expect(suggestions.map((field) => field.name)).not.toContain("title");
   }
 });
@@ -125,6 +127,6 @@ it("suggests nothing, and asks the core nothing, outside a moss folder", () => {
     getValue: () => { throw new Error("read the note"); },
     getLine: () => "ti",
   } as unknown as Editor;
-  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, () => ({ fields: new Map() }));
-  expect(suggest.onTrigger({ line: 1, ch: 2 }, editor, null)).toBeNull();
+  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, (path) => (path.startsWith("site/") ? ({ schema }) as SiteNote : null));
+  expect(suggest.onTrigger({ line: 1, ch: 2 }, editor, { path: "Daily notes/2026-11-24.md" } as TFile)).toBeNull();
 });

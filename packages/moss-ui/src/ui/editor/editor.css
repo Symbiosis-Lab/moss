@@ -802,6 +802,9 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   font-variant-ligatures: no-common-ligatures;
 }
 .moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
+/* Set by roomBelowLastLine (cm-scroll-sync.ts). The webview is the viewport,
+   so 2/3 of it covers the editor's height. */
+.moss-editor-cm .moss-room-below .cm-content { margin-bottom: calc(100vh * 2 / 3); }
 .moss-editor-cm .cm-line { padding-left: var(--moss-editor-line-inset); padding-right: var(--moss-editor-line-inset); }
 /* The inset for a pseudo-element positioned against the line: its `100%` is the line's width, a hang less than the padding's (`.cm-li-hang` has margin-left only), so it adds the hang back. */
 .moss-editor-cm .cm-line {
@@ -888,6 +891,30 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
      under it. Its occupants re-enable themselves. */
   pointer-events: none;
   z-index: calc(var(--z-popup) - 10); /* over the document, under every menu and the find pill */
+}
+
+/* The page's copies, right-aligned on a row of their own above the pill: the
+   column right of the pill is too narrow for a sentence below about 660px.
+   Line -2 is before the band's first line, so the row is added above the one
+   the cluster and the pill name, and the band grows upward from its bottom. */
+.editor-band-status {
+  grid-row: -2 / -1;
+  grid-column: 1 / -1;
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  pointer-events: auto;
+}
+.editor-band-status .moss-inline-status {
+  display: flex;
+  min-width: 0;
+}
+.editor-band-status .moss-inline-status__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .insert-bar {
@@ -1792,146 +1819,43 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .moss-pane-state__title { font-size: var(--moss-editor-reading-size, 1.125rem); margin: 0 0 0.5rem; }
 .moss-pane-state__desc { color: var(--moss-color-text-secondary); margin: 0 0 1rem; }
 
-/* Seal — scrim overlay while a channel is shipping.
- *
- * The scrim is the sole sealed signal, so the editor itself is not dimmed.
- * Read-only is enforced by CM6's Compartment (editable=false), not by
- * pointer-events; `.cm-editor.sealed` carries `position:relative` so the scrim
- * can sit inside it.
- *
- * Fade is asymmetric: `.is-sealing` carries the 150ms ease-out fade-IN; the bare
- * scrim rule carries the 200ms ease-out fade-OUT. Adding/removing `.is-sealing`
- * from JS toggles which transition fires.
- *
- * `.cm-seal-scrim__status` is the "Publishing your site…" caption.
- *
- * The caption sits in a PILL with its own surface, at the top of the pane.
- * Grey text centred on a wash reads as text lying inside the document; an
- * opaque surface with a border and a shadow reads as a layer above it.
- * Anchored to the top-right gutter: the user's attention is already in the
- * titlebar band (they just clicked Publish), a dead-centre chip covers the
- * paragraph being edited, and a top-CENTRED one lands on the document's H1.
- * The pill arrives 60ms AFTER the wash: two things appearing on the same frame
- * read as one thing. A 2px transit line at the pane's top edge carries the
- * "not hung" signal across the ~2s deploy; it encodes no progress (no start,
- * end, or proportion), so it cannot be misread as a second progress indicator
- * competing with the ship ring.
- */
-.cm-editor.sealed { position: relative; }
+/* ── Held: any held editor (`.cm-held`), and the controls around it while the
+   folder publishes (`data-hold`) ──
+   The text keeps full contrast, because reading is what is still allowed. The
+   insert bar leaves a read-only editor, and its place in the band says why. */
+[data-hold] .chip-bar *,
+.cm-held .cm-content { cursor: default; }
+.cm-held .cm-cursorLayer,
+.cm-held .cm-lp-image-handle,
+.cm-held .cm-focus-point-dot { display: none; }
+[data-hold] .editor-create-btn { opacity: 0.28; }
+/* Typing fades the band; the reason must not stay hidden until the pointer moves. */
+[data-hold] .editor-band.moss-quiet-chrome-faded { opacity: 1; }
 
-.cm-seal-scrim {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  /* R13: was var(--moss-bg-primary), a token declared nowhere in the repo. An
-   * undefined var() with no fallback is invalid at computed-value time, so
-   * `background` resolved to `transparent` and the dim never painted — the
-   * caption read as grey text lying inside the document. */
-  background: color-mix(in srgb, var(--moss-color-bg) 50%, transparent);
-  /* no backdrop-filter — R11: below perceptual threshold, paint cost for nothing */
-  cursor: not-allowed;
-  /* The barrier is gated on .is-sealing (below): while fading OUT (no .is-sealing)
-   * the scrim is at opacity:0 but still in the DOM, and MUST NOT intercept clicks
-   * — otherwise the editor stays un-clickable after a publish. JS also sets
-   * pointer-events:none inline on unseal as belt-and-suspenders (cm-editor.ts). */
-  pointer-events: none;
-  opacity: 0;
-  /* fade-OUT: 200ms ease-out (when .is-sealing is removed) */
-  transition: opacity 0.2s ease-out;
-}
-
-.cm-seal-scrim.is-sealing {
-  opacity: 1;
-  pointer-events: all; /* sole click barrier WHILE sealing; editor below is non-editable via Compartment */
-  /* fade-IN: 150ms ease-out */
-  transition: opacity 0.15s ease-out;
-}
-
-/* Transit line — one indeterminate sweep pinned to the pane's top edge.
- * Deliberately NOT a spinner (the channel lamps own rotation) and NOT an arc
- * (the ship ring owns the orbit). */
-.cm-seal-scrim__transit {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  overflow: hidden;
-  pointer-events: none;
-  background: color-mix(in srgb, var(--moss-color-accent) 12%, transparent);
-}
-
-.cm-seal-scrim__transit::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 28%;
-  border-radius: 1px;
-  background: var(--moss-color-accent);
-  transform: translateX(-100%);
-}
-
-.cm-seal-scrim.is-sealing .cm-seal-scrim__transit::after {
-  animation: cm-seal-transit 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
-/* Travel = container width + own width = (100 + 28) / 28 ≈ 457% of own width. */
-@keyframes cm-seal-transit {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(457%); }
-}
-
-.cm-seal-scrim__status {
-  position: absolute;
-  top: var(--moss-space-md);
-  /* Top-RIGHT, not top-centre: the first line of a moss document is its
-     centred H1, and a centred pill lands squarely on it (seen in the light and
-     dark gate screenshots). The right gutter is empty in both the prose and
-     the frontmatter-chip zones, and it is where background activity lives in
-     the tools this borrows from. */
-  right: var(--moss-space-md);
+.hold-note {
+  grid-row: 1;
+  grid-column: 2;
+  justify-self: center;
   display: flex;
   align-items: center;
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--moss-border-light);
-  border-radius: 999px;
-  background: var(--moss-color-bg);
-  box-shadow: var(--moss-elevation-2);
-  color: var(--moss-color-text-secondary);
+  height: var(--moss-pill-size);
+  padding: 0 14px;
+  border-radius: var(--moss-pill-radius);
+  background: var(--moss-glass-pill-bg);
+  -webkit-backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  box-shadow: var(--moss-elevation-1);
+  color: var(--moss-color-text);
   font-size: 13px;
-  line-height: 1.2;
   white-space: nowrap;
-  pointer-events: none;
-  /* Arrives 60ms after the wash (see R13). */
-  opacity: 0;
-  transform: translateY(-4px);
-  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
 }
-
-.cm-seal-scrim.is-sealing .cm-seal-scrim__status {
-  opacity: 1;
-  transform: translateY(0);
-  transition:
-    opacity 0.18s ease-out 0.06s,
-    transform 0.18s ease-out 0.06s;
+@media (prefers-reduced-motion: no-preference) {
+  /* The delay keeps a rename's hold, over in a moment, from flashing a note. */
+  .hold-note { animation: hold-note-in 180ms ease-out 120ms both; }
+  .hold-note.is-pulsing { animation: hold-note-pulse 420ms ease-out; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  /* The line still marks the pane as held; it just stops travelling. */
-  .cm-seal-scrim.is-sealing .cm-seal-scrim__transit::after {
-    animation: none;
-    width: 100%;
-    transform: none;
-  }
-  .cm-seal-scrim__status,
-  .cm-seal-scrim.is-sealing .cm-seal-scrim__status {
-    transform: none;
-    transition-duration: 0.01ms;
-    transition-delay: 0s;
-  }
-}
+@keyframes hold-note-in { from { opacity: 0; } }
+@keyframes hold-note-pulse { 35% { scale: 1.06; } }
 
 /* ── Cold-start skeleton ──────────────────────────────────────────────
  * Static markup in editor.html paints before editor-main.ts executes, so
@@ -1993,3 +1917,27 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* --moss-border-radius and the --z-* scale both live in tokens.css (imported
    above), so the toast rules below need no local restating of either. */
+
+/* The open page's comments, under the article (page-comments.ts). */
+.pc-bar { flex-shrink: 0; display: flex; flex-direction: column; max-height: 56%;
+  border-top: 1px solid var(--moss-border-light); background: var(--moss-color-surface); }
+.pc-bar[hidden] { display: none; }
+.pc-toggle { display: flex; align-items: center; gap: 8px; min-height: 40px; width: 100%; padding: 0 16px;
+  background: none; border: 0; font: inherit; font-size: 14px; color: var(--moss-color-text-secondary);
+  cursor: pointer; text-align: start; }
+.pc-toggle:focus-visible, .pc-row button:focus-visible { outline: 2px solid var(--moss-color-accent); outline-offset: 2px; }
+.pc-chev { margin-inline-start: auto; transition: transform var(--moss-transition-fast, .12s); }
+.pc-bar[data-open] .pc-chev { transform: rotate(90deg); }
+.pc-bar:not([data-open]) .pc-list { display: none; }
+.pc-list { list-style: none; margin: 0; padding: 0 16px 8px; overflow: auto; }
+.pc-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 16px; align-items: center;
+  padding: 10px 0; border-top: 1px solid var(--moss-border-light); }
+.pc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; color: var(--moss-color-muted); }
+.pc-author { color: var(--moss-color-text); font-weight: 600; }
+.pc-text { grid-column: 1; margin: 0; font-size: 14px; line-height: 1.45; color: var(--moss-color-text);
+  overflow-wrap: anywhere; }
+.pc-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; }
+/* WCAG 2.5.8: each control at least 24 by 24 CSS px. */
+.pc-actions button { min-width: 24px; min-height: 24px; }
+.pc-row.is-hidden .pc-head, .pc-row.is-hidden .pc-text { opacity: .5; }
+@media (prefers-reduced-motion: reduce) { .pc-chev { transition: none; } }

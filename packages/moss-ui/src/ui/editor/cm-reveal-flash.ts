@@ -14,6 +14,7 @@
 
 import { StateField, StateEffect, type ChangeSet, type Text } from '@codemirror/state';
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
+import { revealLine } from './cm-scroll-sync';
 
 /** How long the wash stays mounted. Matches the 1.4s `moss-revealed` wash on
  *  chips so both ends of the gesture read as one vocabulary; the CSS animation
@@ -150,7 +151,7 @@ export async function revealPublishPreflight(
   if ((await sha256Lower(raw)).toLowerCase() !== request.sourceRevision.toLowerCase()) return 'mismatch';
   const range = sourceSpanToBodyRange(raw, body, request.sourceSpan);
   if (!range) return 'invalid';
-  view.dispatch({ selection: { anchor: range.from, head: range.to }, scrollIntoView: true });
+  view.dispatch({ selection: { anchor: range.from, head: range.to } });
   const first = view.state.doc.lineAt(range.from).number;
   revealLines(view, first, view.state.doc.lineAt(range.to).number);
   view.focus();
@@ -175,7 +176,7 @@ export function shouldPreserveEditorPosition(
 const clearTimers = new WeakMap<EditorView, ReturnType<typeof setTimeout>>();
 
 /**
- * Scroll the mapped source into view (centered) and flash it. No selection
+ * Reveal the mapped source (see revealLine) and flash it. No selection
  * change, no focus() — the single-click reveal by construction cannot steal
  * the caret. Pass `preserveScroll: true` (see shouldPreserveEditorPosition)
  * to show the flash without touching the scroll position.
@@ -190,15 +191,8 @@ export function revealLines(
   const from = Math.max(1, Math.min(startLine, doc.lines));
   const to = Math.max(from, Math.min(endLine, doc.lines));
 
-  const effects: StateEffect<unknown>[] = [
-    setRevealFlash.of({ fromLine: from, toLine: to }),
-  ];
-  if (!opts.preserveScroll) {
-    // scrollIntoView-the-effect (not the dispatch flag): it needs no selection
-    // change and handles positions outside the rendered viewport.
-    effects.push(EditorView.scrollIntoView(doc.line(from).from, { y: 'center' }));
-  }
-  view.dispatch({ effects });
+  view.dispatch({ effects: setRevealFlash.of({ fromLine: from, toLine: to }) });
+  if (!opts.preserveScroll) revealLine(view, from);
   clearAfter(view, REVEAL_FLASH_MS);
 }
 

@@ -208,10 +208,13 @@ fn site_name_line(inputs: &CardInputs, budget: f32) -> Option<String> {
 /// copies of the same two rects.
 fn card_svg(inputs: &CardInputs, body: &str) -> String {
     let size = if inputs.vertical { r#"width="1200" height="12""# } else { r#"width="12" height="630""# };
-    // A theme's picture takes the edge the spine would stand on.
-    let spine = match theme_strip(inputs) {
-        Some(_) => String::new(),
-        None => format!("\n  <rect x=\"0\" y=\"0\" {size} fill=\"{}\"/>", inputs.accent_color),
+    // A theme's picture takes the edge the spine would stand on, and moss's
+    // spine colour belongs to moss's paper, so a theme's own ground drops it.
+    let themed_ground = inputs.theme.as_deref().is_some_and(|t| t.bg.is_some());
+    let spine = if theme_strip(inputs).is_some() || themed_ground {
+        String::new()
+    } else {
+        format!("\n  <rect x=\"0\" y=\"0\" {size} fill=\"{}\"/>", inputs.accent_color)
     };
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
@@ -231,6 +234,21 @@ pub(super) fn theme_strip<'a>(inputs: &'a CardInputs) -> Option<(&'a CardPicture
     let picture = inputs.theme.as_deref()?.picture.as_ref()?;
     let w = picture.width() as f32;
     Some((picture, PlateRect { x: 1200.0 - w, y: 0.0, w, h: 630.0 }))
+}
+
+/// The theme's logo and where it signs a horizontal card: in the site name's
+/// place at the foot, 64px above the card's lower edge; on a plate card, whose
+/// title sits lower, at most 48px high and 26px above the edge.
+/// A vertical card keeps its site name.
+pub(super) fn theme_logo<'a>(inputs: &'a CardInputs, plate: bool) -> Option<(&'a CardPicture, PlateRect)> {
+    if inputs.vertical {
+        return None;
+    }
+    let logo = inputs.theme.as_deref()?.logo.as_ref()?;
+    let (w, h) = (logo.image.width() as f32, logo.image.height() as f32);
+    let (scale, foot) = if plate { ((48.0 / h).min(1.0), 604.0) } else { (1.0, 566.0) };
+    let (w, h) = (w * scale, h * scale);
+    Some((logo, PlateRect { x: 80.0, y: foot - h, w, h }))
 }
 
 /// The em budgets of the title and site-name lines: the whole text column, or
@@ -280,7 +298,7 @@ fn build_horizontal_svg(inputs: &CardInputs) -> String {
             )
         })
         .collect();
-    let site_name = site_name_line(inputs, name_em).map_or_else(String::new, |n| {
+    let site_name = site_name_line(inputs, name_em).filter(|_| theme_logo(inputs, false).is_none()).map_or_else(String::new, |n| {
         format!(r##"<text x="80" y="540" font-family="{face}" font-size="32" {name_paint}><tspan>{n}</tspan></text>"##, n = n)
     });
     card_svg(
@@ -402,7 +420,7 @@ fn build_horizontal_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
             )
         })
         .collect();
-    let site_name = site_name_line(inputs, SITE_NAME_EM).map_or_else(String::new, |n| {
+    let site_name = site_name_line(inputs, SITE_NAME_EM).filter(|_| theme_logo(inputs, true).is_none()).map_or_else(String::new, |n| {
         format!(r##"<text x="80" y="578" font-family="{face}" font-size="28" {name_paint}><tspan>{n}</tspan></text>"##, n = n)
     });
     card_svg(

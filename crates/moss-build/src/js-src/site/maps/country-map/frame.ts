@@ -31,8 +31,12 @@ export function framed(box: Box, base: ViewBox, free: number): ViewBox {
   return [(box.x0 + box.x1) / 2 - (w * free) / 2, (box.y0 + box.y1) / 2 - h / 2, w, h];
 }
 
-/** The view that shows the whole world width, centred, in a box of this width / height ratio. */
+/** The view that shows the whole map, centred, in a box of this width / height ratio: its full width, or in a box wider than the map (a tall country's regions) its full height. */
 export function wholeView(world: ViewBox, aspect: number): ViewBox {
+  if (aspect > world[2] / world[3]) {
+    const w = world[3] * aspect;
+    return [world[0] + (world[2] - w) / 2, world[1], w, world[3]];
+  }
   const h = world[2] / aspect;
   return [world[0], world[1] + (world[3] - h) / 2, world[2], h];
 }

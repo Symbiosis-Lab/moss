@@ -36,13 +36,14 @@ use moss_core::untrusted_text::{bounded, MAX_SENTENCE};
 /// no tile would be refused with no remedy on any screen. The id is the
 /// directory's name, because that is what the loader is handed; `installed`
 /// is left for the read that follows, so one place decides it for every row.
-pub(super) fn add_rows_for_the_folder(plugins: &mut Vec<AvailablePlugin>, plugins_dir: &Path) {
+/// `keep` filters by directory: the kept copies pass only those that would run.
+pub(super) fn add_rows_for_the_folder(plugins: &mut Vec<AvailablePlugin>, plugins_dir: &Path, keep: impl Fn(&Path) -> bool) {
     let Ok(entries) = std::fs::read_dir(plugins_dir) else { return };
     let mut found: Vec<(String, crate::plugins::PluginManifest)> = entries
         .flatten()
         .filter_map(|entry| {
             let id = entry.file_name().to_str()?.to_string();
-            if plugins.iter().any(|p| p.id == id) {
+            if plugins.iter().any(|p| p.id == id) || !keep(&entry.path()) {
                 return None;
             }
             let manifest = crate::plugins::bundled::read_installed_manifest(&entry.path())?;
@@ -74,6 +75,55 @@ pub(super) fn add_rows_for_the_folder(plugins: &mut Vec<AvailablePlugin>, plugin
     }
 }
 
+/// Describe the copy this folder has of the row's plugin, if any: the
+/// installed one, else the last removed one (which adding it back restores).
+/// Returns whether there was one.
+///
+/// The INSTALLED manifest, not just its existence: revocation is per version,
+/// and the version the user has is the only one a badge can honestly
+/// describe. Reading it here is also what makes the badge and the loader's
+/// refusal agree: `load_plugin` reads this same file, and the refusal is the
+/// loader's own call on the same manifest and directory.
+///
+/// A kept copy is the folder's bytes, so the row takes its identity, which
+/// also keeps it past [`drop_offers_this_moss_would_refuse`] when the
+/// registry's entry for the id is one this moss would refuse. It is offered
+/// whatever its preview flag says. One the loader would refuse counts as none.
+pub(super) fn read_copy_on_disk(row: &mut AvailablePlugin, plugins_dir: &Path, removed_dir: &Path) -> bool {
+    let installed_dir = plugins_dir.join(&row.id);
+    let kept_dir = removed_dir.join(&row.id);
+    let (dir, manifest, installed) = match crate::plugins::bundled::read_installed_manifest(&installed_dir) {
+        Some(manifest) => (installed_dir, manifest, true),
+        None => match runnable_kept_copy(&kept_dir) {
+            Some(manifest) => (kept_dir, manifest, false),
+            None => return false,
+        },
+    };
+    row.installed = installed;
+    row.version = manifest.version.clone();
+    row.contributions = manifest.contribution_names();
+    row.capabilities = manifest.capabilities.iter().map(|c| c.hook_name().to_string()).collect();
+    if installed {
+        row.refusal = enforce::verdict(&manifest, &dir);
+        if !enforce::vouched_for(&manifest, &dir) {
+            identity_follows_the_bytes(row, &manifest);
+        }
+    } else {
+        // Trust is asked when it is added back, as for any plugin moss did not ship.
+        row.refusal = None;
+        row.preview = false;
+        identity_follows_the_bytes(row, &manifest);
+    }
+    true
+}
+
+/// The manifest of a kept copy that would load if restored: present, and
+/// refused for nothing but the folder's trust, which adding it back asks for.
+pub(crate) fn runnable_kept_copy(kept_dir: &Path) -> Option<crate::plugins::PluginManifest> {
+    crate::plugins::bundled::read_installed_manifest(kept_dir)
+        .filter(|manifest| enforce::refused_only_for_trust(manifest, kept_dir))
+}
+
 /// Rewrite a row to describe the bytes in the folder rather than the plugin
 /// whose id they borrowed.
 ///
@@ -89,7 +139,7 @@ pub(super) fn add_rows_for_the_folder(plugins: &mut Vec<AvailablePlugin>, plugin
 /// ([`enforce::vouched_for`]): nothing does, and the row says so — the
 /// manifest's own name, its own description, and a sideloaded origin. Bounded
 /// and stripped like every other name a folder wrote.
-pub(super) fn identity_follows_the_bytes(row: &mut AvailablePlugin, installed: &crate::plugins::PluginManifest) {
+fn identity_follows_the_bytes(row: &mut AvailablePlugin, installed: &crate::plugins::PluginManifest) {
     row.origin = PluginOrigin::Sideloaded;
     row.display_name = Some(super::plugin_human_name(installed));
     row.description = bounded(installed.description.as_deref().unwrap_or_default(), MAX_SENTENCE);
@@ -471,6 +521,24 @@ mod tests {
     /// already has the thing. The kill list's half of the same question needs
     /// a published `revoked.json` and lives in
     /// `tests/plugin_catalog_composition_test.rs`.
+    /// A removed copy is the folder's, and the registry refusing its own entry
+    /// for the id (here a floor this moss fails) must not take the tile away.
+    #[test]
+    fn a_kept_copy_keeps_its_tile_when_the_registry_entry_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let (plugins_dir, removed_dir) = (temp.path().join("plugins"), temp.path().join("plugins-removed"));
+        std::fs::create_dir_all(removed_dir.join("stranger")).unwrap();
+        std::fs::write(removed_dir.join("stranger/manifest.json"), r#"{"name":"stranger","version":"1.5.0","entry":"main.js"}"#).unwrap();
+        let unrunnable = [entry("stranger", "2.0.0", Some("99.0.0"))];
+
+        let mut rows = Vec::new();
+        merge_registry_rows(&mut rows, &unrunnable);
+        assert!(read_copy_on_disk(&mut rows[0], &plugins_dir, &removed_dir));
+        drop_offers_this_moss_would_refuse(&mut rows, &unrunnable);
+        assert_eq!(rows.len(), 1, "the kept copy is still offered");
+        assert_eq!((rows[0].version.as_str(), rows[0].installed, rows[0].preview), ("1.5.0", false, false));
+    }
+
     #[test]
     fn a_row_this_moss_would_refuse_to_install_is_dropped_unless_it_is_already_here() {
         let unrunnable = [entry("stranger", "2.0.0", Some("99.0.0"))];

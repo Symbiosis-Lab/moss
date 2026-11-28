@@ -24,7 +24,7 @@ A site that wants ISO dates today copies each `<time datetime>` value into its t
 
 ## What it changes
 
-The places moss writes a date for a reader go through the formatters in `build/components/date.rs`, which already take the page's language and typesetting. Comments are the exception: they format their dates with a copy of their own, which this change folds into the same formatters.
+The places moss writes a date for a reader go through the formatters in `moss-core`'s `i18n/dates.rs`, which already take the page's language and typesetting. Comments are the exception: they format their dates with a copy of their own, which this change folds into the same formatters.
 
 Two dates are written in the browser: a comment that arrives after the build, and a country map's stamp showing the reader's own day. Both scripts read one attribute, `data-date-style="iso"` on `<html>`, which the page carries only under `iso`, so the rule has one copy in the build and one in script.
 

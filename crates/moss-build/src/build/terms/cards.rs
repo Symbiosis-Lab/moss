@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{TermIndex, TermKey};
 use crate::build::scan::article_map::to_pretty_url;
-use crate::build::types::{ParsedDocument, TermCard};
+use crate::build::types::{ParsedDocument, TermCardFacts};
 
 /// Sets `term_card` on the document that draws each term's card: the
 /// pseudo-folder for an unclaimed term, the claiming page for a claimed one.
@@ -21,7 +21,7 @@ pub fn set_term_cards(documents: &mut [ParsedDocument], index: &TermIndex) {
             by_pretty.insert(to_pretty_url(&doc.url_path), i);
         }
     }
-    let assigned: Vec<(usize, TermCard)> = index
+    let assigned: Vec<(usize, TermCardFacts)> = index
         .term_keys()
         .filter_map(|key| {
             let (target, claimed) = match index.claimed_by(key) {
@@ -64,7 +64,7 @@ fn term_card(
     index: &TermIndex,
     documents: &[ParsedDocument],
     by_pretty: &HashMap<String, usize>,
-) -> Option<TermCard> {
+) -> Option<TermCardFacts> {
     let mut members = HashSet::new();
     let mut cover = None;
     for (_, urls) in index.sections(key)? {
@@ -82,7 +82,7 @@ fn term_card(
             cover = sorted.into_iter().find_map(|doc| doc.listing_cover().map(str::to_string));
         }
     }
-    (!members.is_empty()).then(|| TermCard { count: members.len(), cover, ..Default::default() })
+    (!members.is_empty()).then(|| TermCardFacts { count: members.len(), cover, ..Default::default() })
 }
 
 /// The term page sorts each group by date whatever its axis (the generated

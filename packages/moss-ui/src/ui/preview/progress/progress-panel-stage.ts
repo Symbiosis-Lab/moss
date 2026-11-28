@@ -1,5 +1,5 @@
 import type { PreviewStage } from '../preview-state';
-import type { Action, AdvisoryLifetime, Severity, Scope } from '@symbiosis-lab/moss-ui';
+import type { Action, Severity, Scope } from '@symbiosis-lab/moss-ui';
 import { t } from "../../i18n/index";
 import { hasSizeReadout } from './upload-format';
 import type { FileParts } from './upload-file';
@@ -108,8 +108,6 @@ export interface AdvisoryEntry {
    * declarative.
    */
   sticky?: boolean;
-  /** The advisory's own `lifetime`, as moss sent it. */
-  lifetime?: AdvisoryLifetime;
 }
 
 /**
@@ -419,14 +417,13 @@ function stageTarget(event: StageEvent): PreviewStage {
 
 // ─── Publish stage state machine ────────────────────────────────────────────
 //
-// The publish pipeline runs after build (or concurrently, when waiting on a
-// late background task). It drives the same single primary-progress bar that
+// The publish pipeline runs after build (or concurrently, while a
+// late background task finishes). It drives the same single primary-progress bar that
 // the build stage drives — the panel renders one or the other based on which
 // half is active.
 
 export type PublishStage =
   | 'idle'
-  | 'waiting'
   | 'preparing'
   | 'rebuilding'
   | 'syncing'
@@ -437,7 +434,6 @@ export type PublishStage =
   | 'failed';
 
 export type PublishLabelInput =
-  | { stage: 'waiting' }
   | { stage: 'preparing' }
   | { stage: 'rebuilding'; message?: string }
   | { stage: 'syncing' }
@@ -460,13 +456,12 @@ export type PublishLabelInput =
 
 /**
  * The publish headline has two words. Everything before the first byte leaves
- * — waiting on background work, the pre-publish rebuild, the comparison with
+ * — the pre-publish rebuild, the comparison with
  * the server — is "Preparing…"; everything after is "Uploading…". The
  * rebuild's own message ("Updating search") rides as `detail`, for a hover.
  */
 export function computePublishLabel(input: PublishLabelInput): StageLabel {
   switch (input.stage) {
-    case 'waiting':
     case 'preparing':
     case 'syncing':
       return { text: t('pstage.preparing'), percent: null };
@@ -496,7 +491,6 @@ export function computePublishLabel(input: PublishLabelInput): StageLabel {
 }
 
 export type PublishEvent =
-  | { kind: 'waiting' }
   | {
       kind: 'progress';
       stage:
@@ -512,29 +506,25 @@ export type PublishEvent =
 
 const PUBLISH_RANK: Record<PublishStage, number> = {
   idle: 0,
-  waiting: 1,
-  preparing: 2,
-  rebuilding: 3,
-  syncing: 4,
-  uploading: 5,
-  committing: 6,
-  finalizing: 7,
-  complete: 8,
-  failed: 8,
+  preparing: 1,
+  rebuilding: 2,
+  syncing: 3,
+  uploading: 4,
+  committing: 5,
+  finalizing: 6,
+  complete: 7,
+  failed: 7,
 };
 
 /**
- * Pure transition for publish stages. Never regresses — a late "waiting"
- * event after publish has already started progressing is ignored. `complete`
- * and `failed` are terminal.
+ * Pure transition for publish stages. Never regresses. `complete` and `failed` are
+ * terminal.
  */
 export function nextPublishStage(
   current: PublishStage,
   event: PublishEvent,
 ): PublishStage {
   switch (event.kind) {
-    case 'waiting':
-      return current === 'idle' ? 'waiting' : current;
     case 'progress':
       return PUBLISH_RANK[event.stage] > PUBLISH_RANK[current]
         ? event.stage
@@ -726,15 +716,6 @@ export function noticeGroupKey(e: Pick<AdvisoryEntry, 'task' | 'reason'>): strin
  */
 export function isAcknowledge(action: Action | null | undefined): boolean {
   return !!action && action !== 'None' && typeof action === 'object' && 'Acknowledge' in action;
-}
-
-/**
- * Does this advisory outlive a build start? Sticky ones do, and so does one
- * moss marked `UntilTaskRestates`: a rebuild that does not run its task says
- * nothing about it, and it leaves at that task's next tick.
- */
-export function outlivesBuildStart(entry: AdvisoryEntry): boolean {
-  return !!entry.sticky || entry.lifetime === 'UntilTaskRestates';
 }
 
 /**

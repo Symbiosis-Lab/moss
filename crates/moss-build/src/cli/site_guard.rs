@@ -138,9 +138,17 @@ pub fn class_description(class: &RootClass) -> Option<String> {
     }
 }
 
-/// The one `ScanLimits` both guards scan with.
+/// The app's bounded scan: its dialog can offer to make a folder too large
+/// to check a site anyway.
 pub fn default_limits() -> ScanLimits {
     ScanLimits::default()
+}
+
+/// The command line walks the whole tree, since it has no dialog to ask in
+/// and its build reads every folder anyway. The walk runs only while no
+/// `.moss` exists here or above.
+fn cli_limits() -> ScanLimits {
+    ScanLimits { max_depth: usize::MAX, max_dirs: usize::MAX, ..ScanLimits::default() }
 }
 
 /// CLI guard. `Err(message)` refuses the open; the caller prints it and exits
@@ -151,7 +159,7 @@ pub fn default_limits() -> ScanLimits {
 /// moss roots, or the folder is suspicious/uncheckable (provider root, home,
 /// truncated scan). A folder that IS a root always proceeds.
 pub fn guard_cli_open(folder_path: &str, subcommand: &str) -> Result<(), String> {
-    guard_cli_open_in(folder_path, subcommand, dirs::home_dir().as_deref())
+    guard_cli_open_in(folder_path, subcommand, crate::infra::home::account_home().as_deref())
 }
 
 /// [`guard_cli_open`] with the home folder passed in.
@@ -175,7 +183,7 @@ fn guard_cli_open_with(folder_path: &str, subcommand: &str, home: Option<&Path>,
         ));
     }
     let listing = if list_allowing_download(path, CLI_LISTING_WAIT) { Listing::Settled } else { Listing::Settling };
-    let (report, plan) = scan_and_plan(path, home, |report| plan_unowned_open(report, listing), request);
+    let (report, plan) = scan_and_plan_with(&cli_limits(), path, home, |report| plan_unowned_open(report, listing), request);
     match plan {
         UnownedPlan::Proceed => Ok(()),
         // `history` only reads, so it leaves the folder as it found it.
@@ -197,13 +205,23 @@ pub fn scan_and_plan(
     plan: impl Fn(&NestedRootsReport) -> UnownedPlan,
     request: impl FnOnce(&Path),
 ) -> (NestedRootsReport, UnownedPlan) {
-    let report = find_nested_roots(path, home, &default_limits());
+    scan_and_plan_with(&default_limits(), path, home, plan, request)
+}
+
+fn scan_and_plan_with(
+    limits: &ScanLimits,
+    path: &Path,
+    home: Option<&Path>,
+    plan: impl Fn(&NestedRootsReport) -> UnownedPlan,
+    request: impl FnOnce(&Path),
+) -> (NestedRootsReport, UnownedPlan) {
+    let report = find_nested_roots(path, home, limits);
     let first = plan(&report);
     let UnownedPlan::AwaitCopy { copy } = &first else {
         return (report, first);
     };
     request(&path.join(copy));
-    let report = find_nested_roots(path, home, &default_limits());
+    let report = find_nested_roots(path, home, limits);
     let again = plan(&report);
     (report, again)
 }
@@ -378,12 +396,10 @@ pub fn cli_refusal_message(
             next_step(subcommand, "Run moss again once the folder has finished syncing.".to_string()),
         );
     }
-    // Truncated Normal, nothing found: the scan cannot vouch for the tree.
+    // Truncated Normal, nothing found: a folder below could not be read.
     format!(
-        "moss could not check every folder in '{folder}' for nested moss sites ({visited} folders scanned).\n       {hint}",
-        folder = folder_path,
-        visited = report.dirs_visited,
-        hint = next_step(subcommand, format!("Run moss {subcommand} on the site folder itself.")),
+        "moss could not read every folder in '{folder_path}', so it cannot tell whether a site is already in it.\n       {}",
+        next_step(subcommand, format!("Run moss {subcommand} again once every folder in it can be read (check its permissions, or let it finish syncing).")),
     )
 }
 

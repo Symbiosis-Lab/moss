@@ -130,6 +130,7 @@ fn editor_and_build_agree_on_folder_wikilinks() {
             uid: None,
             syndicate: None,
             untitled: false,
+            hidden_from_search_engines: false,
         },
     );
 

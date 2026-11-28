@@ -2,7 +2,7 @@
 
 import { syntaxTree } from '@codemirror/language';
 import { StateField, type EditorState } from '@codemirror/state';
-import { collectShortcodeBlocks, flattenBlocks } from '@symbiosis-lab/moss-syntax/cm6';
+import { collectShortcodeBlocks, flattenBlocks, shortcodeBlockField } from '@symbiosis-lab/moss-syntax/cm6';
 import {
   embedPosition, embedWithPosition, imageAttrOf, imageAttrPosition, imageAttrWithPosition, type Point,
 } from './image-position';
@@ -62,6 +62,7 @@ function pictureAtCaret(state: EditorState): PictureAtCaret | null {
 
 export const pictureAtCaretField = StateField.define<PictureAtCaret | null>({
   create: pictureAtCaret,
+  provide: () => shortcodeBlockField,
   // The hero around the caret is read off the syntax tree, which can finish parsing after the caret is placed.
   update: (value, tr) => (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? pictureAtCaret(tr.state) : value),
 });

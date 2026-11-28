@@ -4,9 +4,9 @@
 //! and maps results to our Language enum.
 
 use super::Language;
+pub use moss_core::page::site_sources::SiteLang;
 use crate::build::scan::path_collision::on_disk;
 use regex::Regex;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 use whatlang::{detect, Lang};
 
@@ -18,7 +18,7 @@ use whatlang::{detect, Lang};
 /// is answerable for a title, and answering it is what stops an OG card
 /// rendering a Traditional title in Simplified glyph forms. The floor that
 /// stops a stub speaking for a whole folder or site lives on the VOTE
-/// ([`MIN_PROSE_CHARS`]), which is the question length actually bears on.
+/// ([`moss_core::i18n::vote::MIN_PROSE_CHARS`]), which is the question length actually bears on.
 pub fn detect_language(text: &str) -> Option<Language> {
     // Detect on PROSE, not raw markdown. A real article's body is often
     // majority markup by byte count — shortcode directives, wikilink/image
@@ -360,84 +360,29 @@ pub(crate) fn strip_frontmatter(content: &str) -> String {
     }
 }
 
-/// The least prose a set of documents must hold BETWEEN them before moss will
-/// say what language they are collectively in, in non-whitespace characters
-/// after markup is stripped.
-///
-/// The expensive failure is the confident-but-wrong one: a first run over a
-/// vault holding one short page produced a full site verdict, and back when
-/// that verdict was written into `config.toml` it outranked every real page the
-/// author went on to write — a Traditional Chinese vault serving Simplified
-/// chrome, decided by a file that was never evidence of anything.
-///
-/// It is a floor on the TOTAL, not an admission test each document has to pass.
-/// A per-document gate discards evidence that is overwhelming in aggregate: a
-/// folder of thirty twenty-character Chinese link posts is not ambiguous, and
-/// gating each one individually would have left it with no verdict at all and
-/// fallen the whole folder through to the site default. Weighing each document
-/// by its prose length (below) is what makes one stub lose to one real page
-/// without also making thirty stubs lose to nothing.
-///
-/// 24 is about one Chinese sentence and a short English one. It bounds the
-/// SMALLEST corpus that gets an answer, not the smallest document that counts.
-const MIN_PROSE_CHARS: usize = 24;
-
 /// The language of `text`, if any, and how much prose the question rests on.
 ///
 /// The weight is the size of the same stripped prose [`detect_language`]
 /// judges: a page that is 3kB of shortcode and eight words weighs eight words.
 /// It is returned even when nothing classified, because "how much writing is
 /// here" and "what language is it" are different questions.
-fn classify(text: &str) -> (Option<Language>, usize) {
+pub(crate) fn classify(text: &str) -> (Option<Language>, usize) {
     let weight = strip_non_prose(text).chars().filter(|c| !c.is_whitespace()).count();
     (detect_language(text), weight)
 }
 
-/// Which language a set of documents is written in, weighed by how much prose
-/// each one brings — or `None` when there is not enough prose between them all
-/// to be worth an answer ([`MIN_PROSE_CHARS`]), or when none of them
-/// classified.
-///
-/// `None` is the point: both callers are deciding a DEFAULT, and a folder or
-/// site with no evidence must fall through to the rung below it rather than to
-/// English. This used to be `detect_site_language`, whose `unwrap_or(En)`
-/// threw that distinction away; nothing calls it any more.
-///
-/// `pub(crate)` for the folder-level inference in
-/// `build::scan::page_map::folder_lang`, which asks exactly this question.
+/// What a host with this detector gives core's folder vote for one page:
+/// its language and prose weight, read without its frontmatter.
+pub fn detected(text: &str) -> moss_core::i18n::vote::Detected {
+    let (lang, weight) = classify(&strip_frontmatter(text));
+    moss_core::i18n::vote::Detected { lang: lang.map(|l| l.code().to_string()), weight }
+}
+
+/// [`moss_core::i18n::vote::language_vote`] over `texts`, each classified here.
+/// `None` is the point: both callers decide a DEFAULT, and a folder or site
+/// with no evidence falls through to the rung below it rather than to English.
 pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
-    let mut counts: HashMap<Language, usize> = HashMap::new();
-    let mut total_prose = 0usize;
-
-    for text in texts {
-        // Prose from a document that did NOT classify still counts toward the
-        // floor: it is evidence the corpus is real writing, just not evidence
-        // of WHICH language.
-        let (lang, weight) = classify(text);
-        total_prose += weight;
-        if let Some(lang) = lang {
-            *counts.entry(lang).or_insert(0) += weight;
-        }
-    }
-
-    if total_prose < MIN_PROSE_CHARS {
-        return None;
-    }
-
-    // `HashMap`'s iteration order is randomized per-process (SipHash seed), so
-    // a plain `max_by_key` on the weight alone picks an arbitrary winner among
-    // ties — different each run. Weighing by prose length makes an exact tie
-    // rarer than the old one-vote-per-file count did, but not impossible (two
-    // documents of the same length in different languages, or one file per
-    // language in a folder of equal-length stubs), so this must be a total
-    // order rather than "whichever the hasher visited last". Break ties on the
-    // language code: arbitrary, but the SAME arbitrary choice every build.
-    counts
-        .into_iter()
-        .max_by(|(lang_a, weight_a), (lang_b, weight_b)| {
-            weight_a.cmp(weight_b).then_with(|| lang_b.code().cmp(lang_a.code()))
-        })
-        .map(|(lang, _)| lang)
+    moss_core::i18n::vote::language_vote(texts.iter().map(|text| classify(text)))
 }
 
 /// Resolve a site's DEFAULT language, as the BCP-47 code an author wrote where
@@ -467,25 +412,29 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 /// themselves and fall back to English there, where a missing translation is
 /// what the fallback actually means. Returning `Language` here would collapse
 /// both jobs onto the languages moss ships and lose `fr`.
-pub fn resolve_site_default_lang(
+///
+/// `declared` says whether the first two rungs answered: a declared site
+/// language holds on every page, so no folder's prose may outvote it
+/// (`build::scan::page_map::folder_lang`).
+pub fn resolve_site_lang(
     explicit: Option<&str>,
     homepage_file: Option<&str>,
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
-) -> String {
+) -> SiteLang {
     let is_evicted = &crate::build::icloud::is_evicted_and_requested;
-    resolve_site_default_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
+    resolve_site_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
 }
 
-/// [`resolve_site_default_lang`] with an injectable eviction predicate.
-pub(crate) fn resolve_site_default_lang_with(
+/// [`resolve_site_lang`] with an injectable eviction predicate.
+pub(crate) fn resolve_site_lang_with(
     explicit: Option<&str>,
     homepage_file: Option<&str>,
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
-) -> String {
-    moss_core::page::site_sources::resolve_site_default_lang(
+) -> SiteLang {
+    moss_core::page::site_sources::resolve_site_lang(
         explicit,
         || homepage_frontmatter_lang(homepage_file, root_path, is_evicted),
         || detect_project_language(markdown_files, root_path, is_evicted).map(|lang| lang.code().to_string()),
@@ -899,7 +848,7 @@ mod tests {
     fn test_detect_project_lang_empty_has_no_basis() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
         // `None`, not English: an empty vault has no evidence, and it is
-        // `resolve_site_default_lang` that decides what to do with that (its
+        // `resolve_site_lang` that decides what to do with that (its
         // own no-signal default, per its own tests) — the sampler does not guess.
         assert_eq!(detect_project_language(&files, "/nonexistent", &never_evicted), None);
     }
@@ -1002,13 +951,13 @@ mod tests {
         // There is no OS-value argument here any more to feed a different
         // answer through even if one wanted to.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(None, None, &files, "/nonexistent"), "en");
+        assert_eq!(resolve_site_lang(None, None, &files, "/nonexistent").code, "en");
     }
 
     #[test]
     fn site_default_lang_prefers_explicit_config_over_everything() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(Some("zh-hant"), None, &files, "/nonexistent"), "zh-hant");
+        assert_eq!(resolve_site_lang(Some("zh-hant"), None, &files, "/nonexistent").code, "zh-hant");
     }
 
     #[test]
@@ -1020,12 +969,12 @@ mod tests {
         // French site English on the way out. The render path does that
         // collapse itself, where "no translation" is what English means.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(Some("fr"), None, &files, "/nonexistent"), "fr");
+        assert_eq!(resolve_site_lang(Some("fr"), None, &files, "/nonexistent").code, "fr");
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\nlang: ja\n---\nbody").unwrap();
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
+            resolve_site_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()).code,
             "ja"
         );
     }
@@ -1046,7 +995,7 @@ mod tests {
             size: 0,
             modified: None,
         }];
-        assert_eq!(resolve_site_default_lang(None, None, &files, dir.path().to_str().unwrap()), "zh-hans");
+        assert_eq!(resolve_site_lang(None, None, &files, dir.path().to_str().unwrap()).code, "zh-hans");
     }
 
     #[test]
@@ -1068,10 +1017,10 @@ mod tests {
             modified: None,
         }];
         let root = dir.path().to_str().unwrap();
-        assert_eq!(resolve_site_default_lang(None, Some("index.md"), &files, root), "zh-hant");
+        assert_eq!(resolve_site_lang(None, Some("index.md"), &files, root).code, "zh-hant");
         // …and `[site] lang` still outranks the declaration, so an author who
         // sets it in config is not overruled by an old homepage line.
-        assert_eq!(resolve_site_default_lang(Some("en"), Some("index.md"), &files, root), "en");
+        assert_eq!(resolve_site_lang(Some("en"), Some("index.md"), &files, root).code, "en");
     }
 
     #[test]
@@ -1091,7 +1040,7 @@ mod tests {
             modified: None,
         }];
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
+            resolve_site_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()).code,
             "zh-hans"
         );
     }

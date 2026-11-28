@@ -134,7 +134,10 @@ fn ownership_contender() {
         Err(moss_build::ops::serve::ownership::AcquireError::Held) => "held",
         Err(error) => panic!("unexpected error: {error:?}"),
     };
-    std::fs::write(root.join(format!("{name}.result")), outcome).unwrap();
+    // Written aside and renamed in, so the parent never reads a created, still-empty file.
+    let aside = root.join(format!("{name}.result.tmp"));
+    std::fs::write(&aside, outcome).unwrap();
+    std::fs::rename(&aside, root.join(format!("{name}.result"))).unwrap();
     wait_for_file(&root.join("release"));
     drop(result);
 }

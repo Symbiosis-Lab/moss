@@ -22,9 +22,9 @@ Then, in Obsidian, open Settings → Community plugins, turn off Restricted mode
 
 ## What it does
 
-- Marks frontmatter errors, unknown fields, shortcode problems and unresolved note links. Hover explains diagnostics and known fields; completion includes fields contributed by installed plugins.
+- In a moss folder, the vault itself or any folder in it that holds `.moss/`, marks frontmatter errors, unknown fields, shortcode problems and unresolved note links, each note against the moss folder it sits in. Hover explains diagnostics and known fields; completion includes fields contributed by installed plugins.
 - On mobile, "moss: Preview this page" (and the globe in the ribbon) renders the current editor text in a side pane, updating after edits and file changes. It includes embedded notes, relative images and `.moss/theme/*.css`, in a sandboxed iframe with scripts disabled. On desktop the same render is what "Preview this folder" shows when the moss program is not installed.
-- The language comes from `[site] lang` in `.moss/config.toml` at the vault root, defaulting to English. Site context refreshes when vault files or `.moss/` change.
+- The language comes from `[site] lang` in the moss folder's `.moss/config.toml`, defaulting to English. Site context refreshes when vault files or `.moss/` change.
 
 On desktop:
 

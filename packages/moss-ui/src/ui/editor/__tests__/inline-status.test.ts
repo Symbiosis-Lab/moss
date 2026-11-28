@@ -189,7 +189,7 @@ describe("isTerminal", () => {
 
 describe("applyTaskUpdate (filtering)", () => {
   beforeEach(() => {
-    document.body.innerHTML = "";
+    document.body.innerHTML = '<div data-inline-task-anchor="format"></div>';
   });
   afterEach(() => {
     __resetForTests();
@@ -247,18 +247,45 @@ describe("applyTaskUpdate (DOM + fade_after)", () => {
     expect(badge).not.toBeNull();
   });
 
-  it("creates a fallback container when no anchor matches the kind", () => {
+  it("draws nothing over the page when no anchor holds the kind", () => {
     document.body.innerHTML = ""; // no anchor at all
-    applyTaskUpdate(
-      wire({
-        kind: "format",
-        title: "Formatting",
-        state: { state: "running", fraction: null, message: null },
-      }),
-    );
-    const fallback = document.getElementById("moss-inline-status-fallback");
-    expect(fallback).not.toBeNull();
-    expect(fallback?.querySelector(".moss-inline-status")).not.toBeNull();
+    applyTaskUpdate(wire({ kind: "format", title: "Formatting" }));
+    expect(__badgeCountForTests()).toBe(0);
+    expect(document.querySelector(".moss-inline-status")).toBeNull();
+  });
+
+  it("puts a page's copies in the bottom band's right-hand column, never on the body", () => {
+    document.body.innerHTML = '<div id="moss-editor-cm"></div>';
+    applyTaskUpdate(wire({ kind: "syndicate", title: "Open in X", state: awaitingState("check and publish the article") }));
+    const badge = document.querySelector(".moss-inline-status");
+    expect(badge?.parentElement?.className).toBe("editor-band-status");
+    expect(badge?.closest(".editor-band")?.parentElement?.id).toBe("moss-editor-cm");
+  });
+
+  it("keeps a waiting copy's badge when a surface mount empties the pane, and ends it in the new band", async () => {
+    document.body.innerHTML = '<div id="moss-editor-cm"></div>';
+    const pane = document.getElementById("moss-editor-cm")!;
+    applyTaskUpdate(wire({ id: "9", kind: "syndicate", title: "Open in X", state: awaitingState("check and publish the article") }));
+    pane.innerHTML = "";
+    await Promise.resolve();
+    const badge = pane.querySelector(".editor-band > .editor-band-status > .moss-inline-status");
+    expect(badge?.textContent).toBe("check and publish the article");
+
+    pane.innerHTML = "";
+    applyTaskUpdate(wire({ id: "9", kind: "syndicate", title: "Open in X", fade_after_ms: 30_000, state: { state: "succeeded", receipt: "Opened in X" } }));
+    expect(pane.querySelector(".editor-band-status .moss-inline-status")?.textContent).toBe("Opened in X");
+  });
+
+  it("ends a stopped task with no receipt, and fades the one a finished task leaves", () => {
+    document.body.innerHTML = '<div id="moss-editor-cm"></div>';
+    applyTaskUpdate(wire({ id: "7", kind: "syndicate", title: "Open in X", state: awaitingState("check and publish the article") }));
+    applyTaskUpdate(wire({ id: "7", kind: "syndicate", title: "Open in X", fade_after_ms: 30_000, state: { state: "cancelled" } }));
+    expect(__badgeCountForTests()).toBe(0);
+
+    applyTaskUpdate(wire({ id: "8", kind: "syndicate", title: "Sign in to X", fade_after_ms: 30_000, state: { state: "succeeded", receipt: "Signed in" } }));
+    expect(__badgeCountForTests()).toBe(1);
+    vi.advanceTimersByTime(30_400);
+    expect(__badgeCountForTests()).toBe(0);
   });
 
   it("updates the same badge on subsequent task updates (no stacking)", () => {
@@ -404,7 +431,7 @@ describe("applyTaskUpdate (DOM + fade_after)", () => {
 
 describe("applyTaskUpdate (silent-save)", () => {
   beforeEach(() => {
-    document.body.innerHTML = "";
+    document.body.innerHTML = '<span data-inline-task-anchor="save"></span>';
   });
   afterEach(() => {
     __resetForTests();

@@ -28,7 +28,7 @@ fn test_injects_slot_reveal_keyframes() {
     // they must be re-injected on every response so an idiomorph morph
     // cannot drop them.
     let html = "<html><body><footer class=\"container\"></footer></body></html>";
-    let out = inject_preview_assets(html, false);
+    let out = inject_preview_assets(html);
     assert!(out.contains("@keyframes moss-slot-reveal"));
     // The chip-hover flash rides the same wash as a class (`.moss-fm-flash`,
     // toggled by NavigationManager.flashSource over RPC), with a static-tint
@@ -44,7 +44,7 @@ fn test_preview_never_skips_rendering_of_page_content() {
     // content-visibility:auto clips paint to the box and makes it the containing
     // block of absolute descendants; no selector can tell a safe figure from one
     // author CSS moves content out of.
-    let out = inject_preview_assets("<html><body><article><figure class=\"moss-image\"><img/></figure></article></body></html>", false);
+    let out = inject_preview_assets("<html><body><article><figure class=\"moss-image\"><img/></figure></article></body></html>");
     assert!(!out.contains("content-visibility"), "preview must paint what will publish; got: {out}");
     assert!(!out.contains("contain-intrinsic-size"), "got: {out}");
 }
@@ -888,36 +888,6 @@ fn tooltip_style_targets_both_buttons_and_no_inline_hint() {
     );
 }
 
-#[test]
-fn owner_controls_injected_only_with_shell_marker() {
-    let html = "<html><body><ol><li class=\"comment-item\" \
-            data-comment-source=\"artalk\" data-comment-id=\"1\"></li></ol></body></html>";
-
-    let with_marker = inject_preview_assets(html, true);
-    assert!(
-        with_marker.contains("moss-comment-owner-controls"),
-        "owner-controls script must be injected under the shell marker"
-    );
-    assert!(
-        with_marker.contains("data-moss-hide-comment"),
-        "owner-controls style must reference the hide button"
-    );
-
-    let without_marker = inject_preview_assets(html, false);
-    assert!(
-        !without_marker.contains("moss-comment-owner-controls"),
-        "owner-controls must be ABSENT without the shell marker (never shipped)"
-    );
-    assert!(
-        without_marker.contains("moss-bridge"),
-        "bridge must inject even without shell marker"
-    );
-    assert!(
-        without_marker.contains("moss-comment-preview-shim"),
-        "shim must inject even without shell marker"
-    );
-}
-
 // ---- Blueprint placeholder (preview-only, injected into <head>) ----
 
 /// The placeholder goes into `<head>`, not before `</body>` like every other
@@ -1000,6 +970,7 @@ fn build_deploy_only_fixture_pages() -> (String, String) {
                 provider: Some("goatcounter".into()),
             },
             script: Some("https://morph-guard-fixture.goatcounter.com/count".into()),
+            site_id: None,
         }),
         ..Default::default()
     };

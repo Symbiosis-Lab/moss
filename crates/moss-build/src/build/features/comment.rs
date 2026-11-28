@@ -5,6 +5,7 @@
 
 pub mod cli;
 pub mod event_log;
+pub mod link_block;
 pub mod moderation;
 pub mod reduce;
 pub mod render;

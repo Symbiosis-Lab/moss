@@ -568,80 +568,107 @@ pub(crate) fn remove_stale_files(
 ) -> SweepReport {
     use walkdir::WalkDir;
     let mut report = SweepReport::default();
-    for entry in WalkDir::new(dir).into_iter() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let is_symlink = entry.path_is_symlink();
-        if !entry.file_type().is_file() && !is_symlink {
+    for entry in WalkDir::new(dir).into_iter().flatten() {
+        if !entry.file_type().is_file() && !entry.path_is_symlink() {
             continue;
         }
         if let Ok(rel) = entry.path().strip_prefix(dir) {
             // Normalize `\`→`/`: key is compared against the `/`-form
             // `site_hashes` maps/sets (video/image/notebook outputs + files).
             let key = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-
-            // A running or finished encode's output, or a temp it is writing
-            // through, until a build registers it.
-            if permit.keeps(&key) {
-                continue;
-            }
-
-            // Always unlink orphan *.placeholder.svg. An earlier change removed
-            // Pattern E (per-video .placeholder.svg generation), but vaults built
-            // before that change have these files on disk AND entries in hashes.json#files for
-            // them — so the standard "not in files → remove" check below
-            // would preserve them indefinitely. Current code never produces
-            // .placeholder.svg, so they are always orphans.
-            //
-            // FIXME: revisit if Pattern E (or any future feature) starts
-            // producing legitimate `.placeholder.svg` outputs again — this
-            // sweep would silently delete them.
-            if key.ends_with(".placeholder.svg") {
-                let _ = fs::remove_file(entry.path());
-                log::debug!(
-                    "[background-assets] Removed orphan placeholder svg from {}: {}",
-                    label, key
-                );
-                report.record(&key, false);
-                continue;
-            }
-
-            // Email/RSS math PNGs are APPEND-ONLY: their URLs
-            // are baked into already-sent emails and cached forever by
-            // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
-            // or deleted must keep serving its original bytes. Never stale.
-            // Only the `.pending.` temp a crashed write left there is.
-            if crate::build::served_path::is_append_only(&key) {
-                if key.contains(".pending.") {
-                    let _ = fs::remove_file(entry.path());
-                    report.record(&key, false);
-                }
-                continue;
-            }
-            if site_hashes.video_outputs.contains(&key) {
-                continue;
-            }
-            // Parallel to video_outputs: generated .webp files have no
-            // source entry in `files`, so stale cleanup would delete them.
-            if site_hashes.image_outputs.contains(&key) {
-                continue;
-            }
-            // Same for notebook outputs: JupyterLite assets, viewer HTML
-            // wrappers, and .ipynb copies are produced in the background
-            // phase from .ipynb sources.
-            if site_hashes.notebook_outputs.contains(&key) {
-                continue;
-            }
-            if !site_hashes.files.contains_key(&key) {
-                let _ = fs::remove_file(entry.path());
-                log::trace!("[background-assets] Removed stale from {}: {}", label, key);
-                report.record(&key, is_symlink);
-            }
+            remove_if_stale(entry.path(), &key, entry.path_is_symlink(), site_hashes, label, permit, &mut report);
         }
     }
     report
+}
+
+/// [`remove_stale_files`] for the named `keys` alone, with no walk: the files
+/// of entries a build removed or condemned.
+pub(crate) fn remove_stale_named(
+    dir: &Path,
+    keys: &std::collections::HashSet<String>,
+    site_hashes: &SiteHashes,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> SweepReport {
+    let mut report = SweepReport::default();
+    for key in keys {
+        let path = dir.join(key);
+        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+        if meta.is_file() || meta.file_type().is_symlink() {
+            remove_if_stale(&path, key, meta.file_type().is_symlink(), site_hashes, "staging", permit, &mut report);
+        }
+    }
+    report
+}
+
+fn remove_if_stale(
+    path: &Path,
+    key: &str,
+    is_symlink: bool,
+    site_hashes: &SiteHashes,
+    label: &str,
+    permit: &crate::build::lifecycle::SweepPermit,
+    report: &mut SweepReport,
+) {
+    // A running or finished encode's output, or a temp it is writing
+    // through, until a build registers it.
+    if permit.keeps(key) {
+        return;
+    }
+
+    // No current output is a `.placeholder.svg`, so one is always an orphan,
+    // even when an older build's hashes.json still lists it.
+    if key.ends_with(".placeholder.svg") {
+        let _ = fs::remove_file(path);
+        log::debug!("[background-assets] Removed orphan placeholder svg from {}: {}", label, key);
+        report.record(key, false);
+        return;
+    }
+
+    // Email/RSS math PNGs are APPEND-ONLY: their URLs
+    // are baked into already-sent emails and cached forever by
+    // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
+    // or deleted must keep serving its original bytes. Never stale.
+    // Only the `.pending.` temp a crashed write left there is.
+    if crate::build::served_path::is_append_only(key) {
+        if key.contains(".pending.") {
+            let _ = fs::remove_file(path);
+            report.record(key, false);
+        }
+        return;
+    }
+    // Generated outputs (video, image, notebook) have no source entry in
+    // `files`, so a files-only check would delete them.
+    if !site_hashes.names(key) {
+        let _ = fs::remove_file(path);
+        log::trace!("[background-assets] Removed stale from {}: {}", label, key);
+        report.record(key, is_symlink);
+    }
+}
+
+/// Remove the directories `keys` leave empty, deepest first. Never a
+/// directory with a file in it, so no manifest has to be consulted.
+pub(crate) fn remove_emptied_dirs(
+    dir: &Path,
+    keys: &std::collections::HashSet<String>,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> usize {
+    let mut parents: std::collections::BTreeSet<&Path> = std::collections::BTreeSet::new();
+    for key in keys {
+        let mut current = Path::new(key).parent();
+        while let Some(parent) = current.filter(|p| !p.as_os_str().is_empty()) {
+            parents.insert(parent);
+            current = parent.parent();
+        }
+    }
+    let mut removed = 0;
+    for rel in parents.into_iter().rev() {
+        let append_only = crate::build::served_path::is_append_only(&format!("{}/", moss_core::slug::normalize_separators(&rel.to_string_lossy())));
+        if !append_only && !permit.keeps_dir(rel) && fs::remove_dir(dir.join(rel)).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Remove directories from `dir` not in `expected_dirs`, deepest-first.
@@ -1365,7 +1392,7 @@ fn copy_asset_entry(
             // Raster originals retain their format at the optimized size.
             // Unsupported or unavailable inputs use the verbatim CAS blob;
             // warm transform records can be reused without reading the source.
-            let raster = matches!(ext.as_str(), "jpg" | "jpeg" | "png");
+            let raster = crate::build::media::fallback_raster::is_resized_raster(&ext);
             if raster && run.defer_cloud_held_raster(transforms, file_path, &oid) {
                 return;
             }
@@ -1470,7 +1497,7 @@ fn walk_superseded(tx: &mpsc::Sender<EmitMessage>, stats: AssetPipelineRunStats,
     let encodes = crate::build::media::encodes_on_this_thread() - encodes_before;
     log::info!("[background-assets] walk stopped after {encodes} fallback rasters: a newer render or a cancel");
     crate::build::phase::record_count("fallback_encodes", encodes);
-    if let Err(e) = tx.blocking_send(EmitMessage::WalkSuperseded) {
+    if let Err(e) = tx.blocking_send(EmitMessage::Superseded) {
         log::info!("[background-assets] Failed to send to coordinator: {e}");
     }
     stats

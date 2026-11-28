@@ -1,7 +1,7 @@
 // One alignment grid: a full-width band's text and a closing picture's words
 // start where the page's text column starts, and stay within its width, at
 // desktop and phone width, with the default content width and `full`.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { BAND_TEXT, BODY_TEXT } from '../../e2e/helpers/content-grid-site';
 

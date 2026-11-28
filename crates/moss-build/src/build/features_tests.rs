@@ -27,6 +27,7 @@ fn analytics_fixture(script: &str) -> ServicesConfig {
                 provider: Some("goatcounter".into()),
             },
             script: Some(script.into()),
+            site_id: None,
         }),
         ..Default::default()
     }
@@ -2292,4 +2293,31 @@ fn slot_resolution_walks_the_media_only_for_a_review_colophon() {
     assert_eq!(walks(None), 0, "slot resolution walked the media with no colophon to draw");
     assert_eq!(walks(Some(None)), 0, "a colophon with no cover walked the media");
     assert_eq!(walks(Some(Some("image/cover.jpg"))), 1, "a colophon's cover reads one lookup, built once");
+}
+
+#[test]
+fn a_plugin_analytics_provider_writes_its_tag_and_a_missing_one_builds_without() {
+    let site = tempfile::tempdir().unwrap();
+    let site = site.path().to_str().unwrap();
+    let config = ServicesConfig {
+        analytics: Some(crate::config::services::AnalyticsService {
+            common: crate::config::services::ServiceCommon { enabled: None, provider: Some("cloudflare".into()) },
+            script: None,
+            site_id: Some("t0ken".into()),
+        }),
+        ..Default::default()
+    };
+    let head_end = || {
+        let slots = generate_native_slots(&config, site, email_installed(site), crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+            &HashMap::new(), &[], "en", None, &DomainDeploymentConfig::default(), false, None, None, None);
+        slots.get_html("head-end", "index.html").unwrap_or_default()
+    };
+    assert!(!head_end().contains("<script"), "no plugin, no tag: {}", head_end());
+    let dir = crate::plugins::plugin_dir(site, "cloudflare");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("manifest.json"), serde_json::json!({"name":"cloudflare","version":"1.0.0","entry":"main.js","contributes":{
+        "account":{"kind":"key","url":"https://dash.cloudflare.com/profile/api-tokens","length":40},
+        "provider":[{"part":"analytics","addresses":["https://static.cloudflareinsights.com/beacon.min.js"],
+            "analytics":{"script":"https://static.cloudflareinsights.com/beacon.min.js","attributes":{"data-cf-beacon":"{\"token\": \"{site_id}\"}"},"reads":"daily_counts"}}]}}).to_string()).unwrap();
+    assert!(head_end().contains(r#"<script data-moss-deploy-only defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;t0ken&quot;}">"#), "{}", head_end());
 }

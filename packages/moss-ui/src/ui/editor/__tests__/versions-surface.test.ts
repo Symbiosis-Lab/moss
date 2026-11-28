@@ -47,7 +47,7 @@ function titleBar(): HTMLElement {
 }
 
 import { renderVersionsSurface } from "../versions-surface";
-import type { VersionRow, VersionList, ChangedPage } from "@symbiosis-lab/moss-ui";
+import type { VersionRow, VersionList, VersionScope, ChangedPage } from "@symbiosis-lab/moss-ui";
 
 const drain = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -79,6 +79,7 @@ function list(rows: VersionRow[], overrides: Partial<VersionList> = {}): Version
     store_dir: "/tmp/store",
     changed_since: [],
     unchanged: [],
+    to_trash: [],
     ...overrides,
   };
 }
@@ -157,7 +158,7 @@ describe("renderVersionsSurface", () => {
     const { root } = mount("page", "notes/harbor.md");
     await drain();
 
-    expect(mockListVersions).toHaveBeenCalledWith("page", "notes/harbor.md");
+    expect(mockListVersions).toHaveBeenCalledWith({ kind: "page", path: "notes/harbor.md" }, null);
     expect(root.querySelectorAll(".moss-versions__row").length).toBe(rows.length);
   });
 
@@ -168,7 +169,7 @@ describe("renderVersionsSurface", () => {
 
     // Before this redesign, any non-page scope silently discarded its path
     // and always asked for the whole site — this is the fix.
-    expect(mockListVersions).toHaveBeenCalledWith("folder", "文字/纽约诸法门");
+    expect(mockListVersions).toHaveBeenCalledWith({ kind: "folder", path: "文字/纽约诸法门" }, null);
   });
 
   test("site scope opens on the root path", async () => {
@@ -176,7 +177,7 @@ describe("renderVersionsSurface", () => {
     mount("site", "", "blog");
     await drain();
 
-    expect(mockListVersions).toHaveBeenCalledWith("site", "");
+    expect(mockListVersions).toHaveBeenCalledWith({ kind: "site" }, null);
   });
 
   test("empty state shows the two lines and the save control still offers a +", async () => {
@@ -340,9 +341,9 @@ describe("renderVersionsSurface — screen two, a page's version", () => {
     titleBar().querySelector<HTMLButtonElement>(".moss-versions__restore")!.click();
     await drain();
 
-    expect(mockRestoreVersion).toHaveBeenCalledWith("v1", "notes/harbor.md", "in_place");
+    expect(mockRestoreVersion).toHaveBeenCalledWith("v1", { kind: "page", path: "notes/harbor.md" }, "in_place");
     expect(mockOnExit).toHaveBeenCalledWith(
-      { undoId: "undo-1", path: "notes/harbor.md", message: "Restored harbor.md from Sep 13, 14:02" },
+      { undoId: "undo-1", scope: { kind: "page", path: "notes/harbor.md" }, message: "Restored harbor.md from Sep 13, 14:02" },
     );
   });
 
@@ -409,7 +410,7 @@ describe("renderVersionsSurface — screen three, a site version", () => {
       unchanged: ["home.md"],
     });
 
-    expect(mockListVersions).toHaveBeenLastCalledWith("site", "s1");
+    expect(mockListVersions).toHaveBeenLastCalledWith({ kind: "site" }, "s1");
     const groups = Array.from(root.querySelectorAll(".moss-versions__group")).map((g) => g.textContent);
     expect(groups).toEqual(["Changed since then", "Unchanged"]);
 
@@ -438,7 +439,7 @@ describe("renderVersionsSurface — screen three, a site version", () => {
     expect(root.querySelector(".moss-versions__source")?.textContent).toBe("old content");
   });
 
-  test("Restore site opens the modal with the counts; confirming calls restoreVersion with a null path", async () => {
+  test("Restore site opens the modal with the counts; confirming restores the site", async () => {
     const siteRow = row({ id: "s1", published_at: new Date(2026, 8, 13, 11, 20).toISOString() });
     const { root } = await openSiteVersion(siteRow, {
       changed_since: [
@@ -447,6 +448,7 @@ describe("renderVersionsSurface — screen three, a site version", () => {
         changedPage({ source_path: "c.md", verb: "deleted" }),
       ],
       unchanged: [],
+      to_trash: ["b.md"],
     });
 
     // Same title bar as page scope, and the note is a tooltip, not a line.
@@ -459,8 +461,6 @@ describe("renderVersionsSurface — screen three, a site version", () => {
     siteRestoreBtn.click();
 
     expect(document.querySelector(".moss-modal-title")?.textContent).toBe("Restore the whole site to Sep 13, 11:20?");
-    // 3 changed_since entries, 1 of them "added" (created after this moment,
-    // so it is trashed rather than reverted) — pages that "go back" excludes it.
     expect(document.querySelector(".moss-modal-body")?.textContent).toBe(
       "2 pages go back to how they were then. 1 pages added since then move to the Trash. Everything as it is now is saved as a version first, so you can undo.",
     );
@@ -471,9 +471,9 @@ describe("renderVersionsSurface — screen three, a site version", () => {
     document.querySelector<HTMLButtonElement>('[data-action="confirm"]')!.click();
     await drain();
 
-    expect(mockRestoreVersion).toHaveBeenCalledWith("s1", null, "in_place");
+    expect(mockRestoreVersion).toHaveBeenCalledWith("s1", { kind: "site" }, "in_place");
     expect(mockOnExit).toHaveBeenCalledWith(
-      { undoId: "undo-9", path: null, message: "Restored Whole site from Sep 13, 11:20" },
+      { undoId: "undo-9", scope: { kind: "site" }, message: "Restored Whole site from Sep 13, 11:20" },
     );
   });
 
@@ -501,15 +501,14 @@ describe("renderVersionsSurface — screen three, a site version", () => {
     await drain();
 
     expect(mockOnExit).toHaveBeenCalledWith(
-      { undoId: "undo-7", path: null, message: "Restored 1 of 2 pages" },
+      { undoId: "undo-7", scope: { kind: "site" }, message: "Restored 1 of 2 pages" },
     );
   });
 });
 
 describe("renderVersionsSurface — folder scope", () => {
   /** Mounts in folder scope, lands on the folder-version screen for
-   *  `folderRow`, with the drill-down (always literal scope 'site' on the
-   *  wire — file header, "Two backend gaps") resolved to `detail`. */
+   *  `folderRow`, with the drill-down resolved to `detail`. */
   async function openFolderVersion(folderRow: VersionRow, detail: Partial<VersionList> = {}) {
     mockListVersions.mockResolvedValueOnce(ok(list([folderRow])));
     const { root } = mount("folder", "文字/纽约诸法门", "纽约诸法门");
@@ -521,24 +520,38 @@ describe("renderVersionsSurface — folder scope", () => {
     return { root };
   }
 
-  test("the drill-down still asks the wire's existing shape (scope 'site'), and the surface filters to the folder itself", async () => {
+  test("the drill-down asks for the folder version and the modal counts the engine's Trash list", async () => {
     const folderRow = row({ id: "f1", published_at: new Date(2026, 8, 13, 11, 20).toISOString() });
     const { root } = await openFolderVersion(folderRow, {
       changed_since: [
         changedPage({ source_path: "文字/纽约诸法门/藏传佛教寺庙里的瑜伽.md", verb: "edited" }),
-        changedPage({ source_path: "项目/moss.md", verb: "edited" }), // outside the folder
+        changedPage({ source_path: "文字/纽约诸法门/新.md", verb: "added" }),
+        changedPage({ source_path: "文字/纽约诸法门/新.png", verb: "added" }),
       ],
-      unchanged: ["文字/纽约诸法门/冬至的饺子.md", "项目/indie-reader.md"], // second entry outside the folder
+      unchanged: ["文字/纽约诸法门/冬至的饺子.md"],
+      to_trash: ["文字/纽约诸法门/新.md"],
     });
 
-    expect(mockListVersions).toHaveBeenLastCalledWith("site", "f1");
+    expect(mockListVersions).toHaveBeenLastCalledWith({ kind: "folder", path: "文字/纽约诸法门" }, "f1");
     const names = Array.from(root.querySelectorAll(".moss-versions__row .moss-versions__name")).map(
       (n) => n.textContent,
     );
-    expect(names).toEqual(["藏传佛教寺庙里的瑜伽.md", "冬至的饺子.md"]);
+    expect(names).toEqual(["藏传佛教寺庙里的瑜伽.md", "新.md", "新.png", "冬至的饺子.md"]);
+
+    // The added picture stays on disk, so only the added page is counted.
+    titleBar().querySelector<HTMLButtonElement>(".moss-versions__restore")!.click();
+    expect(document.querySelector(".moss-modal-body")?.textContent).toBe(
+      "1 pages go back to how they were then. 1 pages added since then move to the Trash. Everything as it is now is saved as a version first, so you can undo.",
+    );
   });
 
-  test("restoring a folder version passes the folder's own path, never null, and names the folder", async () => {
+  test("a folder scope names its folder", () => {
+    // @ts-expect-error a folder scope without its path is no scope
+    const scope: VersionScope = { kind: "folder" };
+    expect(scope.kind).toBe("folder");
+  });
+
+  test("restoring a folder version restores the folder and names it", async () => {
     const folderRow = row({ id: "f1", published_at: new Date(2026, 8, 13, 11, 20).toISOString() });
     await openFolderVersion(folderRow, {
       changed_since: [changedPage({ source_path: "文字/纽约诸法门/藏传佛教寺庙里的瑜伽.md", verb: "edited" })],
@@ -558,10 +571,10 @@ describe("renderVersionsSurface — folder scope", () => {
     document.querySelector<HTMLButtonElement>('[data-action="confirm"]')!.click();
     await drain();
 
-    // Never null: a folder restore must not fall through to a whole-site one.
-    expect(mockRestoreVersion).toHaveBeenCalledWith("f1", "文字/纽约诸法门", "in_place");
+    const folder = { kind: "folder", path: "文字/纽约诸法门" };
+    expect(mockRestoreVersion).toHaveBeenCalledWith("f1", folder, "in_place");
     expect(mockOnExit).toHaveBeenCalledWith(
-      { undoId: "undo-f1", path: null, message: 'Restored 纽约诸法门 from Sep 13, 11:20' },
+      { undoId: "undo-f1", scope: folder, message: 'Restored 纽约诸法门 from Sep 13, 11:20' },
     );
   });
 });

@@ -71,6 +71,30 @@ fn the_declared_start_argv_is_what_runs() {
 
 #[test]
 #[cfg(unix)]
+fn the_apps_agent_socket_and_tokens_do_not_reach_a_stack() {
+    // Names no other test reads; an agent socket already set is left as is.
+    std::env::set_var("MOSS_STACK_ENV_TEST_TOKEN", "s3cret");
+    if std::env::var_os("SSH_AUTH_SOCK").is_none() {
+        std::env::set_var("SSH_AUTH_SOCK", "/nonexistent/agent.sock");
+    }
+    let home_dir = TempDir::new().unwrap();
+    fake_stack_binary(
+        home_dir.path(),
+        r#"echo "agent=[$SSH_AUTH_SOCK] token=[$MOSS_STACK_ENV_TEST_TOKEN] home=[$HOME] mine=[$WIDGET_TEST_VAR]""#,
+    );
+    let stack = stack_with_argv(vec!["start"], vec![]);
+    let home = StackHome { root: home_dir.path(), stack: &stack };
+    let env = [("WIDGET_TEST_VAR".to_string(), "hello".to_string())];
+    let opts = RunOpts { timeout: Duration::from_secs(5), env: &env, cwd: None, tick: None };
+
+    let out = run(&home, Verb::Start, opts).unwrap();
+    assert!(out.stdout.contains("agent=[] token=[]"), "got: {}", out.stdout);
+    assert!(!out.stdout.contains("home=[]"), "got: {}", out.stdout);
+    assert!(out.stdout.contains("mine=[hello]"), "got: {}", out.stdout);
+}
+
+#[test]
+#[cfg(unix)]
 fn a_verb_the_stack_does_not_declare_is_not_invented() {
     let home_dir = TempDir::new().unwrap();
     // The binary succeeds unconditionally — an invented `["uninstall"]`

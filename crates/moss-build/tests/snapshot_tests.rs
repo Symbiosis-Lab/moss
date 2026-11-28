@@ -404,7 +404,7 @@ fn compare_directories(actual: &Path, expected: &Path) -> Vec<String> {
                 ));
             }
         }
-        // Everything else (raster images) is presence-only — see
+        // Everything else is presence-only — see
         // `is_content_compared` for why that is deliberate.
     }
 
@@ -452,13 +452,12 @@ fn update_snapshots(actual: &Path, expected: &Path) -> std::io::Result<()> {
 ///     filename is a content hash of it, so every regen replaced ~18 PNGs per
 ///     fixture that the walker then skipped. The card's existence, not its
 ///     bytes, is the contract.
-///   - Every file that reads as UTF-8 is normalized, not just `.html`/`.css`.
-///     The extension filter is a compare-side detail (only those two are
-///     content-compared); on the WRITE side it left `llms.txt` and
-///     `_moss/previews.json` carrying the per-run site name — the title-less
-///     homepage falls back to the temp-dir folder name — where nothing ever
-///     compared them and nothing ever caught it. Binary files fail
-///     `read_to_string` and fall through to a byte copy.
+///   - A content-compared file is stored normalized. Every other file is
+///     stored empty: the comparison checks only that it exists, so its
+///     presence is its whole stored form. Storing its bytes let encoder
+///     output that is not reproducible under load (HLS segments from x264's
+///     frame-threaded rate control, re-encoded images) rewrite the fixture on
+///     every regen with nothing changed.
 ///
 /// This does NOT apply to `copy_dir_recursive`'s other caller, which stages a
 /// fixture's `input/` into the temp build dir — that side is the build's
@@ -482,14 +481,34 @@ fn copy_dir_normalized_rel(src: &Path, dst: &Path, rel: &Path) -> std::io::Resul
         if is_platform_variant_path(&child_rel) {
             continue;
         }
-        match fs::read_to_string(&path) {
-            Ok(content) => fs::write(&dst_path, normalize_html(&content))?,
-            Err(_) => {
-                fs::copy(&path, &dst_path)?;
-            }
+        let extension = child_rel.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if is_content_compared(extension) {
+            fs::write(&dst_path, normalize_html(&fs::read_to_string(&path)?))?;
+        } else {
+            fs::write(&dst_path, b"")?;
         }
     }
     Ok(())
+}
+
+#[test]
+fn presence_only_files_store_the_same_form_whatever_their_bytes() {
+    let stored = |segment: &[u8]| {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        fs::create_dir_all(src.path().join("clip.hls")).unwrap();
+        fs::write(src.path().join("clip.hls/seg-1.m4s"), segment).unwrap();
+        // The playlist is text but carries the measured bitrate, so it varies too.
+        fs::write(src.path().join("clip.hls/master.m3u8"), segment).unwrap();
+        fs::write(src.path().join("index.html"), "<p>kept</p>").unwrap();
+        copy_dir_normalized(src.path(), &dst.path().join("expected")).unwrap();
+        let read = |rel: &str| fs::read(dst.path().join("expected").join(rel)).unwrap();
+        (read("clip.hls/seg-1.m4s"), read("clip.hls/master.m3u8"), read("index.html"))
+    };
+    let (segment, playlist, page) = stored(b"one run's encoder output");
+    assert_eq!((segment, playlist), (Vec::new(), Vec::new()));
+    assert_eq!(page, b"<p>kept</p>");
+    assert_eq!(stored(b"one run's encoder output"), stored(b"another run's"));
 }
 
 /// `copy_dir_normalized` stores normalized text, and `compare_directories` then
@@ -914,6 +933,11 @@ fn snapshot_no_home_site() {
 }
 
 #[test]
+fn snapshot_slugged_cover_site() {
+    run_snapshot_test("slugged-cover-site");
+}
+
+#[test]
 fn snapshot_multilingual_site() {
     run_snapshot_test("multilingual-site");
 }
@@ -936,6 +960,8 @@ fn snapshot_catalog_site() { run_snapshot_test("catalog-site"); }
 fn snapshot_folder_note_site() { run_snapshot_test("folder-note-site"); }
 #[test]
 fn snapshot_hooks_site() { run_snapshot_test("hooks-site"); }
+#[test]
+fn snapshot_forms_site() { run_snapshot_test("forms-site"); }
 #[test]
 fn snapshot_immersive_site() { run_snapshot_test("immersive-site"); }
 #[test]
@@ -1115,9 +1141,9 @@ fn snapshot_folder_passthrough_iframe() {
 
 /// Regression: homepage with `children_depth: all` and dateless folder
 /// children but dated grandchildren. Pre-fix, axis was inferred from
-/// direct children only (Title — no dates), `skip_resort=true` fired,
+/// direct children only (Title — no dates), the date resort was skipped,
 /// year grouping was suppressed even though the flattened corpus has
-/// dated essays. Post-fix, `resolve_for_flatten` recomputes the axis
+/// dated essays. Post-fix, the listing recomputes the axis
 /// on the scope the reader actually sees (Date), and year-grouped
 /// output appears.
 #[test]
@@ -2434,7 +2460,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     let concert = page("events/concert");
     let line = date_line(&concert);
     assert!(
-        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
+        line.contains(r#"<time class="moss-event-time" datetime="2054-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2054</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");

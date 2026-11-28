@@ -98,9 +98,41 @@ fn bundled_file(plugin_name: &str, rel: &str) -> Option<&'static [u8]> {
 
 /// Read and parse the manifest.json from an installed plugin
 pub fn read_installed_manifest(plugin_path: &Path) -> Option<PluginManifest> {
-    let manifest_path = plugin_path.join("manifest.json");
-    let content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
-    PluginManifest::parse(&content).ok()
+    PluginManifest::parse(&read_manifest_text(plugin_path)?).ok()
+}
+
+/// The fields a version floor needs. A manifest written for a newer moss is the
+/// one whose floor matters, and the full manifest type refuses it at the first
+/// setting type or contribution this moss does not know.
+#[derive(Debug, serde::Deserialize)]
+pub struct ManifestFloor {
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    pub min_moss_version: Option<String>,
+}
+
+impl ManifestFloor {
+    pub fn parse(manifest: &str) -> Option<Self> {
+        serde_json::from_str(manifest).ok()
+    }
+
+    /// The refusal sentence when this moss is below the floor.
+    pub fn unmet(&self) -> Option<String> {
+        let floor = self.min_moss_version.as_deref()?;
+        (crate::system::meets_floor(floor) == Some(false)).then(|| {
+            super::install::registry_client::enforce::incompatible_sentence(&self.name, &self.version, floor, crate::system::app_version())
+        })
+    }
+}
+
+pub fn read_installed_floor(plugin_path: &Path) -> Option<ManifestFloor> {
+    ManifestFloor::parse(&read_manifest_text(plugin_path)?)
+}
+
+fn read_manifest_text(plugin_path: &Path) -> Option<String> {
+    use crate::build::cloud_readiness::{read_to_string_with_materialize_wait, INTERACTIVE_DEADLINE};
+    read_to_string_with_materialize_wait(&plugin_path.join("manifest.json"), INTERACTIVE_DEADLINE).ok()
 }
 
 /// Compute SHA-256 hash of embedded bundled plugin files.

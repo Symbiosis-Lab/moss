@@ -26,7 +26,7 @@
  *   npx playwright test -c playwright/reading-scale-order.config.ts
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 /** Descending order is the assertion, so this array IS the contract. */
 const LEVELS = ["title", "h1", "h2", "h3", "h4", "body", "h5", "h6", "caption"] as const;

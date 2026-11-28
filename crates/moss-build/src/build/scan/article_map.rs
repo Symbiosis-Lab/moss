@@ -24,33 +24,7 @@ use specta::Type;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Convert file path to pretty URL format.
-///
-/// Must match frontend `extractDisplayPath()` behavior exactly:
-/// - `foo/bar/index.html` → `foo/bar/` (WITH trailing slash for directory-style)
-/// - `foo/bar.html` → `foo/bar` (NO trailing slash for file-style)
-/// - Leading slashes are stripped
-///
-/// # Examples
-/// ```ignore
-/// assert_eq!(to_pretty_url("news/article/index.html"), "news/article/");
-/// assert_eq!(to_pretty_url("posts/hello.html"), "posts/hello");
-/// ```
-pub fn to_pretty_url(file_path: &str) -> String {
-    let path = file_path.trim_start_matches('/');
-    if path == "index.html" {
-        // Root homepage: "index.html" -> "" (becomes "/" when nav prepends slash)
-        String::new()
-    } else if path.ends_with("/index.html") {
-        // "foo/bar/index.html" -> "foo/bar/"
-        path.strip_suffix("index.html").unwrap().to_string()
-    } else if path.ends_with(".html") {
-        // "foo/bar.html" -> "foo/bar" (NO trailing slash!)
-        path.strip_suffix(".html").unwrap().to_string()
-    } else {
-        path.to_string()
-    }
-}
+pub use moss_core::resolve::output_url::to_pretty_url;
 
 // Lived in `plugins/types.rs` until 2026-08-17 because its *readers* are the
 // syndication plugins. But the build is what fills it and what persists it —
@@ -106,6 +80,11 @@ pub struct ArticleInfo {
     /// copy of it is its text, not a titled article.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub untitled: bool,
+
+    /// A page reached only by its link (`search_engines: false`): no copy of
+    /// it goes anywhere, whatever its channel choices say.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_from_search_engines: bool,
 }
 
 /// Mapping from URL path to article source information
@@ -125,6 +104,10 @@ pub struct ArticleMap {
     /// link-target completion both read it).
     #[serde(default)]
     pub page_titles: HashMap<String, String>,
+    /// Uid of every `pages` entry that has one, same key: what follows a folder
+    /// home to its new address when the folder is renamed.
+    #[serde(default)]
+    pub page_uids: HashMap<String, String>,
 
     /// Rendered site names by pretty page URL, independent of content language.
     #[serde(default)]
@@ -522,6 +505,9 @@ pub fn build_article_map(
             let pretty_url = to_pretty_url(&doc.url_path);
             if let Some(ref src) = doc.source_path {
                 map.page_titles.insert(pretty_url.clone(), doc.title.clone());
+                if let Some(uid) = &doc.uid {
+                    map.page_uids.insert(pretty_url.clone(), uid.clone());
+                }
                 map.pages.insert(pretty_url, src.clone());
             }
             continue;
@@ -569,6 +555,7 @@ pub fn build_article_map(
             uid: doc.uid.clone(),
             syndicate: doc.channels(),
             untitled: doc.untitled,
+            hidden_from_search_engines: doc.hidden_from_search_engines(),
         };
         map.articles.insert(pretty_url, article_info);
     }

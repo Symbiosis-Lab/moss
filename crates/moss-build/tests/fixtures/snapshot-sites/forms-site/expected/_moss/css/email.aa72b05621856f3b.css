@@ -1,0 +1,106 @@
+@layer plugins {
+@layer shortcodes {
+  /* NOTE ON @layer: this file is injected via wrap_style_blocks_in_layer,
+     which double-wraps it in `@layer plugins{…}` → effective sub-layer
+     `plugins.shortcodes`, which OUTRANKS site.css's top-level `shortcodes`
+     layer. So a declaration here beats the same-specificity declaration in
+     site.css. That is why the footer subscribe form's right-anchor
+     (`margin-inline-start: auto`) MUST live here, not in site.css. */
+
+  /* Every moss-hosted subscribe form is now the `:::subscribe` shortcode
+     shape — `<div class="moss-subscribe"><form data-position="inline">` —
+     whether auto-injected into the footer or authored in body/footer.md.
+     Card container for the in-page (non-footer) case. Token-only. */
+  .moss-subscribe {
+    max-width: 32rem;
+    margin: var(--moss-space-lg) 0;
+    padding: var(--moss-space-md) var(--moss-space-lg);
+    border: 1px solid var(--moss-border-light);
+    border-radius: var(--moss-radius-md, 0.5rem);
+  }
+
+  /* In a footer, the subscribe form (auto-injected OR authored `:::subscribe`)
+     reads borderless + compact — not the in-page card above — and is
+     right-anchored on desktop. The footer becomes a flex row via
+     `footer.container:has(> .moss-subscribe)` in site.css; `margin-inline-start:
+     auto` (declared HERE so it wins the @layer cascade over the base
+     `.moss-subscribe` margin) pushes the form to the inline-end edge — which is
+     why it and the block margin below are the two logical `margin-inline`/
+     `margin-block` shorthands, not a physical `margin` shorthand: physical
+     `margin-left: auto` only coincides with `margin-inline-start: auto` under
+     horizontal-tb, and sets block-end 0 (so it doesn't inherit the base
+     `space-lg` block margin) and `min-width: 0` lets the form shrink below its
+     content width beside a verbose link list instead of wrapping early. */
+  footer .moss-subscribe {
+    max-width: 24rem;
+    min-width: 0;
+    margin-block: var(--moss-space-sm) 0;
+    margin-inline: auto 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  /* Mobile: drop the right-anchor and let the form read full-width from the
+     start edge (email input stacks above the button via the inline rules). */
+  @media (max-width: 32rem) {
+    footer .moss-subscribe {
+      margin-inline-start: 0;
+    }
+  }
+
+  /* Subscribed: the form is one short line, so it shrinks to it and keeps to the
+     row's end at every width, ending where the button ended. Important on the
+     basis only: a theme's field-sized flex basis sits in a later layer and
+     would otherwise wrap the word off the invitation's line. */
+  :root[data-moss-subscribed] footer .moss-subscribe {
+    flex: none !important;
+    margin-inline-start: auto;
+  }
+
+  /* A subscribe form that asks questions takes the form's measure, so long
+     choices keep to one line; in a footer it takes a row of its own. */
+  .moss-subscribe.moss-form {
+    max-width: 36rem;
+  }
+  footer .moss-subscribe.moss-form {
+    flex-basis: 100%;
+    margin-inline: 0;
+  }
+
+  .moss-subscribe-form[data-position="inline"] {
+    display: flex;
+    gap: var(--moss-space-sm);
+    align-items: baseline;
+  }
+  /* The success circle has no text to share a baseline with: centre the row
+     it shares with the confirmation. Specific enough to outrank the stacked
+     card's `align-items: stretch` below. */
+  .moss-subscribe .moss-subscribe-form[data-position="inline"][data-state="success"] {
+    align-items: center;
+  }
+
+  .moss-subscribe-form[data-position="inline"] .moss-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Under 32rem the in-page card stacks the field above the button; a footer form keeps one row. */
+  @media (max-width: 32rem) {
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"] {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    /* In a column, `flex: 1` would size the field's height and undercut the control size. */
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"] .moss-input {
+      flex: none;
+    }
+    /* Not in the success state: this layer outranks site.css's, so a width here would stretch the
+       success circle into a full-width oval. */
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
+      width: 100%;
+    }
+  }
+}
+
+}

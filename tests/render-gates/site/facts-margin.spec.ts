@@ -3,7 +3,7 @@
 // margin than the list needs: the list then stays in the flow under the
 // title, and nothing on the page scrolls sideways. Only a rendered page
 // resolves the content width and the list's geometry, so this measures boxes.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 
 const widenedUrl = `http://localhost:${gatePort('facts-margin:widened')}/court/`;

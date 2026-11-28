@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::build::components::nav::{compute_breadcrumb_segments, home_breadcrumb_setting, is_nav_bar_item_doc, parent_label_segment};
+use moss_core::page::nav::{breadcrumb_segments, home_breadcrumb_setting, is_nav_bar_page, parent_label_segment};
 use crate::build::facade::debug_hash;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -60,7 +60,7 @@ struct NavEntry<'a> {
 }
 
 /// Per-language digest of "which documents does this language's nav bar
-/// show, and in what order/label" — every field `is_nav_bar_item_doc`
+/// show, and in what order/label" — every field `is_nav_bar_page`
 /// branches on, plus the two display fields (`weight`, `label`) the bar
 /// renders. Recomputed from scratch every build and compared against the
 /// PREVIOUS build's map the same way `lang_globals`/`listing_globals`
@@ -76,7 +76,7 @@ struct NavEntry<'a> {
 pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> BTreeMap<String, String> {
     let mut by_lang: BTreeMap<String, Vec<NavEntry<'_>>> = BTreeMap::new();
     for doc in documents {
-        if !is_nav_bar_item_doc(doc, has_content_folders) {
+        if !is_nav_bar_page(doc, has_content_folders) {
             continue;
         }
         by_lang.entry(doc.lang.code().to_string()).or_default().push(NavEntry {
@@ -119,7 +119,7 @@ pub fn fold_term_nav(
 
 /// The document that serves as `lang`'s home page: `index.html` for the
 /// site's own language, `{lang.code()}/index.html` for any other —
-/// mirrors `render::html::find_homepage_doc` exactly (duplicated rather than
+/// mirrors `moss_core::page::site_page::edition_home` exactly (duplicated rather than
 /// shared because that function also falls back to the site homepage for a
 /// missing translation, which the two callers here must NOT do: a per-language
 /// digest that fell back would silently alias two languages onto one key).
@@ -146,7 +146,7 @@ fn every_language() -> [Language; 4] {
 }
 
 /// Per-language digest of that language's home-page title —
-/// [`render::html::localized_site_title`]'s exact input for a non-site
+/// `moss_core::page::site_page::localized_site_title`'s exact input for a non-site
 /// language, and `LayoutConfig`'s `site_name` for the site's own. Empty
 /// string (a stable, hashable value) when the language has no home page at
 /// all, so a home page's arrival or removal also moves the key.
@@ -161,7 +161,7 @@ pub fn home_title_globals(documents: &[ParsedDocument], site_lang: Language) -> 
 }
 
 /// Digest of the ONE global breadcrumb enable/disable toggle —
-/// `compute_breadcrumb_segments` (`components/nav.rs`) reads `all_docs`'s
+/// `breadcrumb_segments` (`components/nav.rs`) reads `all_docs`'s
 /// literal `index.html` (the root homepage) for this on every page it
 /// renders, for every language: there is no per-language toggle to key by,
 /// unlike [`nav_globals`] and [`home_title_globals`]. A single-entry map
@@ -174,7 +174,7 @@ pub fn home_breadcrumb_globals(documents: &[ParsedDocument]) -> BTreeMap<String,
 }
 
 /// Every OTHER document whose breadcrumb trail names `folder`'s label as an
-/// ancestor segment — the descendants `compute_breadcrumb_segments`
+/// ancestor segment — the descendants `breadcrumb_segments`
 /// (`components/nav.rs`) walks back up to when it renders THEIR trail, which
 /// is the only reason a folder-index's `label` edit reaches a page other than
 /// itself. Filtered to documents that actually show a breadcrumb trail today
@@ -199,8 +199,8 @@ pub fn breadcrumb_ancestor_descendants(
         // nav.rs`'s own doc), so a descendant that happens to be one must be
         // treated as showing a trail today even when the site-wide answer
         // alone would have said no.
-        .filter(|d| {
-            compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some()
+        .filter(|&d| {
+            breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some()
                 || parent_label_segment(d, documents, home_setting).is_some()
         })
         .map(|d| crate::build::facade::PageKey::for_document(d).cache_key().into_owned())
@@ -246,7 +246,7 @@ pub fn strip_typed_frontmatter_keys(raw: &mut std::collections::BTreeMap<String,
 /// exactly those two fields so that gap stays on the safe (Full) side rather
 /// than silently shipping a stale footer link on every OTHER page.
 /// `series` similarly turns unsafe on a folder document, because a series
-/// parent's OWN `series:`/chrome-default is read by every child's rendered
+/// parent's OWN `series:` is read by every child's rendered
 /// prev/next block through no digest at all — only a listed CHILD's `series`
 /// (its own opt-out) is covered, via the group-digest loop's blanket
 /// inclusion of every non-blanked field (`listing::project_child`).

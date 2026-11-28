@@ -148,10 +148,13 @@ pub fn spawn_served_build_sigint_ignored(site_dir: &Path, moss_home: &Path, extr
     spawn_piped(command, moss_home)
 }
 
+/// Logs at info unless the caller set `MOSS_LOG_LEVEL` on `command`.
 pub fn spawn_piped(mut command: Command, moss_home: &Path) -> ServedChild {
+    if command.get_envs().all(|(key, _)| key != "MOSS_LOG_LEVEL") {
+        command.env("MOSS_LOG_LEVEL", "info");
+    }
     let mut child = command
         .env("MOSS_HOME", moss_home)
-        .env("MOSS_LOG_LEVEL", "info")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -237,4 +240,47 @@ pub fn port_from_url_line(line: &str) -> u16 {
         .trim_end_matches(|c: char| !c.is_ascii_digit())
         .parse()
         .unwrap_or_else(|e| panic!("could not parse a port out of {line:?}: {e}"))
+}
+
+/// A PNG of `side`×`side` noise, stored uncompressed: slow to decode and encode,
+/// quick to write.
+#[allow(dead_code)]
+pub fn noise_png(path: &std::path::Path, side: u32, seed: u32) {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend(kind);
+        out.extend(data);
+        let crc = out[start..].iter().fold(!0u32, |mut c, &b| {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            c
+        });
+        out.extend((!crc).to_be_bytes());
+    }
+    let mut state = seed | 1;
+    let mut raw = Vec::with_capacity((side * (side * 3 + 1)) as usize);
+    for _ in 0..side {
+        raw.push(0);
+        for _ in 0..side * 3 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            raw.push(state as u8);
+        }
+    }
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+    z.write_all(&raw).unwrap();
+    let mut header = Vec::new();
+    header.extend(side.to_be_bytes());
+    header.extend(side.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut png, b"IHDR", &header);
+    chunk(&mut png, b"IDAT", &z.finish().unwrap());
+    chunk(&mut png, b"IEND", &[]);
+    std::fs::write(path, png).unwrap();
 }

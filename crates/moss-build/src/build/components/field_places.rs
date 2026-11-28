@@ -6,7 +6,7 @@
 //! page's language and typesetting. Pure: page links arrive as a closure.
 
 use crate::build::components::field_text::{datetime_attr, number_text, value_text};
-use crate::build::components::{child_list, child_summary};
+use crate::build::components::child_list;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
@@ -181,7 +181,6 @@ pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocume
 /// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
 pub struct EndCards<'a> {
     pub graph: Option<&'a ContentGraph>,
-    pub root_path: &'a str,
     pub dir_overrides: &'a std::collections::HashMap<String, String>,
     pub typesetting: Option<&'a str>,
     pub now: chrono::NaiveDateTime,
@@ -194,12 +193,12 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
     let card = |decl: &FieldDecl, link: &PageLink| {
         let target = linked_page(doc, all_docs, cards.graph, link.target.page()?)?;
         let strip = Some(decl.pictures).filter(|n| *n >= 2);
-        let mut props = child_list::props_for_document(target, all_docs, cards.root_path, cards.dir_overrides, cards.typesetting, cards.now, strip);
+        let mut props = moss_core::page::card::props_for(target, all_docs, &child_list::BuildCards::new(cards.dir_overrides, cards.typesetting, cards.now), strip);
         if let Some(headline) = &target.opening_heading {
             props.title = headline.clone();
         }
         // A hand-picked card names no date: the axis that says nothing about one.
-        let html = child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight);
+        let html = moss_core::render::cards::summary::render_with_sort(&props, doc.lang, cards.typesetting, &crate::build::media::cover::BuildPictures { root: None, lookup: Some(cards.media_lookup) }, moss_core::sort::SortAxis::Weight);
         Some((html, props.is_collection()))
     };
     end_html(&doc.placed_fields, doc.lang, &card)

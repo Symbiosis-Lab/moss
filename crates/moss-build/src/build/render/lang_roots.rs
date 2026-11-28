@@ -2,7 +2,7 @@
 //!
 //! Maps the language-homepage docs to `LangRoot`s: the site-default language's
 //! homepage at `index.html`, and every other language `L` at
-//! `<L.code()>/index.html`. Same structure `find_homepage_doc` (html.rs) and the
+//! `<L.code()>/index.html`. Same structure `edition_home` (moss-core `page::site_page`) and the
 //! per-language cascade already rely on, so the switcher can't drift from the
 //! rest of the build. Shared by `html.rs` and `blocking.rs`.
 
@@ -10,47 +10,12 @@ use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use crate::i18n::site_languages::LangRoot;
 
-/// True for a root-level homepage url_path: `index.html` or `<seg>/index.html`
-/// where `<seg>` is a language tree (exactly one segment before index.html).
-/// `<lang>/sub/index.html` is a sub-page, not a language root.
-///
-/// `pub(crate)` beyond this module because `render::incremental::verdict`
-/// needs the same structural test: a homepage root's own `lang` feeds
-/// [`site_lang_roots`]'s nav-switcher entry for every page site-wide, so a
-/// global-invalidator digest over exactly this set of docs must not drift
-/// from the set this function itself walks — see `lang_switcher_globals`.
-pub(crate) fn is_language_root(url_path: &str) -> bool {
-    if url_path == "index.html" {
-        return true;
-    }
-    match url_path.strip_suffix("/index.html") {
-        // Single segment (no further '/') AND a recognized language tree.
-        Some(prefix) => {
-            !prefix.contains('/') && moss_core::home::lang_tree_prefix(url_path).is_some()
-        }
-        None => false,
-    }
-}
+pub(crate) use moss_core::home::is_language_root;
 
 /// Whether `doc` is a home page: a language root, or the page elected home in
 /// place of a missing `index.md`.
 pub(crate) fn is_home(doc: &crate::build::types::ParsedDocument) -> bool {
     is_language_root(&doc.url_path) || doc.is_home_override
-}
-
-/// The edition home a `children:` reference names by its file stem
-/// (`[[Field Notes]]` for the root home, `[[Notes]]` for `en/Notes.md`), if any.
-/// Such a listing means what that home's own listing means: its tree, with its
-/// edition scoping (`folder_embed::home_defaults`).
-pub(crate) fn named_edition_home<'a>(reference: &str, docs: &'a [crate::build::types::ParsedDocument]) -> Option<&'a crate::build::types::ParsedDocument> {
-    let stem = crate::build::markdown::frontmatter_ref_to_stem(reference);
-    docs.iter().find(|d| {
-        is_language_root(&d.url_path)
-            && d.source_path
-                .as_deref()
-                .and_then(|p| std::path::Path::new(p).file_stem()?.to_str())
-                .is_some_and(|s| s.eq_ignore_ascii_case(&stem))
-    })
 }
 
 /// Give every document that declared no language of its own the SITE's tag,
@@ -248,7 +213,7 @@ pub(crate) fn site_publishes_multiple_languages(
 ///   `translationKey`), computed from an overlapping but not identical corpus.
 /// - `nav_footer_lang_membership`: `(url_path, lang)` for every doc
 ///   `components::nav::generate_navigation`/`generate_footer` can select —
-///   nav-bar-eligible docs (`is_nav_bar_item_doc`) and footer-eligible docs
+///   nav-bar-eligible docs (`is_nav_bar_page`) and footer-eligible docs
 ///   (`footer == Some(true)`). Both filter the WHOLE corpus by
 ///   `doc.lang == effective_lang`/`doc.current_lang` on every render
 ///   (`components/nav.rs:183-190`, `:357-361`), so any OTHER document's lang
@@ -278,8 +243,8 @@ pub(crate) fn lang_switcher_globals(
     let email_sections = crate::build::features::email::derive_language_sections(all_docs);
     let nav_footer_membership: Vec<(&str, Language)> = all_docs
         .iter()
-        .filter(|doc| {
-            crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders)
+        .filter(|&doc| {
+            moss_core::page::nav::is_nav_bar_page(doc, has_content_folders)
                 || doc.footer == Some(true)
         })
         .map(|doc| (doc.url_path.as_str(), doc.lang))

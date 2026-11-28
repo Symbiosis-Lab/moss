@@ -31,7 +31,7 @@ fn site(pages: &[(&str, &str)]) -> Site {
 const OWNER: &str = "site-a";
 
 async fn publish_to(dest: &dyn Destination, site: &Site) -> Result<Published, String> {
-    publish(dest, OWNER, site.dir.path(), &site.files, &crate::deploy::progress::silent(), false).await
+    publish(dest, OWNER, site.dir.path(), &site.files, &crate::deploy::progress::silent(), Allow::default()).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +149,7 @@ async fn a_destination_another_site_published_to_is_refused_before_anything_is_w
     publish_to(&dest, &site(V1)).await.unwrap();
     let other = site(V2);
 
-    let refused = publish(&dest, "site-b", other.dir.path(), &other.files, &crate::deploy::progress::silent(), false)
+    let refused = publish(&dest, "site-b", other.dir.path(), &other.files, &crate::deploy::progress::silent(), Allow::default())
         .await
         .unwrap_err();
 
@@ -157,6 +157,28 @@ async fn a_destination_another_site_published_to_is_refused_before_anything_is_w
     for (path, body) in V1 {
         assert_eq!(read(out.path(), path).as_deref(), Some(*body), "{path}");
     }
+}
+
+#[tokio::test]
+async fn taking_over_publishes_beside_the_other_sites_files_and_owns_only_its_own() {
+    let out = tempfile::tempdir().unwrap();
+    let dest = FolderDestination::new(out.path()).unwrap();
+    publish_to(&dest, &site(V1)).await.unwrap();
+    let other = site(&[("index.html", "<h1>b</h1>")]);
+    let take_over = Allow { take_over: true, ..Allow::default() };
+
+    let published = publish(&dest, "site-b", other.dir.path(), &other.files, &crate::deploy::progress::silent(), take_over)
+        .await
+        .unwrap();
+
+    assert_eq!(published, Published { uploaded: 1, removed: 0 });
+    assert_eq!(read(out.path(), "index.html").as_deref(), Some("<h1>b</h1>"));
+    for (path, body) in V1.iter().filter(|(path, _)| *path != "index.html") {
+        assert_eq!(read(out.path(), path).as_deref(), Some(*body), "{path}");
+    }
+    let record = Record::parse(&std::fs::read(out.path().join(RECORD_NAME)).unwrap()).unwrap();
+    assert_eq!(record.owner(), "site-b");
+    assert_eq!(record.files().keys().collect::<Vec<_>>(), ["index.html"]);
 }
 
 #[tokio::test]
@@ -225,7 +247,7 @@ async fn a_publish_that_would_delete_most_of_the_site_is_refused_before_any_byte
     assert_eq!(std::fs::read(out.path().join(RECORD_NAME)).unwrap(), before);
 
     let sink = crate::deploy::progress::silent();
-    let allowed = publish(&dest, OWNER, collapsed.dir.path(), &collapsed.files, &sink, true).await.unwrap();
+    let allowed = publish(&dest, OWNER, collapsed.dir.path(), &collapsed.files, &sink, Allow { mass_removal: true, ..Allow::default() }).await.unwrap();
     assert_eq!(allowed.removed, 40);
 }
 

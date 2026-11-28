@@ -6,7 +6,7 @@
  * Fixture: playwright/header-scroll.config.ts → tests/e2e/helpers/header-scroll-site.ts
  * Run via: bash scripts/render-gates.sh header-scroll
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { COVER_PATH, TARGET_ID } from '../../e2e/helpers/header-scroll-site';
 

@@ -4,7 +4,7 @@
 // higher specificity, so on a list listing the token was silently ignored:
 // an artwork site's paintings kept cropping to blank paper (a real
 // artwork site, 2026-09-23) while its grid cards obeyed.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

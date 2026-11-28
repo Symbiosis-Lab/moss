@@ -24,7 +24,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-labels.config.ts
  */
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "../../support/browser-test";
 
 interface Box {
   x: number;

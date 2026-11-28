@@ -12,7 +12,7 @@
  */
 import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
-import { NAV_SPLIT_ORDER_GATE } from '../tests/e2e/helpers/gate-sites';
+import { NAV_SPLIT_ORDER_GATE, NAV_SPLIT_ORDER_NAV_GATE, NAV_SPLIT_ORDER_SHORT_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
 import { gatePort } from './gate-ports';
 
@@ -25,5 +25,9 @@ export default defineGateConfig({
     baseURL: `http://localhost:${PORT}/`,
     colorScheme: 'light',
   },
-  webServer: { serveDir, port: PORT },
+  webServer: [
+    { serveDir, port: PORT },
+    { serveDir: buildScratchSite(NAV_SPLIT_ORDER_NAV_GATE), port: gatePort('nav-split-order:nav') },
+    { serveDir: buildScratchSite(NAV_SPLIT_ORDER_SHORT_GATE), port: gatePort('nav-split-order:short') },
+  ],
 });

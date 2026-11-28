@@ -58,5 +58,23 @@ export const Platform = { isDesktopApp: false };
 export class Events {}
 export class MarkdownView {}
 export { editorInfoField, editorLivePreviewField } from "./editor-info-stub";
-export class Menu {}
+/** Records the items a menu was given and the last menu shown. */
+export class Menu {
+  static shown: Menu | null = null;
+  items: { title: string; disabled: boolean }[] = [];
+  addItem(build: (item: Record<string, (v?: unknown) => unknown>) => void): this {
+    const row = { title: "", disabled: false };
+    const item: Record<string, (v?: unknown) => unknown> = {
+      setTitle: (t) => { row.title = String(t); return item; },
+      setIcon: () => item,
+      onClick: () => item,
+      setDisabled: (d) => { row.disabled = d === true; return item; },
+    };
+    build(item);
+    this.items.push(row);
+    return this;
+  }
+  addSeparator(): this { return this; }
+  showAtMouseEvent(): void { Menu.shown = this; }
+}
 export const debounce = <T extends unknown[]>(fn: (...args: T) => unknown) => (...args: T) => void fn(...args);

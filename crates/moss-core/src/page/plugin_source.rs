@@ -14,6 +14,15 @@ pub struct PageContributions {
     pub listing_styles: Option<BTreeMap<String, ListingStyleContribution>>,
     /// Only the names: what a block does is the build's concern.
     pub blocks: Option<BTreeMap<String, serde::de::IgnoredAny>>,
+    pub derivations: Option<BTreeMap<String, DerivationClaim>>,
+}
+
+/// The file types one derivation reads and the fragments it may produce;
+/// how it runs is the build's concern.
+#[derive(Debug, Deserialize)]
+pub struct DerivationClaim {
+    pub accepts: Vec<String>,
+    pub fragments: BTreeMap<String, serde::de::IgnoredAny>,
 }
 
 #[derive(Debug, Deserialize)]

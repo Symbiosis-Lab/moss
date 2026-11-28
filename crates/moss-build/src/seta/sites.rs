@@ -8,7 +8,7 @@ use super::client::{MossSetaClient, SetaError};
 
 // Sizing policy (request size, concurrency, timeouts) lives in `upload_policy`,
 // pure arithmetic tested without a server; the chunk loop is `chunked_upload`.
-use super::upload_policy::{manifest_request_timeout, UPLOAD_REQUEST_TIMEOUT};
+use super::upload_policy::UPLOAD_REQUEST_TIMEOUT;
 
 /// Response from POST /api/sites (register a site).
 ///
@@ -24,93 +24,6 @@ pub struct RegisterSiteResponse {
     pub site_id: String,
     #[serde(default)]
     pub url: Option<String>,
-}
-
-/// Response from POST /api/sites/{id}/sync (manifest diff).
-///
-/// Wire contract (pinned across moss/moss-seta, 2026-07-22):
-///   { "need": string[], "remove": string[], "server_total": number, "internal_remove"?: number }
-/// `remove` excludes `_moss/` internal derived assets on new setas (filtered
-/// at the server's response boundary); it is informational only — actual file
-/// removal happens implicitly via the server's generation swap at commit.
-/// `internal_remove` (optional) counts the `_moss/` paths that filter dropped.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SyncManifestResponse {
-    pub need: Vec<String>,
-    pub remove: Vec<String>,
-    /// TOTAL file count of the server's live manifest, UNFILTERED (includes
-    /// `_moss/` files). The true denominator for the client's mass-removal
-    /// deploy guard. `serde(default)` because older seta servers omit it.
-    #[serde(default)]
-    pub server_total: Option<u64>,
-    /// How many `_moss/` paths the server left out of `remove`. They are not
-    /// wipe evidence, but a publish whose only change is one of them
-    /// vanishing still has to commit. Absent on older servers, which counts
-    /// as 0.
-    #[serde(default)]
-    pub internal_remove: Option<u64>,
-    /// `true` when the server will serve the manifest's `gated` files to
-    /// members only. A server that does not say so is sent no gated file.
-    #[serde(default)]
-    pub gated: Option<bool>,
-}
-
-impl SyncManifestResponse {
-    /// Whether this publish changes anything the new generation must carry:
-    /// files to upload, content to remove, or theme and internal files that
-    /// disappeared. When false the live site already matches.
-    pub fn needs_commit(&self) -> bool {
-        !self.need.is_empty() || !self.remove.is_empty() || self.internal_remove.unwrap_or(0) > 0
-    }
-}
-
-/// The body of POST /api/sites/{id}/sync. A manifest with members-only files
-/// names each one under `gated`, by its path in `files`, with who may read it
-/// and what the address answers for anyone else:
-///
-///   "gated": { "_gated/post/index.html": { "access": "subscribers", "fallback": "projection" },
-///              "_gated/map/rows.json":   { "access": "subscribers", "fallback": "unauthorized" } }
-///
-/// A manifest without one sends no `gated` key.
-pub(crate) fn sync_body(
-    manifest: &std::collections::HashMap<String, String>,
-    sizes: &std::collections::HashMap<String, u64>,
-) -> serde_json::Value {
-    with_gated(serde_json::json!({ "files": manifest, "sizes": sizes }), manifest)
-}
-
-/// The body of POST /api/sites/{id}/commit, with the same `gated` key as the sync.
-pub(crate) fn commit_body(manifest: &std::collections::HashMap<String, String>, generation_id: &str) -> serde_json::Value {
-    with_gated(serde_json::json!({ "manifest": manifest, "generation_id": generation_id }), manifest)
-}
-
-fn with_gated(mut body: serde_json::Value, manifest: &std::collections::HashMap<String, String>) -> serde_json::Value {
-    let gated = crate::build::emit::members::gated_entries(manifest);
-    if !gated.is_empty() {
-        body["gated"] = serde_json::json!(gated);
-    }
-    body
-}
-
-/// Response from POST /api/sites/{id}/commit (finalize sync).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CommitResponse {
-    pub url: String,
-    /// Despite the name, the number of files in the site after this publish,
-    /// changed or not. It is not how many files this publish transferred; the
-    /// client counts those itself from the manifest comparison.
-    pub files_updated: u32,
-    pub files_removed: u32,
-    /// Server timestamp (Unix seconds) of the deployment.
-    pub timestamp: u64,
-    /// The generation_id now live on the server after this commit.
-    ///
-    /// Echoed back from the server so the client can detect deploy skew
-    /// (client published generation A but server is now live on B — possible
-    /// if two deploys raced). Uses `serde(default)` so an older seta server
-    /// that omits this field still deserializes cleanly.
-    #[serde(default)]
-    pub generation_id: Option<String>,
 }
 
 /// Response from GET /api/sites/{id}/generation: which generation the site is
@@ -164,42 +77,18 @@ pub struct SiteDataResponse {
     pub subscribers: Option<Vec<String>>,
 }
 
-/// A single raw analytics event row returned by GET /api/sites/{id}/events.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EventRow {
-    pub id: u64,
-    pub ts: u64,
-    pub path: String,
-    pub referrer: Option<String>,
-    pub country: Option<String>,
-    pub browser: Option<String>,
-    pub os: Option<String>,
-    pub screen: Option<String>,
-    #[serde(rename = "utmSource")]
-    pub utm_source: Option<String>,
-    #[serde(rename = "utmMedium")]
-    pub utm_medium: Option<String>,
-    pub event: Option<String>,
-    /// Daily visitor code, a hash the server computes per reader and day.
-    /// Rows written before the server carried it have none.
-    pub visitor: Option<String>,
-    #[serde(rename = "utmCampaign")]
-    pub utm_campaign: Option<String>,
-    /// `pageview`, `click`, `engage`, `out` or `download`. Absent from servers
-    /// older than row kinds; readers then take a null `event` as a pageview.
-    pub kind: Option<String>,
-    /// Engage rows only: deepest quarter of the page reached (25 to 100).
-    pub scroll: Option<u8>,
-    /// Engage rows only: time on screen as a range, such as `10-30s`.
-    pub visible: Option<String>,
-}
-
-/// Response from GET /api/sites/{id}/events (batch of raw events for delta sync).
+/// One page of a site's records from a read-back route (`?since=&limit=` →
+/// `{records, cursor, more}`). Records stay as seta wrote them, so a field
+/// it adds reaches the folder without a release of moss. The analytics route
+/// names its records `events`; comments carry `answers` for the pending ids asked about.
 #[derive(Debug, Clone, Deserialize)]
-pub struct EventsBatchResponse {
-    pub events: Vec<EventRow>,
+pub struct RecordsPage {
+    #[serde(alias = "events")]
+    pub records: Vec<serde_json::Value>,
     pub cursor: u64,
     pub more: bool,
+    #[serde(default)]
+    pub answers: Vec<serde_json::Value>,
 }
 
 impl MossSetaClient {
@@ -240,117 +129,6 @@ impl MossSetaClient {
         self.post_json("/api/sites", &serde_json::json!({ "id": site_id })).await
     }
 
-    /// Send manifest (path -> hash) to server, receive list of files to upload/remove.
-    ///
-    /// # Arguments
-    /// * `site_id` - Site identifier
-    /// * `manifest` - Map of relative file paths to content hashes
-    /// * `sizes` - Byte length of each regular file in `manifest`, so the server
-    ///   can refuse a site over its storage cap before any upload. A server
-    ///   that predates the field ignores it.
-    /// * `generation_id` - The deploy generation being synced; sent as `X-Moss-Generation`
-    ///   so the server scopes the diff to the correct generation directory.
-    pub async fn sync_manifest(
-        &self,
-        site_id: &str,
-        manifest: &std::collections::HashMap<String, String>,
-        sizes: &std::collections::HashMap<String, u64>,
-        generation_id: &str,
-    ) -> Result<SyncManifestResponse, SetaError> {
-        let path = format!("/api/sites/{}/sync", urlencoding::encode(site_id));
-
-        log::debug!(target: "seta", "POST {}{} ({} files in manifest) generation={}", self.base_url, path, manifest.len(), generation_id);
-
-        // Serialized ONCE, outside the retry, for two reasons: a retry then
-        // re-sends the identical buffer instead of re-encoding a 10k-entry map,
-        // and the exact body length is what sets the deadline below.
-        let body = Bytes::from(
-            serde_json::to_vec(&sync_body(manifest, sizes)).map_err(|e| SetaError::Parse(e.to_string()))?,
-        );
-        // The deadline scales with the body (I1). A flat 150 s here was a
-        // deadline on the SITE'S SIZE: a 10k-file manifest cannot be POSTed in
-        // 150 s on a slow uplink, so that site could never publish at any
-        // bandwidth. See `upload_policy::manifest_request_timeout`.
-        let timeout = manifest_request_timeout(body.len() as u64);
-
-        // Retried with an upload's budget: a large site's manifest is a
-        // sizeable body on a slow uplink, and one edge blip here would fail the
-        // publish before any content moved. Each attempt signs afresh.
-        let budget = crate::seta::client::RetryBudget::new();
-        let (this, path_ref, body_ref) = (self, path.as_str(), &body);
-        let response = crate::seta::client::retry_transient(
-            "sync manifest",
-            &budget,
-            || async move {
-                let request = this
-                    .signed(Method::POST, path_ref, body_ref.clone())?
-                    .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .header("X-Moss-Generation", generation_id);
-                let resp = this.send(request).await?;
-                if !resp.status().is_success() {
-                    return Err(SetaError::from_failed_response(resp).await);
-                }
-                Ok(resp)
-            },
-        )
-        .await?;
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
-    }
-
-    /// Upload a single file to the site.
-    ///
-    /// # Arguments
-    /// * `site_id` - Site identifier
-    /// * `file_path` - Relative path within the site (e.g., "index.html")
-    /// * `body` - Raw file contents
-    /// * `generation_id` - The deploy generation being uploaded; sent as `X-Moss-Generation`
-    ///   so the server writes the file into the correct generation directory.
-    /// * `stats` - The deploy's shared [`upload_policy::Throughput`], counting
-    ///   attempts for the upload summary. `None` from contexts with no
-    ///   deploy-level accounting (tests).
-    pub async fn upload_file(
-        &self,
-        site_id: &str,
-        file_path: &str,
-        body: Vec<u8>,
-        generation_id: &str,
-        stats: Option<&crate::seta::upload_policy::Throughput>,
-    ) -> Result<(), SetaError> {
-        let path = format!(
-            "/api/sites/{}/files/{}",
-            urlencoding::encode(site_id),
-            urlencoding::encode(file_path),
-        );
-        log::debug!(target: "seta", "PUT {}{} ({} bytes) generation={}", self.base_url, path, body.len(), generation_id);
-
-        // `Bytes` so each retry re-sends the same buffer without copying it.
-        // Each attempt signs afresh: a signed header is good for one request.
-        let body = Bytes::from(body);
-        let (this, path, body) = (self, path.as_str(), &body);
-        let budget = crate::seta::client::RetryBudget::new();
-        crate::seta::client::retry_transient(file_path, &budget, || async move {
-            let request = this.signed(Method::PUT, path, body.clone())?;
-            if let Some(tp) = stats {
-                tp.note_request();
-            }
-            let response = this.send(request
-                .timeout(UPLOAD_REQUEST_TIMEOUT)
-                .header("Content-Type", "application/octet-stream")
-                .header("X-Moss-Generation", generation_id))
-                .await?;
-            if !response.status().is_success() {
-                return Err(SetaError::from_failed_response(response).await);
-            }
-            if let Some(tp) = stats {
-                tp.note_request_ok();
-            }
-            Ok(())
-        })
-        .await
-    }
-
     /// Upload a symlink entry to the site.
     ///
     /// The symlink is encoded as a regular PUT to `/api/sites/:id/files/<path>`
@@ -360,8 +138,8 @@ impl MossSetaClient {
     /// (it follows symlinks by default in v2.7+).
     ///
     /// # Arguments
-    /// * `generation_id` - The deploy generation being uploaded; sent as `X-Moss-Generation`
-    ///   so the server writes the symlink into the correct generation directory.
+    /// * `generation_id` - The deploy id; sent as `X-Moss-Generation` so the
+    ///   server stages the link in that deploy.
     pub async fn upload_symlink(
         &self,
         site_id: &str,
@@ -441,68 +219,7 @@ impl MossSetaClient {
         response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
     }
 
-    /// Commit (finalize) the sync, making uploaded files live.
-    ///
-    /// # Arguments
-    /// * `site_id` - Site identifier
-    /// * `manifest` - The final manifest (path → hash) to commit
-    pub async fn commit_sync(
-        &self,
-        site_id: &str,
-        manifest: &std::collections::HashMap<String, String>,
-        generation_id: &str,
-    ) -> Result<CommitResponse, SetaError> {
-        let path = format!("/api/sites/{}/commit", urlencoding::encode(site_id));
-
-        log::debug!(target: "seta", "POST {}{} ({} files)", self.base_url, path, manifest.len());
-
-        // Retried for the same reason as sync_manifest: an edge blip on the
-        // commit is the most expensive possible moment to fail, because every
-        // byte has already been uploaded. 5xx and 429 are transient; the 422
-        // completeness gate is a 4xx and still fails fast, which is correct —
-        // retrying an incomplete generation cannot make it complete.
-        // Same shape as sync_manifest: serialize once, and let the deadline
-        // scale with the body rather than with nothing (I1).
-        let body = Bytes::from(
-            serde_json::to_vec(&commit_body(manifest, generation_id)).map_err(|e| SetaError::Parse(e.to_string()))?,
-        );
-        let timeout = manifest_request_timeout(body.len() as u64);
-
-        let budget = crate::seta::client::RetryBudget::new();
-        let (this, path_ref, body_ref) = (self, path.as_str(), &body);
-        let response = crate::seta::client::retry_transient(
-            "commit deploy",
-            &budget,
-            || async move {
-                let request = this
-                    .signed(Method::POST, path_ref, body_ref.clone())?
-                    .timeout(timeout)
-                    .header("Content-Type", "application/json");
-                let resp = this.send(request).await?;
-                if !resp.status().is_success() {
-                    return Err(SetaError::from_failed_response(resp).await);
-                }
-                Ok(resp)
-            },
-        )
-        .await?;
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
-    }
-
-    /// Returns the server's currently-live generation id, or None when the site
-    /// has no live generation (never deployed) OR the server doesn't support the
-    /// endpoint (old seta → 404). Used to short-circuit a no-op redeploy.
-    ///
-    /// On 404 → `Ok(None)` (old server, no endpoint).
-    /// On 2xx → parse and return `Ok(resp.generation_id)` (which is itself
-    ///   `None` for a never-deployed site).
-    /// On other non-2xx → `Err(SetaError)` (caller treats any Err as "proceed").
-    pub async fn get_live_generation(&self, site_id: &str) -> Result<Option<String>, SetaError> {
-        Ok(self.live_generation(site_id).await?.generation_id)
-    }
-
-    /// [`Self::get_live_generation`] with the time the generation went live,
+    /// The generation the site serves and the time it went live,
     /// which `moss deploy` compares with this folder's last publish. 404 is
     /// `LiveGeneration::default()` — nothing known, for the same reason.
     pub async fn live_generation(&self, site_id: &str) -> Result<LiveGeneration, SetaError> {
@@ -562,22 +279,34 @@ impl MossSetaClient {
         self.get_json(&format!("/api/sites/{}/data", urlencoding::encode(site_id))).await
     }
 
-    /// Pull a single page of raw analytics events for delta sync.
-    ///
-    /// Calls `GET /api/sites/{id}/events?since={cursor}&limit={limit}` with BIP-340
-    /// authentication. Signed over the full path including query parameters.
-    ///
-    /// # Arguments
-    /// * `site_id` - Site identifier
-    /// * `since` - Cursor (event ID) — fetch events with id > since
-    /// * `limit` - Maximum number of events to return per page
-    pub async fn pull_events(
-        &self,
-        site_id: &str,
-        since: u64,
-        limit: u32,
-    ) -> Result<EventsBatchResponse, SetaError> {
+    /// A page of the site's analytics events after `since`.
+    pub async fn pull_events(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
         self.get_json(&format!("/api/sites/{}/events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
+    /// A page of the site's subscriber stream after `since`: consent,
+    /// suppression and form entries, each with its subject's email.
+    pub async fn pull_subscriber_events(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/api/sites/{}/subscriber-events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
+    /// A page of the site's request form entries after `since`.
+    pub async fn pull_form_entries(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/api/sites/{}/form-entries?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
+    }
+
+    /// A page of the site's comments after `since`, with each commenter's
+    /// email, and the answers for the `pending` ids (at most 200).
+    pub async fn pull_comment_records(&self, site_id: &str, since: u64, limit: u32, pending: &[u64]) -> Result<RecordsPage, SetaError> {
+        let ids: Vec<String> = pending.iter().map(u64::to_string).collect();
+        let ask = if ids.is_empty() { String::new() } else { format!("&pending={}", ids.join(",")) };
+        self.get_json(&format!("/api/sites/{}/comment-records?since={}&limit={}{}", urlencoding::encode(site_id), since, limit, ask)).await
+    }
+
+    /// A page of the site's booking changes after `since`, from commerce:
+    /// call it on [`MossSetaClient::at`] commerce's address.
+    pub async fn pull_bookings(&self, site_id: &str, since: u64, limit: u32) -> Result<RecordsPage, SetaError> {
+        self.get_json(&format!("/sites/{}/bookings?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
     }
 }
 

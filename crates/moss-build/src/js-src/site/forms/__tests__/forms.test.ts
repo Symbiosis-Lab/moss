@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { hydrateForm, navigation, prefill } from '../forms.js';
 
+const { solveCaptcha } = vi.hoisted(() => ({ solveCaptcha: vi.fn(async () => true) }));
+vi.mock('../../subscribe/captcha.js', () => ({ solveCaptcha }));
+
 const COPY = `<div hidden>
   <span data-copy="required">This field is required.</span>
   <span data-copy="format">Check this value.</span>
@@ -45,7 +48,6 @@ function mount(): HTMLFormElement {
       <p class="moss-form__error" id="booking-news-error" hidden></p>
     </div>
     <input type="hidden" name="_next" value="/booking/received/">
-    <div class="moss-form__hp" aria-hidden="true"><input type="text" name="_hp" value="" tabindex="-1" autocomplete="off"></div>
     <span class="moss-btn-slot"><button type="submit" class="moss-btn"><span class="moss-btn__label">Send</span></button></span>
     <p class="moss-form__status" aria-live="polite"></p>
     ${COPY}
@@ -91,7 +93,7 @@ describe('forms', () => {
     expect(body.get('your_name')).toBe('Ada Example');
     expect(body.get('email')).toBe('ada@example.test');
     expect(body.get('_next')).toBe('/booking/received/');
-    expect(body.get('_hp')).toBe('');
+    expect(body.has('_hp')).toBe(false);
     expect(typeof init.body).toBe('string');
   });
 
@@ -103,6 +105,28 @@ describe('forms', () => {
       await submit(form);
       expect(go).toHaveBeenLastCalledWith('/booking/received/');
     }
+  });
+
+  test('a bot check asked for is solved and the post sent again; cancelled, the form waits', async () => {
+    const form = mount();
+    const asked = { need_captcha: true, captcha_url: 'https://seta.example/captcha/' };
+    fetchSpy.mockReturnValueOnce(reply(403, asked)).mockReturnValueOnce(reply(200, { ok: true }));
+    hydrateForm(form, '');
+    await submit(form);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(solveCaptcha).toHaveBeenCalledWith('https://seta.example/captcha/');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(go).toHaveBeenLastCalledWith('/booking/received/');
+
+    const again = mount();
+    solveCaptcha.mockResolvedValueOnce(false);
+    fetchSpy.mockReturnValueOnce(reply(403, asked));
+    go.mockClear();
+    hydrateForm(again, '');
+    await submit(again);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(go).not.toHaveBeenCalled();
+    expect(again.closest<HTMLElement>('.moss-form')!.dataset.state).toBe('idle');
   });
 
   test('422 marks each named field invalid, ties its message, focuses the first, keeps values', async () => {
@@ -214,10 +238,9 @@ describe('prefill from the address', () => {
     expect(form.querySelector<HTMLInputElement>('#booking-news')!.checked).toBe(true);
   });
 
-  test('never touches _next, _hp or any hidden input', () => {
+  test('never touches _next or any hidden input', () => {
     const form = mount();
-    prefill(form, '?_hp=x&_next=/evil/');
-    expect(form.querySelector<HTMLInputElement>('[name="_hp"]')!.value).toBe('');
+    prefill(form, '?_next=/evil/');
     expect(form.querySelector<HTMLInputElement>('[name="_next"]')!.value).toBe('/booking/received/');
     expect(form.dataset.next).toBe('/booking/received/');
   });

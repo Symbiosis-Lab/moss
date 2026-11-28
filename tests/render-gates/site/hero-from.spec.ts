@@ -10,7 +10,7 @@
  * Site: tests/e2e/helpers/gate-sites.ts → HERO_FROM_GATE. The event ends in
  * 2099, so the build always draws it; the ended case moves the browser's clock.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test.describe("hero drawn from an event", () => {
   test("while the event is upcoming, one hero is drawn and the fallback is not", async ({ page }) => {
@@ -84,4 +84,22 @@ test.describe("hero drawn from an event", () => {
 
     await expect(page.locator(".moss-hero")).toContainText("Example Show");
   });
+
+  // The meta line, cards and rows turn past by the same clock as the hero.
+  for (const [when, past] of [["2099-04-01T21:29:00", false], ["2099-04-01T21:30:00", true]] as const) {
+    test(`an event's page and card ${past ? "turn past at" : "stay upcoming before"} its end`, async ({ page }) => {
+      await page.clock.setFixedTime(new Date(when));
+      await page.goto("/shows/late-show/");
+      const meta = page.locator(".moss-event-meta");
+      await expect(meta).toHaveAttribute("data-when", past ? "past" : "upcoming");
+      await expect(meta.locator(".moss-event-tickets")).toHaveCount(past ? 0 : 1);
+      await expect(meta.locator(".moss-event-calendar")).toHaveCount(past ? 0 : 1);
+
+      await page.goto("/listing/");
+      const card = page.locator('[data-when]:has(a[href="/shows/late-show/"])');
+      await expect(card).toHaveAttribute("data-when", past ? "past" : "upcoming");
+      await expect(card.locator(".moss-event-tickets")).toHaveCount(past ? 0 : 1);
+      await expect(card.locator(".moss-event-upcoming")).toHaveCount(past ? 0 : 1);
+    });
+  }
 });

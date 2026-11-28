@@ -584,7 +584,7 @@ fn renaming_the_home_page_of_a_site_without_a_declared_language_moves_translatio
     let english = "This is a long English article about gardening, the weather and the seasons, written so that the language of the page can be told from its text without any doubt at all.";
     w(&root, "index.md", "---\nlang: zh-hans\n---\n# Home\n");
     w(&root, "links.md", "# Links\n\n[z](/notes/a/) [e](/en/notes/a/)\n");
-    w(&root, "notes/a.md", &format!("# English Marker\n\n{english}\n"));
+    w(&root, "notes/a.md", &format!("---\nlang: en\n---\n# English Marker\n\n{english}\n"));
     w(&root, "notes/a.zh-hans.md", "# Chinese Marker\n");
     w(&root, "notes/b.md", &format!("# B\n\n{english}\n"));
     let staged = build_staged(&root);

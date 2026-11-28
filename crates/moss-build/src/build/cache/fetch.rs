@@ -59,7 +59,7 @@ impl TransformCache {
 /// One run's work list, local work first. The first pass hands items out in
 /// order; an item whose cached work the cloud still holds is [`deferred`]
 /// (its download already asked for) and handed out again once every
-/// first-pass item has ended, so no download delays a picture that is local.
+/// first-pass item has ended, so no download delays an item that is local.
 ///
 /// [`deferred`]: Ticket::defer
 pub(crate) struct LocalFirst {
@@ -109,11 +109,10 @@ impl LocalFirst {
         }
     }
 
-    /// One line for the run, which made `encodes` outputs.
-    pub(crate) fn report(&self, encodes: usize) {
+    /// One line for the run of `what`, which made `encodes` outputs.
+    pub(crate) fn report(&self, what: &str, encodes: usize) {
         let (fetched, healed) = (self.fetched.load(Ordering::Relaxed), self.healed.load(Ordering::Relaxed));
-        log::info!("images: {encodes} outputs encoded; {fetched} fetched from the cloud, {healed} made again after the cloud failed them");
-        crate::build::phase::record_count("image_encodes", encodes);
+        log::info!("{what}: {encodes} encoded; {fetched} fetched from the cloud, {healed} made again after the cloud failed them");
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Passes> {

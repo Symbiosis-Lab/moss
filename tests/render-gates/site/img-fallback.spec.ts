@@ -29,7 +29,7 @@
 // The injection point itself is pinned by a Rust test elsewhere — the
 // assertion below only guards against this harness testing an empty or wrong
 // file.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets, openCrateDir } from '../../support/crate-paths';

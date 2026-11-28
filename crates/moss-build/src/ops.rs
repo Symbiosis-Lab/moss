@@ -369,12 +369,14 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             let on_conflict = if run.flags.watch { serve::ownership::OnConflict::StandBy } else { serve::ownership::OnConflict::Refuse };
             let yield_notify = yield_requested.clone();
             let host_serve = std::mem::take(&mut run.serve);
+            let watch_root = watch::headless::absolute_watch_root(&run.folder_path);
             let launch: Arc<dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> crate::build::ServerFuture + Send + Sync> =
                 Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
                 let assets = assets.clone();
                 let yield_notify = yield_notify.clone();
                 let host_serve = host_serve.clone();
+                let watch_root = watch_root.clone();
                 Box::pin(async move {
                     match serve::start_server_headless(
                         &moss_dir,
@@ -386,6 +388,10 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                         Ok((port, _ui_port, shutdown_tx)) => {
                             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(shutdown_tx);
+                            // Re-run after a yield, so the worker learns the new port.
+                            if let Some(worker) = watch::worker::get(&watch_root) {
+                                worker.set_served_port(port);
+                            }
                             Ok(port)
                         }
                         Err(e) => Err(e),
@@ -506,6 +512,8 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                     break;
                                 }
                                 let Some(launch) = &launch_server_fn else { break };
+                                // The stop dropped the worker; the server records its port on the new one.
+                                watch::headless::register_worker(&run.folder_path, &run.host_ports, watch_plugins);
                                 let moss_dir = crate::moss_paths::MossPaths::new(folder).root().to_string_lossy().into_owned();
                                 match launch(moss_dir, None).await {
                                     // The port can differ from the first one, and a host reads this line to find the page.

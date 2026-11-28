@@ -71,10 +71,16 @@ pub enum EmitMessage {
     /// a positive `NotFound`. Nothing is registered, failed or deleted for it,
     /// and the generation that carries the mark is withheld.
     Unverified { rel_path: String, detail: String },
-    /// The asset walk stopped before the end because a newer render of the
-    /// folder was admitted (or the session was cancelled): this render's
-    /// generation lacks what the walk never reached, so its tail leaves.
-    WalkSuperseded,
+    /// Register `bytes` and ship these bytes, not whatever the stage holds at
+    /// the seal tail: a file a newer build rewrites under the same name.
+    Held { path: crate::build::served_path::ServedPath, bytes: Vec<u8>, bucket: HashBucket },
+    /// `oid` holds the bytes registered at `rel_path` as `entry`; it ships them
+    /// only while that is still the entry.
+    Blob { rel_path: String, entry: String, oid: String },
+    /// A worker stopped before the end because a newer render of the folder
+    /// was admitted (or the session was cancelled): this render's generation
+    /// lacks what the worker never wrote, so its tail leaves.
+    Superseded,
 }
 
 /// Single-owner coordinator that drains the emit channel into a `PendingManifest`
@@ -126,7 +132,7 @@ impl ManifestCoordinator {
 }
 
 /// Apply one emit to the manifest being accumulated.
-fn apply(pending: &mut PendingManifest, msg: EmitMessage) {
+pub(crate) fn apply(pending: &mut PendingManifest, msg: EmitMessage) {
     match msg {
         EmitMessage::File { rel_path, hash, bucket, oid } => {
             pending.apply_message(rel_path, &hash, bucket, oid);
@@ -142,7 +148,13 @@ fn apply(pending: &mut PendingManifest, msg: EmitMessage) {
         EmitMessage::Unverified { rel_path, detail } => {
             pending.mark_unverified(rel_path, detail);
         }
-        EmitMessage::WalkSuperseded => pending.mark_walk_superseded(),
+        EmitMessage::Held { path, bytes, bucket } => {
+            if let Err(e) = pending.register_held(&path, bytes, bucket) {
+                pending.mark_unverified(path.as_str().to_string(), e.to_string());
+            }
+        }
+        EmitMessage::Blob { rel_path, entry, oid } => pending.attach_blob(rel_path, &entry, oid),
+        EmitMessage::Superseded => pending.mark_superseded(),
     }
 }
 

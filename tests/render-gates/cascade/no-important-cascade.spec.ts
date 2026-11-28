@@ -12,7 +12,7 @@
  * Run via:
  *   npx playwright test -c playwright/no-important-cascade.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const EXPECTED_READ_MORE_COLOR = "rgb(0, 0, 255)";
 

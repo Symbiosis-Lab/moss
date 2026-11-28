@@ -89,6 +89,22 @@ fn an_action_names_a_route_on_a_known_service_and_nothing_else() {
 }
 
 #[test]
+fn a_secret_names_a_route_an_id_and_a_pattern_that_compiles() {
+    let ok = json!({"id":"calendar","label":"Calendar","service":"commerce","path":"/sites/{site}/calendar","pattern":"^(https|webcal)://"});
+    let m = parse(json!({"secrets":[ok]})).unwrap();
+    let secret = m.contributes.unwrap().site_settings.unwrap().secret("calendar").cloned().unwrap();
+    assert_eq!(secret.path, "/sites/{site}/calendar");
+    for bad in [
+        json!({"id":"Calendar","label":"C","service":"commerce","path":"/a"}),
+        json!({"id":"calendar","label":"C","service":"commerce","path":"https://evil.example/x"}),
+        json!({"id":"calendar","label":"C","service":"commerce","path":"/a","pattern":"("}),
+    ] {
+        assert!(parse(json!({"secrets":[bad.clone()]})).is_err(), "{bad}");
+    }
+    assert!(parse(json!({"secrets":[ok.clone(), ok]})).is_err(), "a repeated id");
+}
+
+#[test]
 fn only_a_path_the_manifest_draws_may_be_written() {
     let m = settings(json!([
         {"key":"currency","type":"string"},

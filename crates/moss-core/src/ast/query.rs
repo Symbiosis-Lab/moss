@@ -230,13 +230,20 @@ pub fn has_raw_style_block(doc: &Document) -> bool {
 /// notes. Endnote pictures come after every body picture, so an image that
 /// lives *only* in a note is still found, without outranking the body.
 pub fn find_first_block_image(doc: &Document) -> Option<&Url> {
-    block_images(doc).into_iter().next()
+    block_images(doc).into_iter().next().map(|image| image.src)
+}
+
+/// A content picture: its address and its alt text, empty when it has none.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockImage<'a> {
+    pub src: &'a Url,
+    pub alt: &'a str,
 }
 
 /// Every content picture of the page (see [`find_first_block_image`] for what
 /// counts), in the same order: body first, endnotes after. A gallery
 /// contributes its first picture only.
-pub fn block_images(doc: &Document) -> Vec<&Url> {
+pub fn block_images(doc: &Document) -> Vec<BlockImage<'_>> {
     // The renderer's identity decision, from the same lookup `is_hoisted`
     // uses — a first-sighting counter here diverged from it whenever a
     // label's first definition was NESTED inside another note (the pass-one
@@ -275,7 +282,7 @@ fn collect_images_in_blocks<'a>(
     blocks: &'a [Block],
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-    out: &mut Vec<&'a Url>,
+    out: &mut Vec<BlockImage<'a>>,
 ) {
     for block in blocks {
         collect_images_in_block(block, notes, hoisted, out);
@@ -286,10 +293,10 @@ fn collect_images_in_block<'a>(
     block: &'a Block,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-    out: &mut Vec<&'a Url>,
+    out: &mut Vec<BlockImage<'a>>,
 ) {
     match block {
-        Block::Figure { image: Inline::Image { src, .. }, .. } => out.push(src),
+        Block::Figure { image: Inline::Image { src, alt, .. }, .. } => out.push(BlockImage { src, alt }),
         Block::Figure { .. } => {}
 
         // An image-only paragraph is a figure that implicit-figure promotion
@@ -331,10 +338,10 @@ fn collect_images_in_block<'a>(
     }
 }
 
-fn collect_images_in_inlines<'a>(inlines: &'a [Inline], out: &mut Vec<&'a Url>) {
+fn collect_images_in_inlines<'a>(inlines: &'a [Inline], out: &mut Vec<BlockImage<'a>>) {
     for inline in inlines {
         match inline {
-            Inline::Image { src, .. } => out.push(src),
+            Inline::Image { src, alt, .. } => out.push(BlockImage { src, alt }),
             Inline::Link { url: Url::Resolved(r), .. }
                 if matches!(r.kind, UrlKind::Internal | UrlKind::Wikilink) => {}
             Inline::Link { children, .. }
@@ -363,11 +370,11 @@ fn collect_images_in_shortcode<'a>(
     sc: &'a Shortcode,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-    out: &mut Vec<&'a Url>,
+    out: &mut Vec<BlockImage<'a>>,
 ) {
     match sc {
         Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Form(_) => {}
-        Shortcode::Gallery(args) => out.extend(args.items.first().map(|item| &item.src)),
+        Shortcode::Gallery(args) => out.extend(args.items.first().map(|item| BlockImage { src: &item.src, alt: &item.alt })),
         // The hero image itself is a `Url` on the shortcode, not an
         // `Inline::Image`: the cover chain reads `hero_image_url` for it.
         Shortcode::Hero(args) => collect_images_in_blocks(&args.overlay, notes, hoisted, out),

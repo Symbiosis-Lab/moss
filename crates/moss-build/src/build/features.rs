@@ -255,22 +255,20 @@ pub fn generate_native_slots<'m>(
     // every build mode so the published artifact is deterministic. Preview
     // safety is the serve-time strip (preview server), since a foreign
     // analytics script cannot self-gate. (See deploy-generation design §6.)
-    if let Some(analytics_script) = services
-        .analytics
-        .as_ref()
-        .and_then(|a| a.script.as_deref())
-    {
-        use crate::build::markdown::AnalyticsConfig as FrontmatterAnalytics;
-        let ac = FrontmatterAnalytics {
-            url: analytics_script.to_string(),
-            provider: None,
-            site_id: None,
-        };
+    let analytics_tag = services.analytics.as_ref().and_then(|a| match a.plugin() {
+        Some((plugin, site_id)) => crate::plugins::contributions::provider::analytics_tag(project_path, plugin, site_id)
+            .map_err(|why| log::warn!(target: "build", "{why}; the site builds without analytics"))
+            .ok(),
+        None => a.script.as_deref().map(|url| {
+            crate::build::markdown::AnalyticsConfig { url: url.to_string(), provider: None, site_id: None }.to_script_tag()
+        }),
+    });
+    if let Some(tag) = analytics_tag {
         // Mark the element itself so the preview server can remove it from
         // served responses while the deployed artifact keeps it — ship's
         // StripPreviewAttrs pass leaves this attribute alone by design
         // (`build::ship::apply_transform`).
-        let script_tag = mark_deploy_only(&ac.to_script_tag());
+        let script_tag = mark_deploy_only(&tag);
         let result = EnhanceResult {
             success: true,
             slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::Static { html: script_tag })]),
@@ -353,19 +351,14 @@ pub fn generate_native_slots<'m>(
             })
             .collect();
 
-        // Apply owner moderation: signed hide/unhide events (moderation.jsonl) decide
-        // visibility, replacing the legacy replica-tombstone path. No events → no-op
-        // (the identity is not even loaded).
+        // Owner moderation: signed events in moderation.jsonl decide visibility.
+        // Events no trusted key verifies apply nothing; `link_block::emit`
+        // reports them and the publish gate refuses a log none of whose events verify.
         let mod_events = comment::moderation::load_mod_events(project_path);
         if !mod_events.is_empty() {
             let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(std::path::Path::new(project_path));
-            if !owners.is_empty() {
-                for key in comment::moderation::untrusted_signers(&mod_events, &owners) {
-                    log::warn!(target: "comments", "moderation signed by {key} is ignored: not one of this folder's keys; `moss comments list` says how to keep it");
-                }
-                for comments in all_comments.values_mut() {
-                    comment::reduce::retain_visible(comments, &mod_events, &owners);
-                }
+            for comments in all_comments.values_mut() {
+                comment::reduce::retain_visible(comments, &mod_events, &owners);
             }
         }
         // site_name must match the artalk site identifier (deploy_config.site_id),
@@ -502,11 +495,9 @@ pub fn generate_native_slots<'m>(
             if let Some(note) = email::subscribe_elsewhere_note(deploy_config) {
                 crate::build::cli_output::log_warn_problem!("{note}");
             }
-            // CSS as a <link> (see `build::emit::feature_styles`); the
-            // subscribe script stays inline. The script is ~2 KB and its
-            // absence breaks the form outright, so the extra round trip buys
-            // less than it costs — the file/inline line is drawn on size and
-            // site-wideness, not on principle.
+            // CSS as a <link> (see `build::emit::feature_styles`). Only the
+            // reader check is inline, since `forms.js`, which binds the form,
+            // loads at the end of the body, after the form has painted.
             let css_result = EnhanceResult {
                 success: true,
                 slots: HashMap::from([(
@@ -515,7 +506,7 @@ pub fn generate_native_slots<'m>(
                         html: format!(
                             "{}<script class=\"moss-subscribe-script\">{}</script>",
                             slots.link_feature_style("email"),
-                            email::SUBSCRIBE_JS
+                            email::SUBSCRIBE_HINT_JS
                         ),
                     },
                 )]),

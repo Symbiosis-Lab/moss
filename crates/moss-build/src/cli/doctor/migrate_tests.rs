@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::scan::sort_inference::UnlinkedFolder;
 
 fn write(root: &Path, rel: &str, text: &str) {
     let path = root.join(rel);
@@ -138,3 +139,36 @@ fn list_is_a_run_of_its_own_and_dry_run_says_what_the_plain_run_does() {
     assert!(parse(&["--list", "--apply"]).is_err());
     assert_eq!(parse(&["--dry-run"]).unwrap_err(), "unknown flag --dry-run: without --apply, moss migrate writes nothing");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_ordered_by_a_cascaded_sort_is_named_by_the_build_and_its_home_gets_series_true() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [
+        ("Shelf/Shelf.md", "---\ntitle: Shelf\ncascade:\n  sort: weight\n---\n\nShelf.\n"),
+        ("Shelf/Books/Books.md", "---\ntitle: Books\n---\n\nBooks.\n"),
+        ("Shelf/Books/a.md", "---\ntitle: A\nweight: 2\n---\n\nA.\n"),
+        ("Shelf/Books/b.md", "---\ntitle: B\nweight: 1\n---\n\nB.\n"),
+    ];
+    for (rel, text) in files {
+        write(dir.path(), rel, text);
+    }
+    let root = VaultRoot::resolve(dir.path());
+    let ports = crate::cli::host::cli_host_ports(root.as_str());
+    let built = crate::deploy::one_shot::build_and_seal(&root, ports, crate::build::PluginMode::Skip, false).await.unwrap();
+    let sealed = crate::deploy::one_shot::require_sealed(built).unwrap();
+    let named = sealed.unlinked_folders();
+    let home = UnlinkedFolder { folder: "Shelf/Books".to_string(), home: Some("Shelf/Books/Books.md".to_string()) };
+    assert_eq!(named, [home]);
+
+    let pages: Vec<(String, String)> = files.iter().map(|(rel, text)| (rel.to_string(), text.to_string())).collect();
+    let (changes, skipped) = series::plan(&pages, named);
+    assert!(skipped.is_empty(), "{skipped:?}");
+    assert_eq!(changes.iter().map(|c| Some(c.path.clone())).collect::<Vec<_>>(), named.iter().map(|f| f.home.clone()).collect::<Vec<_>>());
+
+    // The note reads the moss of the folder's last build record.
+    assert_eq!(crate::build::phase::previous_moss_version(dir.path()).as_deref(), Some(crate::system::app_version()));
+    let profile = crate::moss_paths::MossPaths::new(dir.path()).profile();
+    crate::build::phase::append_record(&profile, &serde_json::json!({ "kind": "build", "moss_version": "0.15.29" })).unwrap();
+    assert_eq!(crate::build::phase::previous_moss_version(dir.path()).as_deref(), Some("0.15.29"));
+}
+

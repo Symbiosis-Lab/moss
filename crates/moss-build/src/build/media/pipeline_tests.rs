@@ -2690,12 +2690,12 @@ async fn a_superseded_walk_encodes_nothing_and_says_so() {
     let (ctx, _) = three_fallback_pictures(tmp.path());
     let (encodes, sealed) = walk_until(ctx.clone(), || true).await;
     assert_eq!(encodes, 0);
-    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Superseded);
+    assert_eq!(sealed.outcome(), crate::build::manifest::RenderOutcome::Superseded);
     assert!(sealed.all_files().keys().all(|k| !k.ends_with(".jpg")), "{:?}", sealed.all_files().keys().collect::<Vec<_>>());
 
     let (encodes, sealed) = walk_until(ctx, || false).await;
     assert_eq!(encodes, 3);
-    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Complete);
+    assert_eq!(sealed.outcome(), crate::build::manifest::RenderOutcome::Complete);
 }
 
 /// A walk superseded mid-way finishes the picture it is on, whose record is
@@ -2714,7 +2714,7 @@ async fn a_walk_superseded_mid_way_finishes_only_the_picture_it_is_on() {
     let (a, b, c) = (record_of("a.jpg"), record_of("b.jpg"), record_of("c.jpg"));
     let (encodes, sealed) = walk_until(ctx, { let a = a.clone(); move || fallback_of(&a) }).await;
     assert_eq!(encodes, 1);
-    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Superseded);
+    assert_eq!(sealed.outcome(), crate::build::manifest::RenderOutcome::Superseded);
     assert!(fallback_of(&a), "the picture it was on keeps a whole record");
     assert!(!fallback_of(&b) && !fallback_of(&c));
 }

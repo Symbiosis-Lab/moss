@@ -9,7 +9,12 @@ network for the author to publish (empty `text`, the draft's `id`).
 
 `find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
 Any other answer, an empty one included, leaves whether the copy exists
-unknown, and only `absent` lets moss send it again.
+unknown, and only `absent` lets moss send it again. `update_copy` may also
+answer `absent: true`: a deleted draft is made again, a deleted published
+copy is left until the author presses retry on that post. An edit the
+network will not take (past its edit window or revision limit) is
+`success: false` with `refused.cause: "locked"`, said only on the network's
+explicit refusal; the copy then stays as posted.
 
 ## Properties
 
@@ -19,7 +24,7 @@ unknown, and only `absent` lets moss send it again.
 optional absent?: boolean;
 ```
 
-`find_copy` only: the network says there is no such copy.
+`find_copy` or `update_copy`: the network says there is no such copy.
 
 ***
 
@@ -96,7 +101,7 @@ optional refused?: object;
 #### cause
 
 ```ts
-cause: "auth" | "content" | "rate" | "network" | "unknown";
+cause: "auth" | "content" | "rate" | "network" | "locked" | "unknown";
 ```
 
 #### message?
@@ -123,4 +128,53 @@ A read that failed, or is not available on this host, is `success: false` instea
 
 ```ts
 optional url?: string;
+```
+
+***
+
+### verify?
+
+```ts
+optional verify?: object;
+```
+
+What the site should carry so the network can tie this copy back to it. moss
+reads it on every build: `page_link` goes in the head of the copied page and
+`site_file` is written under `.well-known/`. Only `site.standard.document`
+(an `at:` href) and `.well-known/site.standard.publication` are accepted.
+
+#### page\_link?
+
+```ts
+optional page_link?: object;
+```
+
+##### page\_link.href
+
+```ts
+href: string;
+```
+
+##### page\_link.rel
+
+```ts
+rel: string;
+```
+
+#### site\_file?
+
+```ts
+optional site_file?: object;
+```
+
+##### site\_file.body
+
+```ts
+body: string;
+```
+
+##### site\_file.path
+
+```ts
+path: string;
 ```

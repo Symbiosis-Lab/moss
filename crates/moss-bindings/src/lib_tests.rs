@@ -85,16 +85,19 @@ fn all_severities_are_lsp_numbers_including_info() {
 }
 
 #[test]
-fn preview_wraps_page_text_title_language_css_and_base() {
+fn preview_wraps_page_text_title_language_and_base_and_the_site_carries_the_stylesheet() {
     let themed = Site::from_json(r#"{"files":["a.md"],"lang":"en","theme_css":"body { color: red; }"}"#).unwrap();
     let result = json_value(&themed.preview("a.md", "---\ntitle: Example\n---\nVisible **words**", "https://example.com/site/"));
     let html = result["html"].as_str().unwrap();
     assert!(html.starts_with("<!doctype html>"));
     assert!(html.contains("<html lang=\"en\">"));
     assert!(html.contains("<base href=\"https://example.com/site/\">"));
+    assert!(!html.contains("<style") && !html.contains("@layer"), "the stylesheet is the site's, not each preview's");
     // moss's own stylesheet first, the site's theme after it so the theme wins.
-    let theme_at = html.find("body { color: red; }</style>").unwrap();
-    assert!(html.find(".moss-article-title").is_some_and(|at| at < theme_at));
+    let css = themed.stylesheet();
+    let (page, theme) = css.split_at(css.find("body { color: red; }").unwrap());
+    assert!(page.contains(".moss-article-title"));
+    assert_eq!(theme, "body { color: red; }");
     assert!(html.contains("Visible <strong>words</strong>"));
     assert!(html.ends_with("</html>"));
     assert_eq!(result["title"], "Example");
@@ -168,4 +171,93 @@ fn sources_json_round_trip_into_a_site() {
     assert!(crate::home_file("{}").is_err());
     assert_eq!(crate::site_text_paths(r#"["z.MD","child/index.md","index.md","photo.jpg"]"#).unwrap(), r#"["index.md","z.MD"]"#);
     assert!(crate::site_text_paths("{}").is_err());
+}
+
+#[test]
+fn preview_draws_the_series_navigation_at_the_folder_s_own_address() {
+    let texts = json!({
+        "guide/index.md": "---\ntitle: Guide\nurl: handbook\nsort: weight\nseries: true\n---\n",
+        "guide/one.md": "---\nweight: 1\n---\n# One\n",
+        "guide/two.md": "---\nweight: 2\n---\n# Two\n",
+    });
+    let files = json!(["guide/index.md", "guide/one.md", "guide/two.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    let html = |site: &Site| json_value(&site.preview("guide/two.md", texts["guide/two.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    assert!(!html(&site).contains(r#"rel="prev""#), "no pages known yet");
+
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = html(&site);
+    assert!(html.contains(r#"<a href="handbook/" class="moss-series-nav-collection">Guide</a>"#), "{html}");
+    assert!(html.contains(r#"href="handbook/one/" rel="prev""#), "{html}");
+    assert!(!html.contains(r#"rel="next""#), "{html}");
+}
+
+#[test]
+fn preview_draws_the_trail_and_the_nav_bar() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "about.md": "# About\n",
+        "guide/index.md": "---\ntitle: Guide\n---\n",
+        "guide/one.md": "# One\n",
+    });
+    let files = json!(["index.md", "about.md", "guide/index.md", "guide/one.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = |path: &str| json_value(&site.preview(path, texts[path].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let one = html("guide/one.md");
+    assert!(one.contains(r#"<div class="nav-left"><a href="/" class="site-name">Harbor Notes</a></div>"#), "{one}");
+    assert!(one.contains(r#"<div class="nav-links" id="nav-links"><a href="/about/""#), "{one}");
+    assert!(html("about.md").contains(r#"<a href="/about/" class="active" aria-current="page""#));
+}
+
+#[test]
+fn preview_draws_a_folder_home_s_title() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\nWelcome\n",
+        "guide/index.md": "---\ntitle: Guide\n---\nRead on\n",
+        "guide/one.md": "# One\n",
+    });
+    let files = json!(["index.md", "guide/index.md", "guide/one.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = |path: &str| json_value(&site.preview(path, texts[path].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let guide = html("guide/index.md");
+    assert!(guide.contains(r#"<article class="container"><h1 class="moss-folder-title">Guide</h1>"#), "{guide}");
+    assert!(html("index.md").contains(r#"<h1 class="moss-folder-title visually-hidden">Harbor Notes</h1>"#));
+    assert!(!html("guide/one.md").contains("moss-folder-title"));
+}
+
+#[test]
+fn preview_draws_a_folder_home_s_listing_with_each_page_s_excerpt_and_picture() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "guide/index.md": "---\ntitle: Guide\n---\nRead on\n",
+        "guide/one.md": "---\ntitle: One\ndate: 2026-01-02\n---\nFirst paragraph.\n\n![a mast](mast.jpg)\n",
+        "guide/two.md": "---\ntitle: Two\ndate: 2026-03-04\n---\nSecond paragraph.\n",
+    });
+    let files = json!(["index.md", "guide/index.md", "guide/one.md", "guide/two.md", "guide/mast.jpg"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let guide = json_value(&site.preview("guide/index.md", texts["guide/index.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    let at = |s: &str| guide.find(s).unwrap_or_else(|| panic!("{s} missing from {guide}"));
+    assert!(at("Read on") < at("moss-cards-container"), "the listing follows the body");
+    assert!(at("Second paragraph.") < at("First paragraph."), "newest first");
+    assert!(guide.contains(r#"src="guide/mast.jpg""#), "{guide}");
+    assert!(!json_value(&site.preview("guide/one.md", texts["guide/one.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().contains("moss-cards"));
+}
+
+#[test]
+fn preview_cards_name_each_page_s_places() {
+    let texts = json!({
+        "index.md": "---\ntitle: Harbor Notes\n---\n",
+        "posts/index.md": "---\ntitle: Posts\n---\n",
+        "posts/a.md": "---\ntitle: A\ndate: 2026-01-02\nlocation: Kyoto\n---\nBody.\n",
+    });
+    let files = json!(["index.md", "posts/index.md", "posts/a.md"]);
+    let sources = json!({"files": files, "texts": texts, "config_toml": "[terms.places]\ntype = \"place\"\nfields = [\"location\"]"});
+    let bundle = json_value(&crate::site_bundle(&sources.to_string()).unwrap())["bundle"].to_string();
+    let mut site = Site::from_json(&bundle).unwrap();
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let posts = json_value(&site.preview("posts/index.md", texts["posts/index.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    assert!(posts.contains("Kyoto"), "{posts}");
 }

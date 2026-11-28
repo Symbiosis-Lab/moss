@@ -156,6 +156,39 @@ body[data-typesetting="vertical"] .nav-links {
   flex-direction: column;
 }
 
+/* site.css floats a plain name's toggles and links into a block; here the strip is flex again, where a float does not apply. */
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) {
+  display: flex;
+  margin-block-end: 0;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) :is(.nav-left, .nav-right) {
+  display: flex;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) > .nav-icons {
+  margin-block-end: 0;
+  margin-inline-start: auto;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) .site-name::before,
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) .nav-left::after {
+  content: none;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) .site-name {
+  margin-inline-end: 0;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) .nav-links {
+  min-block-size: 0;
+  margin-block-end: 0;
+}
+
+body[data-typesetting="vertical"] .nav-content:not(:has(.breadcrumb-segment)) .nav-logo-strut {
+  display: none;
+}
+
 body[data-typesetting="vertical"] .main-nav a {
   white-space: normal;
 }

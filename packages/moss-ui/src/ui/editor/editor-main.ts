@@ -8,6 +8,7 @@
 import { installLogBridge } from "../lib/install-log-bridge";
 import type { ParsedFrontmatter } from '@symbiosis-lab/moss-ui';
 import { engine } from '../engine';
+import { mountPageComments, type PageCommentsFoot } from './page-comments';
 installLogBridge('action-panel');
 
 // [diag] Energy + layout-shift diagnostics → moss.log. Dev-default-on; set
@@ -60,6 +61,7 @@ import { getLocale, t } from "../i18n/index";
 import { applyStaticStrings } from "../i18n/apply-static-strings";
 import { installLocaleReactivity } from "../i18n/live-locale";
 import { mountInlineStatus } from './inline-status';
+import { heldFor, isHeldFor, onHoldChange, setHold, showHold } from './hold';
 import { wireEditorHeading, type HeadingController } from './editor-heading';
 import { getHeadingState, readDiagnostics, type EditorDiagnostic } from './moss-debug';
 import { forceLinting } from '@codemirror/lint';
@@ -90,6 +92,7 @@ import {
   scrollEditorToLine,
   scrollEditorToTop,
   scrollEditorToBottom,
+  lastLineInView,
   computeContentOffset,
   gotoLine,
   findRuleLine,
@@ -199,21 +202,21 @@ function currentEntryId(): EntryId | null {
 /** Live registry-derived active path; never cache across an await. */
 function currentFilePath(): string | null {
   const id = currentEntryId();
-  if (id === null) return null;
-  return registry?.getById(id)?.path ?? null;
+  return id === null ? null : registry?.getById(id)?.path ?? null;
 }
-
-function activeDocumentPath(): string | null { return currentFilePath(); }
 
 /** Tell the chip bar where the open page sits and what the build picks for its fields. */
 async function refreshPageFacts(): Promise<void> {
-  const bar = chipBar, path = activeDocumentPath();
+  const bar = chipBar, path = currentFilePath();
   if (!bar || !path || !projectRoot) return;
   // A failure offers every field, with no hints.
   const result = await engine.pageFacts(toAbsolute(path, projectRoot))
     .catch((e: unknown) => { console.warn('[editor] pageFacts failed:', e); return null; });
   if (bar === chipBar) bar.setPageFacts(result?.status === 'ok' ? result.data : NO_PAGE_FACTS);
 }
+
+/** The open page's comments, under the article. */
+let commentsFoot: PageCommentsFoot | null = null;
 
 /**
  * A project file's standard-form destination from the open page: the engine's
@@ -222,7 +225,7 @@ async function refreshPageFacts(): Promise<void> {
  * the file, which the command requires.
  */
 const destinationFor: DestinationFor = async (target) => {
-  const page = activeDocumentPath();
+  const page = currentFilePath();
   if (!page || !projectRoot) return null;
   return (await host.assetRefForPath?.(toAbsolute(target, projectRoot), page))?.insert ?? null;
 };
@@ -361,8 +364,8 @@ const docStateCluster = new DocStateCluster({
   // miss because each side is defensible alone.
   undo: () => applyHistory('undo'),
   redo: () => applyHistory('redo'),
-  canUndo: () => documentHistory.canUndo(),
-  canRedo: () => documentHistory.canRedo(),
+  canUndo: () => !heldFor() && documentHistory.canUndo(),
+  canRedo: () => !heldFor() && documentHistory.canRedo(),
   // Literally the router's own predicate, so the button's mousedown suppresses
   // exactly the dismissal that would turn one click into flush-then-undo, and
   // leaves every other document-level listener its event.
@@ -419,6 +422,8 @@ function resetDocumentHistory(): void {
 }
 
 function runHistory(direction: 'undo' | 'redo'): boolean {
+  // A step the held text refuses would be dropped from the log as dead.
+  if (heldFor()) return false;
   const moved = direction === 'undo' ? documentHistory.undo() : documentHistory.redo();
   docStateCluster.sync();
   return moved;
@@ -535,11 +540,6 @@ const outsideFile = createOutsideFile({
   showFolderOf: (relPath) => showFolderOfDeleted(relPath),
 });
 const otherWriters = createKeptOutsideEdit({ currentEntryId, editor: () => cmEditor, store: () => frontmatterStore });
-// Set by setEditorCommitLock while a rename, move or undo commit is writing
-// through the file tree — see saveActiveDocument's own guard, which is the
-// actual enforcement; this flag is only the signal it reads.
-let editorCommitLocked = false;
-let bodyFocusOwed = false;
 
 /** Folder navigation uses Rust's build-independent route and never falls back to '/'. */
 async function navigatePreviewToFolder(absPath: string, awaitingBuild: boolean): Promise<void> {
@@ -747,6 +747,7 @@ async function init(): Promise<void> {
   // The other tone renderers (Narrator/Awaiting/Toast) stay in app.ts
   // where their anchors live (titlebar slot, toast container).
   void mountInlineStatus();
+  commentsFoot = mountPageComments(document.getElementById('moss-editor-root')!, () => projectRoot);
 
   // Observability: report when a click fails to focus an editable editor — a
   // covering overlay would otherwise leave the editor silently un-clickable
@@ -832,7 +833,7 @@ async function init(): Promise<void> {
           await applyFolderFromDisk(lastSurface.folder);
         } else if (lastSurface?.kind === 'takeover') {
           await applyFolderFromDisk(lastSurface.takeover);
-        } else if ((fce.source_creates?.length ?? 0) > 0) {
+        } else if ((fce.source_creates?.length ?? 0) > 0 && !awaitsPageAnswer()) {
           await resolveAndApplyRootSurface();
         }
       },
@@ -905,7 +906,7 @@ async function init(): Promise<void> {
     // fileEvents is always non-null post-init; ?? undefined satisfies the optional-param type (module field is EditorFileEvents | null).
     fileTree = new FileTree(registry, fileEvents ?? undefined, {
       flushPendingSave: () => flushPendingSave(),
-      setEditorCommitLock: (locked) => setEditorCommitLock(locked),
+      setEditorCommitLock: (locked) => setHold('commit', locked),
       reloadActiveFileFromDisk: reloadExternalDocument,
     });
     fileTree.onNextProblem = () => { const view = cmEditor?.getView(); if (view) goToNextProblem(view); };
@@ -940,7 +941,7 @@ async function init(): Promise<void> {
     // Same testability rationale: lets a test drive the rename/move/undo
     // read-only lock directly, without booting the tree, to exercise
     // saveActiveDocument's guard against autosave while a commit holds the lock.
-    w.__moss_debug.setEditorCommitLock = setEditorCommitLock;
+    w.__moss_debug.setEditorCommitLock = (locked) => setHold('commit', locked);
     // Pure DOM reader of the rendered heading ({text, source, visible}) for the
     // agent-driven e2e harness. Reads #editor-heading's
     // textContent / data-heading-source / data-empty — see moss-debug.ts.
@@ -1033,6 +1034,7 @@ async function init(): Promise<void> {
           registry,
           projectRoot: projectRoot!,
           resolveUrlForFile: engine.resolveUrlForFile,
+          resolveAssetUrlForFile: engine.resolveAssetUrlForFile,
           // What it says (navigate the preview, reveal a slot) is for the shell: the bus.
           emit: async (name, payload) => uiHost.bus.emit(name, payload),
           onMossEvent,
@@ -1236,7 +1238,7 @@ async function init(): Promise<void> {
   // in the same domain.
   pendingListeners.push(
     uiHost.bus.on<EditorNodeWire>('editor:load-source', async (payload) => {
-      await applyResolvedNode(payload);
+      await applyResolvedNode(payload, true);
     }),
   );
 
@@ -1249,20 +1251,13 @@ async function init(): Promise<void> {
   // The layout button above stays the primary exit; this only accelerates it.
   initEdgeRestore();
 
-  // Listen for preview-to-editor scroll events (line-based or heading-based)
   pendingListeners.push(
     uiHost.bus.on<{ sealed: boolean }>('editor:seal', (payload) => {
-      // The ship conductor seals the editor while publishing.
-      // - CM6 read-only: a live Compartment reconfigure (no remount).
-      // - Scrim: a translucent overlay with "Publishing your site…" caption.
-      // - File tree: locked so the user can't switch files mid-ship (R13).
+      // The ship conductor holds the folder while it publishes; the tree
+      // stays locked so the page the ship is publishing cannot change under it.
       const sealed = !!payload?.sealed;
-      // Observability (issue #5b): the seal/unseal cycle is the prime suspect for
-      // a stuck non-editable editor. Logging every RECEIVED event makes a dropped
-      // unseal (sealed=true with no following sealed=false) visible in moss.log,
-      // and records the editor's editable state — which nothing else does.
-      void logInfo(`[editor:seal] received sealed=${sealed} → editor editable=${!sealed}, hasEditor=${!!cmEditor}`);
-      cmEditor?.setReadOnly(sealed);
+      void logInfo(`[editor:seal] received sealed=${sealed}, hasEditor=${!!cmEditor}`);
+      setHold('publish', sealed);
       fileTree?.setSealed(sealed);
     }),
   );
@@ -1308,7 +1303,7 @@ async function init(): Promise<void> {
   pendingListeners.push(
     uiHost.bus.on<{ line: number }>(EDITOR_GOTO_LINE, (payload) => {
       if (!cmEditor) return;
-      followPreview();
+      holdJump();
       uiHost.focusView?.();
       gotoLine(cmEditor.getView(), payload.line);
     }),
@@ -1317,7 +1312,7 @@ async function init(): Promise<void> {
     uiHost.bus.on<{ selector: string }>(EDITOR_GOTO_RULE, (payload) => {
       const view = cmEditor?.getView();
       const line = view && findRuleLine(view.state.doc.toString(), payload.selector);
-      if (view && line) { followPreview(); uiHost.focusView?.(); gotoLine(view, line); }
+      if (view && line) { holdJump(); uiHost.focusView?.(); gotoLine(view, line); }
     }),
   );
 
@@ -1326,7 +1321,7 @@ async function init(): Promise<void> {
   pendingListeners.push(
     uiHost.bus.on<{ text: string; startLine: number; endLine: number }>('editor:select-text', (payload) => {
       if (!cmEditor) return;
-      followPreview();
+      holdJump();
       const { text, startLine, endLine } = payload;
       selectTextNearLine(cmEditor.getView(), startLine, endLine, text);
     }),
@@ -1590,8 +1585,7 @@ async function init(): Promise<void> {
     focusBody: () => {
       const view = cmEditor?.getView();
       if (!view) return;
-      if (editorCommitLocked) bodyFocusOwed = true;
-      else view.focus();
+      view.focus();
       view.dispatch({ selection: { anchor: 0 } });
     },
     onCommit: async (newText) => {
@@ -2085,6 +2079,14 @@ function keepsCurrentSurface(surface: EditorSurface): boolean {
   return shown === 'pending' && lastSurface?.kind === 'pending' && (lastSurface.reason === 'lookup' || lastSurface.sourcePath === null);
 }
 
+/**
+ * No surface yet, or a pane waiting on the page: the shell's answer is still
+ * coming and opens the right file, so nothing else may decide the surface.
+ */
+function awaitsPageAnswer(): boolean {
+  return lastSurface === null || (lastSurface.kind === 'pending' && lastSurface.reason === 'lookup');
+}
+
 function applyEditorSurface(surface: Exclude<EditorSurface, { kind: 'content' }>): void {
   const cm = document.getElementById('moss-editor-cm');
   if (!cm || !projectRoot) return;
@@ -2217,18 +2219,11 @@ async function openSelectedEntry(filePath: string, isNewFile = false): Promise<v
   const id = registry?.getByPath(loadedPath) ?? null;
   // A newer selection may supersede this open before its caller resumes.
   if (id === null || id !== currentEntryId()) return;
-  const category = detectFileCategory(filePath);
-  if (category === 'text') {
-    // Untitled-first pages focus the heading; homes/templates focus the body.
-    // Ordinary navigation never steals focus from the preview or file tree.
-    if (isNewFile && !createFlow?.consumeHeadingFocus(loadedPath)) cmEditor?.getView()?.focus();
-    await previewFollower?.navigate(filePath, isNewFile ? engine.resolveExpectedUrlForFile : undefined);
-  } else {
-    const result = await engine.resolveAssetUrlForFile(toAbsolute(filePath, projectRoot ?? ''));
-    if (id === currentEntryId() && result.status === 'ok' && result.data) {
-      uiHost.bus.emit('editor:navigate-preview', { urlPath: result.data });
-    }
-  }
+  const newPage = isNewFile && detectFileCategory(filePath) === 'text';
+  // Untitled-first pages focus the heading; homes/templates focus the body.
+  // Ordinary navigation never steals focus from the preview or file tree.
+  if (newPage && !createFlow?.consumeHeadingFocus(loadedPath)) cmEditor?.getView()?.focus();
+  await previewFollower?.navigate(filePath, newPage ? engine.resolveExpectedUrlForFile : undefined);
 }
 
 // ── File Loading ───────────────────────────────────────────────────────
@@ -2291,9 +2286,10 @@ async function flushPendingSave(): Promise<boolean> {
  * body of the 'editor:load-source' listener and the eval-driven open entry
  * point (window.__moss_editor_open). Re-bakes an answer into the document
  * query (history.replaceState) so an HMR full reload or the navigate fallback
- * stays consistent with the live surface.
+ * stays consistent with the live surface. `previewsPage`: the node is the page
+ * the preview shows, so following the file it opens only answers the preview.
  */
-async function applyResolvedNode(wire: EditorNodeWire): Promise<void> {
+async function applyResolvedNode(wire: EditorNodeWire, previewsPage = false): Promise<void> {
   let { node, homeFromDisk } = readEditorNode(wire);
   // Kept means untouched, a load in flight included: it may be the user's own open.
   if (!homeFromDisk && keepsCurrentSurface(decideEditorSurface(node))) return;
@@ -2311,7 +2307,8 @@ async function applyResolvedNode(wire: EditorNodeWire): Promise<void> {
   debug(`[editor] applyResolvedNode surface=${surface.kind}${surface.kind === 'content' ? ` sourcePath=${surface.sourcePath}` : ''}`); // empty-state surfaces look identical whether correct or a stale/failed resolve
 
   if (surface.kind === 'content') {
-    await loadContentPageDeduped(surface.sourcePath);
+    const load = () => loadContentPageDeduped(surface.sourcePath);
+    await (previewsPage && previewFollower ? previewFollower.openingPreviewPage(surface.sourcePath, load) : load());
     return;
   }
   applyEditorSurface(surface);
@@ -2356,7 +2353,7 @@ async function openFromWarmReopen(wire: EditorNodeWire): Promise<void> {
   // lead the user left it with. The panel's grow animation is about to reflow
   // it; that must not move the preview the user opened the editor from.
   followPreview();
-  await applyResolvedNode(wire);
+  await applyResolvedNode(wire, true);
   // The native open carries no verdict; the shell's answer arrives through the handshake.
   if (!wire.sourcePath && !wire.takeover) uiHost.bus.emit('editor:request-page', {});
   followPreviewPosition();
@@ -2697,6 +2694,7 @@ async function loadFileBody(
     : undefined;
   const unsavedResume = resumed?.unsaved === true && resumed.base !== null;
 
+  void commentsFoot?.show(isMarkdown && projectRoot ? toAbsolute(filePath, projectRoot) : null);
   // Render form (markdown only — non-markdown files have no frontmatter)
   if (isMarkdown) {
     // The store holds no path: saveActiveDocument, the single writer, reads the live
@@ -2707,15 +2705,13 @@ async function loadFileBody(
     frontmatterStore.subscribe((values) => {
       invalidatePublishPreflightPresentation();
       const p = currentFilePath();
-      if (p) {
-        void applyHeadingState(p, values);
-      }
+      if (p) void applyHeadingState(p, values);
     });
 
     // Slots keep a store so hidden frontmatter survives saves; only their
     // chips are read-only.
     chipBar = new ChipBar(schema!, frontmatterStore, {
-      getActivePath: () => activeDocumentPath() ?? '',
+      getActivePath: () => currentFilePath() ?? '',
       getProjectRoot: () => projectRoot ?? undefined,
       afterVaultImport: () => afterVaultImport(fileTree),
       slotRole,
@@ -2784,7 +2780,7 @@ async function loadFileBody(
     // Link validation + Cmd+Click nav now pull from the shared reference cache
     // (cm-reference-resolver, driven by editorResolveReferences). No separate
     // link-resolution RPC is wired from here.
-    getFromFile: () => activeDocumentPath() ?? filePath,
+    getFromFile: () => currentFilePath() ?? filePath,
     // The reference card's link/image providers: a page-link
     // card's backend call and an image card's Replace… picker both need the
     // project root, the same accessor shape the insert bar's media picker
@@ -2793,7 +2789,7 @@ async function loadFileBody(
     revealFile: (path) => fileTree?.revealNewFile(path),
     getCurrentArticle: () => ({
       title: headingController?.saved()?.text ?? '',
-      path: activeDocumentPath() ?? filePath,
+      path: currentFilePath() ?? filePath,
       locations: toNameList(frontmatterStore?.getValues().location),
       revealLocations: () => { chipBar?.revealField('location'); },
     }),
@@ -2829,13 +2825,13 @@ async function loadFileBody(
       },
       // Project-root-relative path of the active file (or null), for [[#
       // same-page heading lookup.
-      getCurrentPath: () => activeDocumentPath(),
+      getCurrentPath: () => currentFilePath(),
     } : undefined,
     // "Browse files…" on the asset-completion tooltip. Same import
     // follow-through an OS drop gets: a copy that never reaches the tree is
     // invisible until some unrelated refresh.
     assetBrowse: isMarkdown ? {
-      pagePath: () => activeDocumentPath(),
+      pagePath: () => currentFilePath(),
       projectRoot: () => projectRoot ?? null,
       afterImport: () => afterVaultImport(fileTree),
     } : undefined,
@@ -2844,7 +2840,7 @@ async function loadFileBody(
     // next to the open file) and hand cm-paste the stored path, which it
     // writes as `![](path)` from the page.
     pasteImage: async (suggestedName, dataBase64) => {
-      const path = activeDocumentPath();
+      const path = currentFilePath();
       if (!path) return null;
       const dir = await attachmentDirFor(path);
       const rel = childPath(dir, suggestedName);
@@ -2877,6 +2873,7 @@ async function loadFileBody(
     // the title is hidden (empty-title state) so CM6's default ArrowUp runs.
     onEscapeTop: () => headingController?.focusEnd() ?? false,
   });
+  if (heldFor()) applyHold(); // a file opened during a hold starts held
   documentBase = unsavedResume ? resumed.base : { ...baseFrom(parsedData), frontmatter: isMarkdown ? initial : {} };
   if (resumed) documentHistory.restore(resumed.log);
   if (id) parked.delete(id);
@@ -3021,7 +3018,7 @@ async function saveActiveDocument(reason: 'autosave' | 'forced' = 'autosave'): P
   // refused rather than allowed to write pre-commit content over the
   // commit's own rewrite of that same file. The lock therefore guards
   // autosave calls as well as direct input events.
-  if (editorCommitLocked && reason !== 'forced') return;
+  if (isHeldFor('commit') && reason !== 'forced') return;
   if (saveInFlight) { saveQueued = true; return saveInFlight; }
   // Defensive: clear the prior result so a run that short-circuits before any
   // write (no path / no editor) leaves lastWriteOk null — flushPendingSave then
@@ -3031,7 +3028,7 @@ async function saveActiveDocument(reason: 'autosave' | 'forced' = 'autosave'): P
     let conflicts = 0;
     do {
       saveQueued = false;
-      const path = activeDocumentPath();
+      const path = currentFilePath();
       const editor = cmEditor;
       const base = documentBase;
       if (!path || !editor || !base) break;
@@ -3182,31 +3179,15 @@ async function reloadExternalDocument(): Promise<void> {
   reconcileWithDisk(parsed.data);
 }
 
-/**
- * Freeze (or unfreeze) the open CM6 buffer for the duration of a rename,
- * move or undo commit. Engaged BEFORE the file tree's own
- * `flushPendingSave()` call so read-only refuses typing for the whole commit,
- * including while that flush's own IPC is in flight, so a keystroke can
- * never arm an autosave debounce that outlives the commit and overwrites
- * its rewrite of that same file. `saveActiveDocument`'s own guard on
- * `editorCommitLocked` is the actual belt-and-suspenders enforcement — this
- * flag is what it reads. Reuses the exact Compartment reconfigure the
- * publish seal already drives (`editor:seal`'s `cmEditor.setReadOnly`) —
- * same mechanism, a different trigger.
- */
-function setEditorCommitLock(locked: boolean): void {
-  // The freeze makes the body non-editable, and a browser then moves focus to
-  // <body>. Focus held when the freeze starts, or asked for during it, is
-  // given back when it ends, unless something else took focus meanwhile.
-  if (locked) bodyFocusOwed ||= cmEditor?.getView()?.hasFocus ?? false;
-  editorCommitLocked = locked;
-  cmEditor?.setReadOnly(locked, "commit");
-  if (!locked && bodyFocusOwed) {
-    bodyFocusOwed = false;
-    const active = document.activeElement;
-    if (active === null || active === document.body) cmEditor?.getView()?.focus();
-  }
+/** The one place the hold reaches the open editor and its chrome. */
+function applyHold(): void {
+  const reason = heldFor();
+  cmEditor?.setHeld(reason !== null);
+  if (reason) chipBar?.closeAnyOverlay(); // an open pill editor or menu writes
+  docStateCluster.sync();
+  showHold(reason);
 }
+onHoldChange(applyHold);
 
 // ── Scroll Sync ─────────────────────────────────────────────────────────
 // Scroll sync is always active — there is no toggle.
@@ -3220,16 +3201,17 @@ function setEditorCommitLock(locked: boolean): void {
  * Following means going where the preview is, not only moving when it moves:
  * see `followPreviewPosition`.
  *
+ * `jump`: a jump from the preview (the right-click rows, double click) put
+ * the editor where the person should look. Neither pane leads: the editor
+ * neither asks where the preview is nor tells it, until the preview scrolls
+ * or another document opens.
+ *
  * Only a leading editor tells the preview where to go. CM6 fires `scroll` for
  * layout as readily as for the user, so a scroll event on its own says nothing
  * about who moved: reopening the editor on the file it last showed grows the
- * panel from collapsed, the reflow moves `scrollTop`, and the editor used to
- * push the line it had been left on into a preview the user was reading
- * somewhere else. The 400ms lock this replaces could not tell those apart
- * either — it only hid the echo of a scroll the editor had just been told to
- * make.
+ * panel from collapsed, and the reflow moves `scrollTop`.
  */
-let editorLeads = false;
+let lead: 'preview' | 'editor' | 'jump' = 'preview';
 
 let scrollSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let caretSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3239,14 +3221,14 @@ let lastCaretSyncLine = 0;
 
 /** The preview leads again: drop the editor's lead and any sync it had queued. */
 function followPreview(): void {
-  editorLeads = false;
+  lead = 'preview';
   if (scrollSyncTimer) clearTimeout(scrollSyncTimer);
   if (caretSyncTimer) clearTimeout(caretSyncTimer);
 }
 
 /** The user is working in the editor, so its position is the one to share. */
 function leadFromEditor(): void {
-  editorLeads = true;
+  lead = 'editor';
 }
 
 let followPositionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3265,13 +3247,22 @@ let followPositionTimer: ReturnType<typeof setTimeout> | null = null;
  * a different page than this document.
  */
 function followPreviewPosition(): void {
+  if (lead !== 'preview') return;
   if (followPositionTimer) clearTimeout(followPositionTimer);
   followPositionTimer = setTimeout(() => {
     followPositionTimer = null;
     const path = currentFilePath();
-    if (editorLeads || !cmEditor || !path) return;
+    if (lead !== 'preview' || !cmEditor || !path) return;
     uiHost.bus.emit('scroll-sync:request-preview-position', { sourceFile: toAbsolute(path, projectRoot ?? '') });
   }, 150);
+}
+
+/** A jump from the preview: drop what either pane had queued and hold the editor where it lands. */
+function holdJump(): void {
+  followPreview();
+  lead = 'jump';
+  if (followPositionTimer) clearTimeout(followPositionTimer);
+  followPositionTimer = null;
 }
 
 /** Threshold for "editor at top." Mirror of TOP_THRESHOLD in
@@ -3289,7 +3280,7 @@ const BOTTOM_THRESHOLD = 4;
  * Falls back to heading-anchor sync for content without line annotations.
  */
 function onEditorScroll(): void {
-  if (!editorLeads || !cmEditor) return;
+  if (lead !== 'editor' || !cmEditor) return;
 
   if (scrollSyncTimer) clearTimeout(scrollSyncTimer);
   scrollSyncTimer = setTimeout(() => {
@@ -3309,15 +3300,14 @@ function onEditorScroll(): void {
     const offset = computeContentOffset(view);
     const atTop = view.scrollDOM.scrollTop < offset + TOP_THRESHOLD;
 
-    // Symmetric to atTop: the editor's scroller is at (or within a hair of)
-    // its maximum. The top-visible line is then some line BEFORE the last, so
+    // Symmetric to atTop: the file's last line is in view (the empty room
+    // below it is not the file). The top-visible line is then some line BEFORE the last, so
     // a line-based sync parks that line's element at block:start and leaves the
     // preview short of its own bottom (the reported "preview stops mid-way"
     // bug). The preview short-circuits to its max scroll on this flag, exactly
     // as atTop short-circuits to 0. atTop is checked first on the bridge, so a
     // doc too short to scroll (both true) resolves to top, which is correct.
-    const sd = view.scrollDOM;
-    const atBottom = sd.scrollTop + sd.clientHeight >= sd.scrollHeight - BOTTOM_THRESHOLD;
+    const atBottom = lastLineInView(view, BOTTOM_THRESHOLD);
 
     // Primary: line-based sync (requires data-source-line in built HTML)
     uiHost.bus.emit('scroll-sync:editor-to-preview', {
@@ -3363,7 +3353,7 @@ function onEditorScroll(): void {
  * key down or arrowing through a paragraph costs one message, not fifty.
  */
 function onEditorCaretMove(): void {
-  if (!editorLeads || !cmEditor) return;
+  if (lead !== 'editor' || !cmEditor) return;
   if (caretSyncTimer) clearTimeout(caretSyncTimer);
   caretSyncTimer = setTimeout(() => {
     if (!cmEditor) return;
@@ -3405,7 +3395,7 @@ function onPreviewScroll({ line, atTop, atBottom, answering }: { line?: number; 
   // happened here while it was in flight: the user starting to work in the
   // editor, or the editor moving on to another document.
   const path = currentFilePath();
-  if (answering !== undefined && (editorLeads || !path || answering !== toAbsolute(path, projectRoot ?? ''))) return;
+  if (answering !== undefined && (lead !== 'preview' || !path || answering !== toAbsolute(path, projectRoot ?? ''))) return;
   followPreview();
   const view = cmEditor.getView();
   if (atTop) scrollEditorToTop(view);
@@ -3430,7 +3420,7 @@ function onPreviewScroll({ line, atTop, atBottom, answering }: { line?: number; 
  * would sit on a different part of the page than the one being edited until a
  * scroll happened to shake it loose.
  *
- * Both triggers fire only while the editor leads (see `editorLeads`), so the
+ * Both triggers fire only while the editor leads (see `lead`), so the
  * user's own input in the editor's pane is what hands it the lead: the pane,
  * not just this scroller, because the insert bar sits beside the scroller in
  * it. (A file drop never reaches the DOM — Tauri takes it — so the native drop
@@ -3510,7 +3500,8 @@ export async function handleEditorFileDrop(paths: string[], point?: { x: number;
   const path = currentFilePath();
   // Only a host with files on disk delivers an OS drop, and copies it in.
   const copyIn = uiHost.copyIn;
-  if (!cmEditor || !path || !copyIn) return;
+  // A held folder takes no files, so none is copied in for an embed that would be refused.
+  if (!cmEditor || !path || !copyIn || heldFor()) return;
 
   // Classify each path as directory, embeddable file, or import-only file.
   // A folder is embedded as ![[name/]] after it is copied in.

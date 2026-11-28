@@ -35,3 +35,8 @@ pub fn entry(binary: &Path, version: &str) -> DerivationEntry {
         contribution,
     }
 }
+
+/// An open gate on a core pool no other test draws from.
+pub fn own_gate() -> crate::system::folder_session::DerivedWorkGate {
+    crate::system::folder_session::DerivedWorkGate::default().drawing_from(crate::system::folder_session::CorePool::own())
+}

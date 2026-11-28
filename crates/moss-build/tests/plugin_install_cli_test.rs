@@ -132,7 +132,7 @@ fn installing_checks_the_catalog_every_time_and_trusts_nothing() {
 
     // In a folder the app trusts, the line is the install alone.
     let mut record = trust::TrustRecord::default();
-    record.set(site.canonicalize().unwrap(), true);
+    record.set(site.canonicalize().unwrap(), None, true);
     trust::save(&app_data, &record).unwrap();
     let done = install("alpha", &site, &origin, &[]).unwrap();
     assert_eq!(done.line, format!("Installed alpha 1.2.0 into {}", site.display()));

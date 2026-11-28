@@ -114,7 +114,8 @@ async fn a_publish_of_a_site_with_no_tracked_pages_leaves_a_baseline() {
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
     record_what_is_live(&mp, &manifest, TARGET, &history).await;
 
-    assert_eq!(live_baseline::load(&mp), Baseline::Present(live_baseline::LiveBaseline::default()));
+    let Baseline::Present(live) = live_baseline::load(&mp) else { panic!("the record reads as a baseline") };
+    assert!(live.entries.is_empty(), "{live:?}");
 }
 
 /// The article map is regenerable build output, so a build can legitimately
@@ -373,9 +374,16 @@ fn stamped_vault(
     let mp = MossPaths::new(vault.path());
     std::fs::create_dir_all(mp.build_dir()).unwrap();
     std::fs::write(mp.article_map(), serde_json::to_vec(&map).unwrap()).unwrap();
+    let sealed = seal(vault.path(), articles, folders, published);
+    (vault, sealed)
+}
+
+/// A seal of the `published` pages of `vault` as they are now, built under the
+/// uids `articles` and `folders` name.
+fn seal(vault: &std::path::Path, articles: &[(&str, &str)], folders: &[(&str, &str)], published: &[&str]) -> SealedManifest {
     let mut pending = PendingManifest::new(SiteHashes::default());
     for src in published {
-        let bytes = std::fs::read(vault.path().join(src)).unwrap();
+        let bytes = std::fs::read(vault.join(src)).unwrap();
         let sp = ServedPath::from_source(&format!("{}/index.html", src.trim_end_matches(".md"))).unwrap();
         // A uid builds to the same page, so the output stays put.
         pending.register(&sp, src.as_bytes(), crate::build::manifest::HashBucket::Files);
@@ -386,7 +394,7 @@ fn stamped_vault(
             pending.register_page_meta(src.to_string(), meta);
         }
     }
-    (vault, pending.seal())
+    pending.seal()
 }
 
 pub(crate) async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> PublishedSnapshot {
@@ -394,6 +402,41 @@ pub(crate) async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> Pu
     let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
     super::record_landed(vault, sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await;
     published_record::load_for(&MossPaths::new(vault), Some(TARGET)).expect("a record")
+}
+
+/// The version a publish keeps holds a page as the publish left it, stamped,
+/// so the page can be shown and restored from it.
+#[tokio::test]
+async fn a_publish_keeps_each_new_pages_stamped_bytes() {
+    let (vault, sealed) = stamped_vault(&[("posts/a.md", "---\ntitle: A\n---\nBody\n")], &[("posts/a.md", "aabbccdd")], &[], &["posts/a.md"]);
+    let history = crate::deploy::history::HistoryStore::in_vault(vault.path());
+    super::record_landed(vault.path(), &sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await;
+    let (id, _) = history.list_records().pop().expect("a version");
+    let kept = history.read_version(&id, "posts/a.md").expect("the page is kept");
+    assert_eq!(String::from_utf8(kept).unwrap(), read(vault.path(), "posts/a.md"));
+    assert_eq!(uid_in(vault.path(), "posts/a.md").as_deref(), Some("aabbccdd"));
+}
+
+/// A copy that lost its stamp is published, and that publish stamps it again:
+/// the stamped page matches an earlier version, and is still not older content.
+#[tokio::test]
+async fn a_page_stamped_again_after_its_publish_redeploys() {
+    let unstamped = "---\ntitle: A\n---\nBody\n";
+    let articles = [("posts/a.md", "aabbccdd")];
+    let stamped = super::with_uid_stamp(unstamped, "aabbccdd").unwrap().unwrap();
+    let (vault, sealed) = stamped_vault(&[("posts/a.md", &stamped)], &articles, &[], &["posts/a.md"]);
+    let history = crate::deploy::history::HistoryStore::in_vault(vault.path());
+    let land = |sealed: SealedManifest| {
+        let history = history.clone();
+        let vault = vault.path().to_path_buf();
+        async move { super::record_landed(&vault, &sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await }
+    };
+    land(sealed).await;
+    std::fs::write(vault.path().join("posts/a.md"), unstamped).unwrap();
+    land(seal(vault.path(), &articles, &[], &["posts/a.md"])).await;
+    assert_eq!(read(vault.path(), "posts/a.md"), stamped);
+    let again = seal(vault.path(), &articles, &[], &["posts/a.md"]);
+    assert!(crate::deploy::removal_gate::refuse_stale_generation(vault.path(), &again).is_ok());
 }
 
 fn read(vault: &std::path::Path, path: &str) -> String {
@@ -632,6 +675,45 @@ pub(crate) fn seal_post_naming(root: &std::path::Path, own: Option<&[&str]>) -> 
     std::fs::create_dir_all(&generations).unwrap();
     sealed.write_publish_view(&generations).unwrap();
     sealed
+}
+
+/// A copy whose channel waits on a panel the person closed ends when moss
+/// cancels it: the send goes on to the next channel instead of holding the
+/// folder's turn until the plugin gives up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_copy_lets_the_next_channel_send() {
+    use crate::syndication::send::{after_live, Outcome, SendOptions, Sent};
+    let vault = tempfile::tempdir().unwrap();
+    let root = vault.path();
+    let posted = "async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/1' } }; }";
+    crate::syndication::test_channel(root, "first", "{ publish_copy: async function () { await new Promise(r => setTimeout(r, 60000)); return { success: true }; } }");
+    crate::syndication::test_channel(root, "second", &format!("{{ publish_copy: {posted} }}"));
+    land(root, &seal_post_naming(root, Some(&["first", "second"]))).await;
+
+    let cache = std::sync::Arc::new(crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()));
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let send = tokio::spawn({
+        let (cache, root, started) = (cache.clone(), root.to_path_buf(), started.clone());
+        async move {
+            let emit = |s: &Sent| if s.channel == "first" && s.outcome == Outcome::Sending { started.notify_one() };
+            let opts = SendOptions::test("https://example.org", &emit);
+            after_live(&root, &opts, || cache.get_or_create(&root.to_string_lossy())).await
+        }
+    });
+    let wait = std::time::Duration::from_secs(10);
+    tokio::time::timeout(wait, started.notified()).await.expect("the first channel's copy starts");
+    let manager = cache.get_existing(&root.to_string_lossy()).expect("the send made the folder's manager");
+    // The hook becomes cancellable a moment after the send reports it started.
+    let sent = tokio::time::timeout(wait, async move {
+        while !send.is_finished() {
+            manager.cancel_copy("first");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        send.await.unwrap()
+    }).await.expect("the send ends once the waiting copy is cancelled");
+    let outcome = |channel: &str| sent.iter().find(|s| s.channel == channel).map(|s| s.outcome.clone());
+    assert!(matches!(outcome("first"), Some(Outcome::Unconfirmed { .. })), "{sent:?}");
+    assert!(matches!(outcome("second"), Some(Outcome::Posted { .. })), "{sent:?}");
 }
 
 /// Naming a channel on a live post changes no output, so the next publish

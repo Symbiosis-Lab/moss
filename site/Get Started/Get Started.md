@@ -5,6 +5,7 @@ title: Get Started
 weight: 0
 translationKey: docs-start
 children: false
+series: true
 ---
 ![[Intro to moss.mp4|100%|A one-minute tour of moss: make a folder your website, write a first post, start from a starter folder, and publish.]]
 

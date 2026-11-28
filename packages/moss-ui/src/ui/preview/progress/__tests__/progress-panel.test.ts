@@ -1539,9 +1539,9 @@ describe("ProgressPanel", () => {
       expect(reasons()).not.toContain("Upload refused");
     });
 
-    it("failed→waiting re-publish resets stage and clears failed status", () => {
+    it("failed→preparing re-publish resets stage and clears failed status", () => {
       // Spec "Critical": after a failed publish the user presses Publish again.
-      // The fresh DeployWaitingForBuild / deploy-progress{waiting} must reset
+      // The fresh deploy-progress{preparing} must reset
       // the panel so the red "failed" status is replaced by the live progress.
       const cb = listenCallbacks.get("deploy-progress")![0];
 
@@ -1552,8 +1552,8 @@ describe("ProgressPanel", () => {
       const failedVm = panel.buildViewModel();
       expect(failedVm.status.kind).toBe("failed");
 
-      // 2. Re-publish: a waiting event arrives (DeployWaitingForBuild equivalent).
-      cb({ stage: "waiting", current: 0, total: 0, message: "" });
+      // 2. Re-publish: a preparing event arrives.
+      cb({ stage: "preparing", current: 0, total: 0, message: "" });
 
       // 3. Stage must NOT be stuck on "failed" — it should have reset and advanced.
       const newStage = panel.getPublishStage();
@@ -1631,29 +1631,19 @@ describe("ProgressPanel", () => {
       fireMossEvent({ kind: "PreviewServerFailed", payload: { message: "port busy", open_in_another_app: false } });
       panel.setStage("ready");
 
-      cb({ stage: "waiting", current: 0, total: 0, message: "" });
+      cb({ stage: "preparing", current: 0, total: 0, message: "" });
       expect(panel.buildViewModel().notices).toHaveLength(0);
     });
 
-    it("DeployWaitingForBuild advances publish stage to waiting (no task)", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
-
-      expect(panel.getPublishStage()).toBe("waiting");
-      expect(panel.getActiveTasks()).toHaveLength(0);
-    });
-
     /**
-     * Regression: the stage machine's entrance is shared (DeployWaitingForBuild
-     * comes from generic build machinery) but its exit used to be written by
-     * hand inside the moss-hosted bodies only. A plugin publish — OnionPress —
-     * tripped the entrance and emitted no terminal stage at all, so the panel
-     * sat on "Waiting for build… rebuild paused" forever after a publish that
-     * had in fact succeeded. The terminal stage now comes from the publish
-     * guard, which every publish passes through.
+     * Regression: a plugin publish (OnionPress) entered the stage machine but
+     * emitted no terminal stage, so the panel sat on "Waiting for build…
+     * rebuild paused" forever after a publish that had succeeded. The terminal
+     * stage now comes from the publish guard, which every publish passes through.
      */
-    it("a terminal event alone brings the panel down from waiting", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
-      expect(panel.getPublishStage()).toBe("waiting");
+    it("a terminal event alone brings the panel down from preparing", () => {
+      listenCallbacks.get("deploy-progress")![0]({ stage: "preparing", current: 0, total: 0, message: "" });
+      expect(panel.getPublishStage()).toBe("preparing");
 
       vi.useFakeTimers();
       try {
@@ -1666,15 +1656,6 @@ describe("ProgressPanel", () => {
       } finally {
         vi.useRealTimers();
       }
-    });
-
-    it("late waiting after preparing does not regress publish stage", () => {
-      const cb = listenCallbacks.get("deploy-progress")![0];
-      cb({ stage: "preparing", current: 0, total: 0, message: "" });
-      expect(panel.getPublishStage()).toBe("preparing");
-
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
-      expect(panel.getPublishStage()).toBe("preparing");
     });
 
     it("ignores events with no payload", () => {
@@ -2370,21 +2351,6 @@ describe("ProgressPanel", () => {
       expect(panel.getAdvisories()).toHaveLength(0);
     });
 
-    it("an advisory moss keeps until its task restates it survives build-start and leaves at that task's next tick", () => {
-      // A plugin's Sync offer: save-rebuilds run no process hook, so only the
-      // plugin's next process run (or the Sync itself) speaks for it.
-      const offer = { scope: "Remote", severity: "NeedsAction", item: null, what: "3 new posts on Matters", lifetime: "UntilTaskRestates", action: { InApp: { op: "RunPluginProcess", args: { plugin: "matters" }, label: "Sync" } } };
-      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "plugin-offer-matters", message: "", current: 0, total: 0, completed: true, advisories: [offer] } });
-      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "videos", message: "", current: 1, total: 1, completed: true, advisories: [{ scope: "File", severity: "ShippedDegraded", item: "v.mov", what: "x", action: "None" }] } });
-      expect(panel.getAdvisories()).toHaveLength(2);
-
-      panel.setStage("opening");
-      expect(panel.getAdvisories().map((a) => a.reason)).toEqual(["3 new posts on Matters"]);
-
-      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "plugin-offer-matters", message: "", current: 0, total: 0, completed: true, advisories: [] } });
-      expect(panel.getAdvisories()).toHaveLength(0);
-    });
-
     it("a dismissal that matches no notice clears nothing", async () => {
       fireMossEvent({ kind: "BackgroundProgress", payload: { task: "videos", message: "", current: 1, total: 1, completed: true, advisories: [{ scope: "File", severity: "ShippedDegraded", item: "v.mov", what: "x", action: "None" }] } });
       const { eventBus, Events } = await import("../../../context/event-bus");
@@ -2726,7 +2692,7 @@ describe("ProgressPanel", () => {
         payload: { task: "html_pages", message: "", current: 8, total: 12, completed: false },
       });
       // Now publish queues:
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "preparing", current: 0, total: 0, message: "" });
 
       expect(stageLabel()).toBe("Preparing…");
       expect(taskLabels()).toEqual([]);
@@ -2750,8 +2716,6 @@ describe("ProgressPanel", () => {
           record();
         };
 
-        fireMossEvent({ kind: "DeployWaitingForBuild" });
-        record();
         stage("preparing");
         stage("rebuilding", { message: "Updating search" });
         // The rebuild's message is a hover on the line, never the headline.
@@ -3052,8 +3016,8 @@ describe("ProgressPanel", () => {
       // Prior session left publish in waiting (e.g., user closed folder
       // mid-deploy). New session starts with setStage('initial') and
       // should not show "Waiting for build…".
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
-      expect(panel.getPublishStage()).toBe("waiting");
+      listenCallbacks.get("deploy-progress")![0]({ stage: "preparing", current: 0, total: 0, message: "" });
+      expect(panel.getPublishStage()).toBe("preparing");
 
       panel.setStage("initial");
       expect(panel.getPublishStage()).toBe("idle");
@@ -3178,10 +3142,10 @@ describe("ProgressPanel", () => {
       expect(panel.getPublishStage()).toBe("uploading");
     });
 
-    it("(3b) DeployWaitingForBuild (publish queued behind a build) also shows", () => {
-      fireMossEvent({ kind: "DeployWaitingForBuild" });
+    it("(3b) deploy-progress preparing also shows", () => {
+      listenCallbacks.get("deploy-progress")![0]({ stage: "preparing", current: 0, total: 0, message: "" });
       expect(panel.isHidden).toBe(false);
-      expect(panel.getPublishStage()).toBe("waiting");
+      expect(panel.getPublishStage()).toBe("preparing");
     });
 
     it("(4) the hairline/flash path is untouched — build progress still advances the stage state", () => {

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::build::scan::path_collision::on_disk;
 use crate::types::content::FileInfo;
+pub(crate) use moss_core::page::page_map::is_home_translation;
 
 fn parent_dir(path: &str) -> &str {
     Path::new(path).parent().and_then(|p| p.to_str()).unwrap_or("")
@@ -62,16 +63,6 @@ pub(crate) fn elect_homes(
     )
 }
 
-/// Whether a file that lost its folder's home election is that home's
-/// language variant (`index.fr.md`), which shares the winner's address so slug
-/// deduplication can place it. A folder without a winner has no address to
-/// share.
-pub(crate) fn is_home_translation(file_path: &str, winners: &HashSet<String>) -> bool {
-    let stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    let dir = parent_dir(file_path);
-    moss_core::home::strip_lang_suffix(&stem).is_some_and(moss_core::home::is_index_stem)
-        && winners.iter().any(|w| parent_dir(w) == dir)
-}
 
 /// The default edition's language, [`moss_core::home::root_language`] over
 /// every page but the root's home, its translations and the layout slots.

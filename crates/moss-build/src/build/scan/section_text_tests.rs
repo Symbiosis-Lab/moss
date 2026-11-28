@@ -88,7 +88,7 @@ fn a_value_that_is_not_hex_has_no_text_colour() {
 fn the_style_carries_the_accent_and_both_text_colours() {
     let a = accent("#f2d64b", "work".into()).unwrap();
     assert_eq!(
-        section_style(&a),
+        a.style(),
         format!(
             "--moss-section-color: #f2d64b; --moss-section-text-light: {}; --moss-section-text-dark: #f2d64b",
             a.text_light

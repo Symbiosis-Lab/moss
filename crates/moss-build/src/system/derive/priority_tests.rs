@@ -57,7 +57,7 @@ fn a_navigation_while_reads_run_never_cancels_them() {
     let site = crate::moss_paths::MossPaths::new(&dir.path().join("site"));
     let navigations = std::sync::atomic::AtomicUsize::new(0);
     let nav_dir = dir.path().to_path_buf();
-    let results = derive_batch_by(&site, &jobs, false, &|| false, std::sync::Arc::new(move |_| {
+    let results = derive_batch_by(&site, &jobs, false, &crate::system::derive::test_support::own_gate(), &|| false, std::sync::Arc::new(move |_| {
         // Every ranking is a navigation to something else.
         note_viewed(&nav_dir, &format!("/{}", navigations.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
         Tier::Rest

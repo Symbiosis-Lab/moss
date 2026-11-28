@@ -149,6 +149,26 @@ pub struct PluginManifest {
     /// NOT gated — a caller signs only with its own scoped key.
     #[serde(default)]
     pub requires: Option<Vec<String>>,
+
+    /// The hosts the plugin's code may reach. `None` reaches nothing, so a
+    /// manifest written before the field existed is refused, not trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkDecl>,
+}
+
+/// A manifest's `network` field: what [`crate::plugins::runtime::hosts`] allows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkDecl {
+    /// Exact hosts, or `*.domain` for any name below `domain`, each optionally
+    /// `:<port>`; a loopback host without a port reaches nothing.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    /// Settings whose value is an address the person typed; its host is allowed.
+    #[serde(default)]
+    pub setting_hosts: Vec<String>,
+    /// The site's own published host.
+    #[serde(default)]
+    pub site: bool,
 }
 
 impl PluginManifest {
@@ -542,7 +562,7 @@ impl ProjectInfo {
             // 2026-09-01 this was content sampling alone, so a site with an
             // explicit `[site] lang` handed its plugins the detected language
             // and its pages the declared one — one question, two answers.
-            lang: crate::i18n::detect::resolve_site_default_lang(
+            lang: crate::i18n::detect::resolve_site_lang(
                 crate::build::site_config::get_site_lang(&ps.root_path)
                     .ok()
                     .flatten()
@@ -550,7 +570,7 @@ impl ProjectInfo {
                 ps.homepage_file.as_deref(),
                 &ps.markdown_files,
                 &ps.root_path,
-            ),
+            ).code,
         }
     }
 }
@@ -728,18 +748,6 @@ pub struct HookResult {
     #[serde(default)]
     pub copy: Option<crate::syndication::record::CopyOutcome>,
 
-    /// Work a process hook a build started found but may not do, because it
-    /// would write the person's folder. Read only from such a run; moss shows
-    /// it with one action that runs the hook again as the person's own act.
-    #[serde(default)]
-    pub offer: Option<Offer>,
-}
-
-/// See [`HookResult::offer`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct Offer {
-    /// What is waiting, in the person's words: "3 new posts on Matters".
-    pub title: String,
 }
 
 /// Plugin hook progress payload — carried by `MossEvent::PluginProgress`.
@@ -820,7 +828,6 @@ pub fn clamp_plugin_advisory(p: PluginAdvisory) -> crate::advisory::Advisory {
     };
     let item = p.item.filter(|item| is_site_relative(item));
     crate::advisory::Advisory {
-        lifetime: Default::default(),
         scope: p.scope,
         severity,
         item,

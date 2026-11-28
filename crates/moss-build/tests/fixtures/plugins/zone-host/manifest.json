@@ -1,0 +1,14 @@
+{
+  "name": "zone-host",
+  "version": "0.1.0",
+  "display_name": "Zone host",
+  "entry": "main.bundle.js",
+  "global_name": "ZoneHost",
+  "capabilities": [],
+  "contributes": {
+    "account": { "kind": "key", "url": "https://zones.example/tokens", "length": 40 },
+    "provider": [
+      { "part": "address", "needs": "Zone · Edit", "addresses": ["https://zones.example/api"], "address": { "nameservers": ["ns.zones.example"] } }
+    ]
+  }
+}

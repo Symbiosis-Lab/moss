@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '../../support/browser-test';
 import { gotoFramed } from '../../support/framed-page';
 
 // The preview bridge answers `moss-capture-request` with a bitmap of its own

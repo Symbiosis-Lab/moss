@@ -1,7 +1,7 @@
 /**
  * Render gate: the nav toggle cluster is one optical family.
  *
- * Four assertions, each of which needs a real engine and cannot be read off
+ * Five assertions, each of which needs a real engine and cannot be read off
  * the emitted HTML:
  *
  *   1. The three `.nav-icons` children (search button, language toggle, theme
@@ -21,13 +21,13 @@
  *      cannot do, and the seam only exists after the overlay is opened by
  *      the runtime.
  *
- *   4. When a long breadcrumb pushes `.nav-right` onto row 2, the links sit at
- *      the START edge and the toggle cluster at the END edge — the only way
- *      to catch this: whether nav-right actually wrapped depends on measured
- *      text width, not a breakpoint, so only a layout engine can tell you.
- *      (Do not "simplify" this to `flex: 1 1 100%`: that forces the wrap even
- *      when the content fits, and splits minimal-nav sites across two rows.
- *      See the "Edge alignment" block in site.css.)
+ *   4. When a long breadcrumb wraps the masthead with scripts off, the
+ *      toggle cluster sits at the END edge of the last row and nothing
+ *      overlaps or overflows. Whether it wrapped depends on measured text
+ *      width, not a breakpoint, so only a layout engine can tell.
+ *
+ *   5. When scripts then split that masthead, the header keeps its height and
+ *      the page below does not move (Chromium's layout-shift entries).
  *
  * The fixture turns search on via `[site].search`.
  *
@@ -35,7 +35,8 @@
  *   npx playwright test -c playwright/nav-toggle-cluster.config.ts
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
+import { holdScript, settle, shifts } from "./first-paint";
 
 /** Computed background-color of a throwaway element painted with `value`. */
 async function resolveColor(page: Page, value: string): Promise<string> {
@@ -125,67 +126,81 @@ test("the search overlay seam is a neutral hairline, not an accent underline", a
   expect(painted, "the green focus-underline regression").not.toBe(accentQuiet);
 });
 
-test("a wrapped nav row puts the links at the start edge and the toggles at the end", async ({
+test("a wrapped masthead keeps the toggles at the end edge of the last row", async ({
   browser,
   baseURL,
 }) => {
-  // The shipped wrap, with scripts off: the measured split (nav-split.ts)
-  // replaces it whenever scripts run, so this is the no-script fallback and
-  // what a theme that keeps `.nav-right` a box gets.
-  // 1024px: a desktop width, comfortably above the 48rem medium-nav breakpoint,
-  // so any wrap here is driven by the breadcrumb's measured width and not by a
-  // media query. This is the width at which the old ≤32rem-scoped rules failed.
+  // The no-script fallback (nav-split.ts replaces it when scripts run), and a
+  // trail page's first paint. 1024px is well above the 48rem breakpoint, so the
+  // wrap comes from the trail's measured width alone.
   const context = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 1024, height: 900 } });
-  const page = await context.newPage();
+  const page = await newPage(context);
   await page.goto(
     "/programmes-and-long-form-reporting/field-notes-from-a-very-long-section-title/",
     { waitUntil: "load" },
   );
 
   const box = await page.evaluate(() => {
-    const q = (sel: string) => document.querySelector(sel);
-    const content = q(".nav-content") as HTMLElement;
-    const left = q(".nav-left") as HTMLElement;
-    const right = q(".nav-right") as HTMLElement;
-    const links = q(".nav-links") as HTMLElement;
-    const icons = q(".nav-icons") as HTMLElement;
-    if (!content || !left || !right || !links || !icons) return null;
-    // Content box of .nav-content — the edges the two groups must align to.
-    // .nav-content carries padding-bottom only, but read the inline padding
-    // rather than assume it, so this stays true if that ever changes.
+    const rect = (sel: string) => {
+      const r = document.querySelector(sel)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    };
+    const content = document.querySelector(".nav-content") as HTMLElement;
     const cs = window.getComputedStyle(content);
-    const cRect = content.getBoundingClientRect();
+    const c = content.getBoundingClientRect();
     return {
-      contentStart: cRect.left + parseFloat(cs.paddingLeft),
-      contentEnd: cRect.right - parseFloat(cs.paddingRight),
-      leftTop: left.getBoundingClientRect().top,
-      rightTop: right.getBoundingClientRect().top,
-      linksStart: links.getBoundingClientRect().left,
-      iconsEnd: icons.getBoundingClientRect().right,
+      start: c.left + parseFloat(cs.paddingLeft),
+      end: c.right - parseFloat(cs.paddingRight),
+      trail: rect(".nav-left"),
+      links: rect(".nav-links"),
+      icons: rect(".nav-icons"),
     };
   });
+  const where = JSON.stringify(box);
 
-  expect(box, ".nav-content and both groups must exist").not.toBeNull();
-  const b = box!;
-
-  // Precondition: the breadcrumb actually pushed nav-right to a second row.
-  // Without this the two edge assertions below would pass trivially on a
-  // single-row nav, and the gate would be asserting nothing.
-  expect(
-    b.rightTop,
-    "fixture must be wide/long enough to wrap nav-right onto row 2 — " +
-      "if this fails the breadcrumb got shorter, not the layout broken",
-  ).toBeGreaterThan(b.leftTop);
-
-  expect(b.linksStart, "links must sit at the start edge").toBeCloseTo(
-    b.contentStart,
-    0,
-  );
-  expect(b.iconsEnd, "toggles must sit at the end edge").toBeCloseTo(
-    b.contentEnd,
-    0,
-  );
+  // Precondition: the trail wrapped the masthead. Without it the assertions
+  // below pass on a single row and test nothing.
+  expect(box.icons.top, `the fixture must wrap the toggles below the trail: ${where}`).toBeGreaterThanOrEqual(box.trail.bottom);
+  expect(box.icons.top, `the toggles are on the last row: ${where}`).toBeGreaterThanOrEqual(Math.max(box.trail.top, box.links.top));
+  expect(box.icons.right, `the toggles sit at the end edge: ${where}`).toBeCloseTo(box.end, 0);
+  const overlaps = box.links.top < box.trail.bottom && box.links.bottom > box.trail.top
+    && box.links.left < box.trail.right && box.links.right > box.trail.left;
+  expect(overlaps, `the links must not overlap the trail: ${where}`).toBe(false);
+  for (const [name, r] of Object.entries({ trail: box.trail, links: box.links, icons: box.icons })) {
+    expect(r.left, `${name} inside the start edge: ${where}`).toBeGreaterThanOrEqual(box.start - 0.5);
+    expect(r.right, `${name} inside the end edge: ${where}`).toBeLessThanOrEqual(box.end + 0.5);
+  }
   await context.close();
+});
+
+// The split then swaps the links and the toggles. Both rows keep the toggles'
+// height in either layout, so the header and the page below stay where the
+// first paint put them.
+test("the split after a trail page's first paint moves only the links and toggles", async ({ browser, baseURL, browserName }) => {
+  test.skip(browserName !== "chromium", "layout-shift entries are Chromium's");
+  const path = "/programmes-and-long-form-reporting/field-notes-from-a-very-long-section-title/";
+  const viewport = { width: 1024, height: 900 };
+  const header = async (javaScriptEnabled: boolean) => {
+    const context = await browser.newContext({ baseURL, javaScriptEnabled, viewport });
+    const page = await newPage(context);
+    if (javaScriptEnabled) await holdScript(page);
+    await page.goto(path, { waitUntil: "load" });
+    if (javaScriptEnabled) await settle(page);
+    const shift = javaScriptEnabled ? await shifts(page) : null;
+    const read = await page.evaluate(() => ({
+      height: document.querySelector("header")!.getBoundingClientRect().height,
+      split: document.querySelector(".nav-content")!.hasAttribute("data-nav-split"),
+    }));
+    await context.close();
+    return { ...read, shift };
+  };
+  const plain = await header(false);
+  const scripted = await header(true);
+  const where = `plain=${JSON.stringify(plain)} scripted=${JSON.stringify(scripted)}`;
+  expect(scripted.split, `the fixture trail must split: ${where}`).toBe(true);
+  expect(scripted.shift!.paintedFirst, where).toBe(true);
+  expect(Math.abs(scripted.height - plain.height), where).toBeLessThanOrEqual(1);
+  expect(scripted.shift!.total, where).toBeLessThan(0.1);
 });
 
 test("a theme's own focus ring draws no second box inside the search field", async ({ page }) => {
@@ -210,7 +225,7 @@ test("opening search does not move the page sideways under a classic scrollbar",
   test.skip(browserName !== "chromium", "only Chromium can be told to draw classic scrollbars");
   const browser = await playwright.chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"] });
   try {
-    const page = await browser.newPage({ baseURL, viewport: { width: 1024, height: 240 } });
+    const page = await newPage(browser, { baseURL, viewport: { width: 1024, height: 240 } });
     await page.goto("/", { waitUntil: "load" });
     // A styled scrollbar takes layout width whatever the OS shows; macOS's
     // default overlays one whenever a trackpad is in use.

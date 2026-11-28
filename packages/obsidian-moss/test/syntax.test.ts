@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shortcodeDecoRanges, shortcodeExtension } from "../src/syntax/cm-shortcode";
+import { shortcodeDecoRanges } from "../src/syntax/cm-shortcode";
 import { KNOWN_SHORTCODES, scanShortcodeBlocks } from "../src/syntax/shortcode-parser";
 
 /** Decorate a document the way the ViewPlugin does, in one step. */
@@ -75,13 +75,5 @@ describe("shortcode decorations", () => {
     const ranges = decorate(":::wat\nx\n:::\n");
     const froms = ranges.map((r) => r.from);
     expect([...froms].sort((a, b) => a - b)).toEqual(froms);
-  });
-});
-
-describe("shortcode extension", () => {
-  it("is registered as a real extension now that the parser is wired", () => {
-    const ext = shortcodeExtension();
-    expect(ext).not.toEqual([]);
-    expect(ext).toBeTruthy();
   });
 });

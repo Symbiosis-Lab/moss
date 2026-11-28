@@ -59,12 +59,14 @@ fn a_required_field_has_required_and_an_optional_one_says_optional() {
     assert!(!h.contains(r#"id="booking-phone" name="phone" required"#));
     assert_eq!(h.matches(r#"moss-form__optional">Optional<"#).count(), 6, "{h}");
     assert!(!h.contains("Your name *") && !h.contains(">*<"));
+    let de = render_form(&booking(), Language::De, Some("https://f.example"));
+    assert_eq!(de.matches(r#"moss-form__optional">freiwillig<"#).count(), 6, "German marks an optional field freiwillig: {de}");
 }
 
 #[test]
 fn choice_groups_are_fieldsets_with_a_legend() {
     let h = html(Some("https://f.example"));
-    assert!(h.contains(r#"<fieldset class="moss-form__field moss-form__group" data-field="session">"#), "{h}");
+    assert!(h.contains(r#"<fieldset class="moss-form__field moss-form__group" data-field="session" data-required="true">"#), "{h}");
     assert!(h.contains("<legend>Session</legend>"), "{h}");
     assert!(h.contains(r#"<legend>Interests <span class="moss-form__optional">Optional</span></legend>"#), "{h}");
     assert!(h.contains(r#"type="radio" id="booking-session-0" name="session" value="Portrait" required"#), "{h}");
@@ -86,12 +88,20 @@ fn autocomplete_tokens_help_and_describedby() {
     assert!(h.contains(r#"aria-describedby="booking-anything_we_should_know-help""#), "{h}");
 }
 
+/// The hint is read before the field is filled, so it sits between the label and the control.
 #[test]
-fn the_honeypot_and_next_are_present_and_hidden_from_readers() {
+fn a_hint_comes_before_its_control() {
+    let h = html(Some("https://f.example"));
+    let hint = h.find(r#"id="booking-anything_we_should_know-help">"#).expect("hint");
+    let control = h.find(r#"id="booking-anything_we_should_know" name="#).expect("control");
+    assert!(hint < control, "{h}");
+}
+
+#[test]
+fn next_is_the_one_hidden_field() {
     let h = html(Some("https://f.example"));
     assert!(h.contains(r#"<input type="hidden" name="_next" value="/booking/received/">"#), "{h}");
-    assert!(h.contains(r#"<div class="moss-form__hp" aria-hidden="true">"#), "{h}");
-    assert!(h.contains(r#"name="_hp" value="" tabindex="-1" autocomplete="off""#), "{h}");
+    assert!(!h.contains("_hp"), "{h}");
 }
 
 #[test]
@@ -109,4 +119,11 @@ fn author_text_is_escaped() {
     let f = parse_form("{#a next=/a/}", "- Say <b>hi</b> \"now\"\n").0;
     let h = render_form(&f, Language::En, None);
     assert!(!h.contains("<b>") && h.contains("&lt;b&gt;"), "{h}");
+}
+
+#[test]
+fn copy_block_carries_the_page_languages_list_separator() {
+    let spans = |lang| copy_block(lang, &[("sep", "name_separator")]);
+    assert!(spans(Language::En).contains(r#"<span data-copy="sep">, </span>"#));
+    assert!(spans(Language::ZhHant).contains(r#"<span data-copy="sep">、</span>"#));
 }

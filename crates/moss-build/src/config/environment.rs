@@ -38,7 +38,7 @@ impl HostingEnvironment {
     /// `-test.mosspub.page` makes `<site_id>-test` one label.
     pub fn site_suffixes(&self) -> &'static [&'static str] {
         match self {
-            Self::Production => &[".mosspub.com", ".mosspub.page"],
+            Self::Production => &[".mosspub.page", ".mosspub.com"],
             Self::Staging => &[".staging.mosspub.com", "-test.mosspub.page"],
             Self::Local => &[".localhost"],
         }
@@ -61,7 +61,7 @@ impl HostingEnvironment {
         !site_id.is_empty() && suffix.is_some_and(|suffix| self.site_suffixes().contains(&suffix))
     }
 
-    /// The host sites are published under, as a person reads it: `mosspub.com`.
+    /// The host sites are published under, as a person reads it: `mosspub.page`.
     pub fn host(&self) -> &'static str {
         domain_of(self.site_suffix())
     }
@@ -88,12 +88,12 @@ impl HostingEnvironment {
     }
 
     /// The address of one of moss's own hosted services, for a plugin that
-    /// names the service rather than the address. `None` where the service
-    /// does not run, so nothing is published that would point at the wrong
-    /// one: commerce runs only as its test server so far.
+    /// names the service rather than the address. `None` for a service moss
+    /// does not run. Commerce runs only as its test server so far, so every
+    /// environment, a published site's included, reaches that one.
     pub fn service_url(&self, service: &str) -> Option<&'static str> {
         match (service, self) {
-            ("commerce", Self::Staging | Self::Local) => Some("https://commerce-staging.mosspub.com"),
+            ("commerce", _) => Some("https://commerce-staging.mosspub.com"),
             _ => None,
         }
     }
@@ -149,6 +149,17 @@ mod tests {
         assert_eq!(parse_env_name("nonsense"), None);
     }
 
+    /// A published site's plugin reaches commerce too: it runs only as its
+    /// test server, so a production folder that names it would otherwise
+    /// have no commerce at all.
+    #[test]
+    fn every_environment_reaches_the_one_commerce() {
+        for env in [HostingEnvironment::Production, HostingEnvironment::Staging, HostingEnvironment::Local] {
+            assert_eq!(env.service_url("commerce"), Some("https://commerce-staging.mosspub.com"));
+            assert_eq!(env.service_url("nonsense"), None);
+        }
+    }
+
     #[test]
     fn serves_only_the_exact_address_of_the_site_under_its_own_suffixes() {
         let (prod, staging) = (HostingEnvironment::Production, HostingEnvironment::Staging);
@@ -184,7 +195,7 @@ mod tests {
 
     #[test]
     fn the_host_is_the_domain_sites_are_under_whether_or_not_the_suffix_starts_a_label() {
-        assert_eq!(HostingEnvironment::Production.host(), "mosspub.com");
+        assert_eq!(HostingEnvironment::Production.host(), "mosspub.page");
         assert_eq!(HostingEnvironment::Staging.host(), "staging.mosspub.com");
         assert_eq!(HostingEnvironment::Local.host(), "localhost");
         assert_eq!(domain_of("-test.mosspub.page"), "mosspub.page");

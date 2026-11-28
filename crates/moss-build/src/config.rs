@@ -47,6 +47,9 @@ pub mod site_settings;
 use moss_core::page::site_config::{ConfigValue, CoreConfig};
 use toml::Value;
 
+/// The keys a `[fields.<name>]` table may set.
+pub(crate) const FIELD_KEYS: &[&str] = &["type", "of", "place", "label", "text", "in", "card", "pictures"];
+
 /// The parsed contents of one `.moss/config.toml`.
 ///
 /// Parsed once per call today, and holdable — which is the point. The app used
@@ -143,6 +146,11 @@ impl ConfigFile {
         self.core.site_lang()
     }
 
+    /// The installed channels, read by the same reader as `plugins::discovery::get_channels_config`.
+    pub fn channels(&self) -> crate::plugins::discovery::ChannelsConfig {
+        crate::plugins::discovery::ChannelsConfig::from_raw(&self.root)
+    }
+
     /// A string field under `[site]`, e.g. `typesetting`.
     pub fn site_str(&self, field: &str) -> Option<&str> {
         self.root
@@ -201,14 +209,18 @@ impl ConfigFile {
     /// the file, and the nearest known key when one is near. A note, not a
     /// problem, because older moss versions left keys that no code reads now.
     pub fn unknown_site_keys(&self) -> Vec<String> {
-        use crate::config::site_settings::{nearest_known_key, site_settings, UNLISTED_SITE_KEYS};
+        use crate::config::site_settings::{nearest_known_key, site_settings};
+        use moss_core::contract::retired::{find, RetiredKind};
         let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
             return Vec::new();
         };
         let known: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
         site.keys()
-            .filter(|key| !known.contains(&key.as_str()) && !UNLISTED_SITE_KEYS.contains(&key.as_str()))
+            .filter(|key| !known.contains(&key.as_str()))
             .map(|key| {
+                if let Some(r) = find(RetiredKind::ConfigKey, &format!("site.{key}")) {
+                    return format!("[site] {key} in .moss/config.toml was retired {}; {}", r.when(), r.note);
+                }
                 if key == "title" {
                     return "[site] title is not a setting in .moss/config.toml; the site's name is the `title:` of its home page".to_string();
                 }
@@ -225,6 +237,18 @@ impl ConfigFile {
         self.root.get("channels").and_then(|v| v.get(channel)).and_then(|v| v.get("link_back")).and_then(Value::as_bool)
             .or_else(|| self.root.get("syndication").and_then(|v| v.get("link_back")).and_then(Value::as_bool))
             .unwrap_or(true)
+    }
+
+    /// `[channels.email] provider`: the newsletter service the site's subscribers
+    /// also go to. `None` when unset or empty, which keeps them with moss alone.
+    /// A name is ASCII letters, digits, `-` and `_`, since it is also a plugin's folder.
+    pub fn newsletter_service(&self) -> Option<Result<String, String>> {
+        let value = self.section(&["channels", "email", "provider"])?;
+        match value.as_str().map(str::trim) {
+            Some("") => None,
+            Some(service) => Some(provider_name(service).map(str::to_string)),
+            None => Some(Err(provider_name_refusal(&value.to_string()))),
+        }
     }
 
     /// The top-level `environment` key. Top-level rather than under `[site]`
@@ -426,7 +450,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in" | "card" | "pictures") {
+                if !FIELD_KEYS.contains(&key.as_str()) {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
@@ -600,7 +624,11 @@ impl ConfigFile {
 /// `Value` hands a datetime to a deserializer as a string, so `lang = 1979-05-27`
 /// would read as a language instead of a value to warn about.
 fn core_table(table: &toml::Table) -> ConfigValue {
-    ConfigValue::Table(table.iter().map(|(key, value)| (key.clone(), core_value(value))).collect())
+    ConfigValue::Table(core_entries(table))
+}
+
+pub(crate) fn core_entries(table: &toml::Table) -> std::collections::BTreeMap<String, ConfigValue> {
+    table.iter().map(|(key, value)| (key.clone(), core_value(value))).collect()
 }
 
 fn core_value(value: &Value) -> ConfigValue {
@@ -636,6 +664,18 @@ fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<Stri
         }
     }
     orders
+}
+
+
+/// A `[channels.email] provider` name: ASCII letters, digits, `-` and `_`,
+/// since it is also a plugin's folder. The one check its reader and writer share.
+pub fn provider_name(name: &str) -> Result<&str, String> {
+    let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if plain { Ok(name) } else { Err(provider_name_refusal(&format!("{name:?}"))) }
+}
+
+fn provider_name_refusal(shown: &str) -> String {
+    format!("[channels.email] provider must be a name such as \"sendgrid\", not {shown}")
 }
 
 #[cfg(test)]

@@ -2,7 +2,8 @@
 //
 // The strip along the bottom of the editor pane that holds the doc-state
 // cluster (undo · redo · save badge) on the left and the insert-bar pill in the
-// middle. One element, so the browser divides the row instead of us.
+// middle, with the page's copies above them on the right. One element, so the
+// browser divides the row instead of us.
 //
 // WHY THIS EXISTS
 //
@@ -15,6 +16,8 @@
 //
 //   minmax(auto, 1fr)   auto     minmax(0, 1fr)
 //   └─ the cluster      └─ pill   └─ counterweight, empty
+//
+// The page's copies (`bandStatus`) sit on a row of their own above these.
 //
 // The two `1fr` tracks split whatever the pill does not need, so the pill is
 // centred for free. When the pane is too narrow for an equal split, the left
@@ -45,11 +48,31 @@ const PANE_ID = 'moss-editor-cm';
  * without a null check each.
  */
 export function editorBand(host?: HTMLElement | null): HTMLElement {
-  const pane = host ?? document.getElementById(PANE_ID) ?? document.body;
+  const pane = host ?? bandPane();
   const existing = pane.querySelector(':scope > .editor-band');
   if (existing) return existing as HTMLElement;
   const band = document.createElement('div');
   band.className = 'editor-band';
   pane.appendChild(band);
   return band;
+}
+
+/** The editor's own pane, or `document.body` where it is absent. */
+export function bandPane(): HTMLElement {
+  return document.getElementById(PANE_ID) ?? document.body;
+}
+
+/**
+ * The band's status row: where the page's copies say how they stand
+ * (a channel waiting for the author in its panel). Created on first use, like
+ * the band.
+ */
+export function bandStatus(): HTMLElement {
+  const band = editorBand();
+  const existing = band.querySelector<HTMLElement>(':scope > .editor-band-status');
+  if (existing) return existing;
+  const slot = document.createElement('div');
+  slot.className = 'editor-band-status';
+  band.appendChild(slot);
+  return slot;
 }

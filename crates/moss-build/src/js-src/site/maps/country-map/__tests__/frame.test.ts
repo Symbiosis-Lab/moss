@@ -52,6 +52,14 @@ describe("the whole view and the opening view", () => {
     expect(w / h).toBeCloseTo(PHONE_ASPECT);
     expect(y + h / 2).toBeCloseTo(435 / 2);
   });
+  test("a map taller than its box is shown whole: full height, centred, and it opens there", () => {
+    const tall: ViewBox = [0, 0, 1000, 1460];
+    const [x, y, w, h] = wholeView(tall, PHONE_ASPECT);
+    expect([y, h]).toEqual([0, 1460]);
+    expect(w / h).toBeCloseTo(PHONE_ASPECT);
+    expect(x + w / 2).toBeCloseTo(500);
+    expect(openingView(tall, PHONE_ASPECT)).toEqual([x, y, w, h]);
+  });
   test("in a squarer box the map opens on the world's full height, centred on its middle", () => {
     const [x, y, w, h] = openingView(WORLD, PHONE_ASPECT);
     expect([y, h]).toEqual([0, 435]);

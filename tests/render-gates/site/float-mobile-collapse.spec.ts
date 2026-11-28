@@ -21,7 +21,7 @@
 //
 // Self-contained: injects the real site.css into `page.setContent`. No
 // server, no MOSS_BIN.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';

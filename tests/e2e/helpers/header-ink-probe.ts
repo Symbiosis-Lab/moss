@@ -8,7 +8,7 @@
  */
 import { expect, type Page } from '@playwright/test';
 
-const TEXT = 'header .site-name, header .nav-links a';
+const TEXT = 'header .site-name, header .nav-links a, header .nav-lang-toggle, header .nav-lang-current, header .nav-lang-link';
 
 export interface Probe {
   label: string;

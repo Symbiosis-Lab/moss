@@ -10,6 +10,12 @@ fn no_stage() -> &'static Path {
     Path::new("/nonexistent-moss-link-audit-stage")
 }
 
+/// [`super::dead_links_in_page`] over a page's HTML, read the way the seal's
+/// scan reads it.
+fn dead_links_in_page(page: &str, html: &str, satisfied: &HashSet<&str>, stage_dir: &Path) -> Vec<DeadLink> {
+    super::dead_links_in_page(page, &root_relative_urls(html), satisfied, stage_dir)
+}
+
 fn hrefs(page_html: &str, keys: &[&str]) -> Vec<String> {
     dead_links_in_page("p/index.html", page_html, &satisfied(keys), no_stage())
         .into_iter()
@@ -465,4 +471,18 @@ fn a_dead_href_inside_a_template_is_not_reported_but_the_same_one_outside_is() {
     let template = r#"<template data-slug="x"><a href="/ask/?to=Japan">Ask</a></template>"#;
     assert!(hrefs(template, &[]).is_empty(), "a template's content is inert, never a link");
     assert_eq!(hrefs(&format!(r#"{template}<a href="/ask/?to=Japan">Ask</a>"#), &[]), ["/ask/?to=Japan"]);
+}
+
+#[test]
+fn a_page_missing_from_the_scan_memo_is_still_audited() {
+    use crate::build::manifest::{HashBucket, PendingManifest, SiteHashes};
+    let stage = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(stage.path().join("old")).unwrap();
+    std::fs::write(stage.path().join("old/index.html"), r#"<a href="/gone/">x</a>"#).unwrap();
+    let mut m = PendingManifest::new(SiteHashes::default());
+    m.apply_message("old/index.html".to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, None);
+    let sealed = m.seal();
+
+    let dead = audit(stage.path(), &sealed, &PageLinks::new());
+    assert_eq!(dead, vec![DeadLink { page: "old/index.html".into(), href: "/gone/".into() }]);
 }

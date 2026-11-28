@@ -188,7 +188,7 @@ fn restore_site_restores_edited_and_deleted_and_trashes_added() {
         Ok(())
     };
 
-    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &fake_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &VersionScope::Site, &fake_trash);
 
     assert_eq!(report.restored, vec!["edit.md".to_string(), "gone.md".to_string()]);
     assert_eq!(report.trashed, vec!["new.md".to_string()]);
@@ -214,7 +214,7 @@ fn restore_site_preserves_non_page_files_absent_from_the_version() {
         fs::remove_file(root.join(path)).map_err(|e| e.to_string())
     };
 
-    let report = restore_site(&root, &vault, &id, &current, &trash);
+    let report = restore_site(&root, &vault, &id, &current, &VersionScope::Site, &trash);
 
     assert_eq!(report.trashed, vec!["new.md"]);
     assert!(report.failed.is_empty(), "{:?}", report.failed);
@@ -239,7 +239,7 @@ fn restore_site_leaves_an_unchanged_page_alone() {
     let no_trash = |_: &Path, path: &str| -> Result<(), String> {
         panic!("nothing should be trashed, got {path}");
     };
-    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&old), &no_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&old), &VersionScope::Site, &no_trash);
 
     assert!(report.restored.is_empty());
     assert!(report.trashed.is_empty());
@@ -273,7 +273,7 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
     let current = cur_pending.seal();
 
     let no_trash = |_: &Path, _: &str| -> Result<(), String> { Ok(()) };
-    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &no_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &VersionScope::Site, &no_trash);
 
     assert_eq!(report.restored, vec!["edit.md".to_string()]);
     assert_eq!(report.failed.len(), 1);
@@ -295,7 +295,7 @@ fn restore_site_refuses_a_kept_outside_edit_and_trashes_nothing() {
 
     let trashed = std::cell::RefCell::new(Vec::new());
     let trash = |_: &Path, p: &str| -> Result<(), String> { trashed.borrow_mut().push(p.to_string()); Ok(()) };
-    let report = restore_site(&root, &vault, &id, &SourceTree::from_sealed(&pending.seal()), &trash);
+    let report = restore_site(&root, &vault, &id, &SourceTree::from_sealed(&pending.seal()), &VersionScope::Site, &trash);
 
     assert!(trashed.borrow().is_empty(), "a one-page record must not trash the rest of the site");
     assert!(report.restored.is_empty());

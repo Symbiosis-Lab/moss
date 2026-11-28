@@ -6,6 +6,7 @@
 //! markdown pipeline (the wikilink-embed dispatcher) and by moss-core's own
 //! shortcode renderers.
 pub mod audio;
+pub mod cards;
 pub mod iframe;
 pub mod image;
 pub mod model;

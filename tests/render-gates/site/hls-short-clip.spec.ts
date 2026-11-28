@@ -25,7 +25,7 @@
  *
  * Site: tests/e2e/helpers/gate-sites.ts -> hlsShortClipGate.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 interface Rung {
   bandwidth: number;

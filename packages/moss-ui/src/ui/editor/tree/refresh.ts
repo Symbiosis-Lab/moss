@@ -62,10 +62,10 @@ export interface RefreshCommands {
   listTree(showInternal: boolean): Promise<CommandResult<ListedNode>>;
 }
 
-/** Bounded wait for a `list()` IPC round
- *  trip. Well above a healthy localhost listTree call; well below a user
- *  concluding the tree is frozen. On timeout the previous index is kept
- *  rather than left mid-clear — see refreshTree(). */
+/** Bounded wait for a `listTree` round trip. Well above a healthy localhost
+ *  call; well below a user concluding the tree is frozen. A refresh past it
+ *  keeps the previous index and arms its retry, and still lands the listing
+ *  when it comes: a server busy building answers late, not never. */
 const REFRESH_TREE_TIMEOUT_MS = 5000;
 
 /** Delay before the single bounded retry after a failed/timed-out
@@ -81,19 +81,17 @@ function logTreeWarn(msg: string): void {
   } catch { /* no IPC bridge (tests) — logging is a no-op */ }
 }
 
-/** Reject with a timeout Error if `promise` hasn't settled within `ms`.
- *  P3's bounded wait on the `list()` IPC round trip — see
- *  REFRESH_TREE_TIMEOUT_MS. Does not cancel `promise`; a late resolution
- *  after the timeout fires is simply never awaited. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
+const SLOW = Symbol('slow');
+
+/** `promise`, or SLOW once `ms` pass first. `promise` must not reject; it keeps running either way. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof SLOW> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(SLOW), ms);
+    void promise.then((v) => { clearTimeout(timer); resolve(v); });
   });
 }
+
+const slowWarning = `listTree did not resolve within ${REFRESH_TREE_TIMEOUT_MS}ms — keeping last-good index`;
 
 /**
  * What `refreshTree` / `toggleInternal` own.
@@ -105,8 +103,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  *   checked after: a writer whose token has gone stale has been superseded
  *   and must drop its payload (the merge re-reads instead). Why the gate
  *   carries no `reloading` flag: serializing the two would make a caller
- *   wait for a listing it did not ask for, and `withTimeout` abandons a call
- *   without cancelling it.
+ *   wait for a listing it did not ask for.
  * - `retryTimer` / `retryExhausted`: P3's single bounded retry after a failed
  *   or timed-out refreshTree(); `retryExhausted` bounds it to one attempt per
  *   failure streak. Both clear on unmount and on the next successful refresh.
@@ -232,19 +229,19 @@ export class TreeRefresh {
    * caller's (a retry here, fail-open there).
    */
   async list(): Promise<ListedNode | null> {
-    const { host } = this;
+    const tree = await within(this.fetch(), REFRESH_TREE_TIMEOUT_MS);
+    if (tree !== SLOW) return tree;
+    logTreeWarn(slowWarning);
+    return null;
+  }
+
+  /** The unbounded round trip: the listing, or `null` (logged) when the call failed or rejected. Never rejects. */
+  private async fetch(): Promise<ListedNode | null> {
     let result: CommandResult<ListedNode>;
     try {
-      result = await withTimeout(
-        host.commands.listTree(this.state.showInternal),
-        REFRESH_TREE_TIMEOUT_MS,
-      );
+      result = await this.host.commands.listTree(this.state.showInternal);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      const cause = e instanceof Error && message === `timed out after ${REFRESH_TREE_TIMEOUT_MS}ms`
-        ? `did not resolve within ${REFRESH_TREE_TIMEOUT_MS}ms`
-        : `rejected: ${message}`;
-      logTreeWarn(`listTree ${cause} — keeping last-good index`);
+      logTreeWarn(`listTree rejected: ${e instanceof Error ? e.message : String(e)} — keeping last-good index`);
       return null;
     }
     if (result.status !== 'ok') {
@@ -262,12 +259,13 @@ export class TreeRefresh {
    * new data has actually arrived — on a failed or non-resolving (bounded
    * REFRESH_TREE_TIMEOUT_MS) `listTree` call, the previous index is left
    * completely untouched, a WARN is logged with the cause, and a single
-   * bounded retry is armed. Called by `mount()`, `toggleInternal()`, and the
-   * 5 event-handler refresh sites (file-changed, rename, drop, …).
+   * bounded retry is armed. A listing that arrives after the bound still
+   * lands and repaints, unless a newer refresh has started since. Called by
+   * `mount()`, `toggleInternal()`, and the 5 event-handler refresh sites
+   * (file-changed, rename, drop, …).
    *
    * The watcher burst, rename and drop paths all call this,
-   * so two round trips can be in flight at once — and `withTimeout` abandons
-   * a call without cancelling it. Each takes an `indexWriteEpoch` before its
+   * so two round trips can be in flight at once. Each takes an `indexWriteEpoch` before its
    * await and drops its payload if a later writer has since started, so an
    * OLDER listing can never be the last one to write dirIndex. The
    * Epoch rule; previously nothing ordered the two and the tree showed stale
@@ -281,14 +279,28 @@ export class TreeRefresh {
     const { host } = this;
     if (!host.projectRoot()) return false;
     const epoch = this.state.indexWriteEpoch.bump();
-    const tree = await this.list();
+    const listing = this.fetch();
+    const tree = await within(listing, REFRESH_TREE_TIMEOUT_MS);
     // Unmount (or a newer refresh) can win while the listing is in flight.
     // Drop its result before it can write, render, or arm a retry.
     if (this.state.indexWriteEpoch.isStale(epoch)) return false;
-    if (tree === null) {
+    if (tree === SLOW) {
+      logTreeWarn(slowWarning);
+      void listing.then(async (late) => {
+        if (late === null || this.state.indexWriteEpoch.isStale(epoch) || !host.gate.admit('refresh')) return;
+        if (await this.land(late, epoch)) host.render();
+      });
+    }
+    if (tree === null || tree === SLOW) {
       this.scheduleRefreshRetry();
       return false;
     }
+    return this.land(tree, epoch);
+  }
+
+  /** Replace the index with `tree`, taken under `epoch`; `false` when a newer writer started meanwhile. */
+  private async land(tree: ListedNode, epoch: number): Promise<boolean> {
+    const { host } = this;
     // Only now — the new data is in hand — replace the index. A folder
     // deleted since the last refresh needs its stale dirIndex entry gone,
     // which is why this clears before flattenTree's walk, but doing so

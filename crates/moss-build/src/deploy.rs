@@ -53,6 +53,7 @@ pub use publish_error::PublishError;
 // credential store, and the two refusals are asked by the same call sites.
 pub mod publish_setup;
 pub mod push;
+pub mod remote_pictures;
 // Cross-process exclusion for the machine-scoped OnionPress stack: the install
 // lock the app takes, and the publish lease a terminal publish writes. Here
 // rather than app-side because `moss deploy` is the second process the
@@ -61,6 +62,7 @@ pub mod stack_activity;
 pub mod progress;
 pub mod route;
 pub mod upload;
+pub(crate) mod transfer;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -133,6 +135,9 @@ pub enum DeployReport {
     },
     /// `--dry-run`: the build ran, nothing was sent.
     DryRun(Box<dry_run::DryRun>),
+    /// `--check` on your own server: each step up to the first that failed;
+    /// nothing was built or sent.
+    Checked(direct::check::Checked),
 }
 
 impl DeployReport {
@@ -144,7 +149,7 @@ impl DeployReport {
         match self {
             DeployReport::Push(result) => result.landed(),
             DeployReport::Plugin { .. } => true,
-            DeployReport::DryRun(_) => false,
+            DeployReport::DryRun(_) | DeployReport::Checked(_) => false,
         }
     }
 
@@ -303,13 +308,13 @@ mod view_site_url_tests {
     fn prefers_the_address_hosting_gave_over_the_assumed_one() {
         let dir = folder_with(None, false);
         let path = dir.path().to_str().unwrap();
-        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.page".to_string())).unwrap();
-        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        crate::vault::deployment_state::set_site_url(path, Some("https://her-blog.mosspub.com".to_string())).unwrap();
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.com");
         assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog.staging.mosspub.com");
         crate::vault::deployment_state::set_site_url(path, Some("https://her-blog-test.mosspub.page".to_string())).unwrap();
         assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Staging), "https://her-blog-test.mosspub.page");
-        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.com");
-        assert_eq!(view_site_url(path, "other-site", HostingEnvironment::Production), "https://other-site.mosspub.com");
+        assert_eq!(view_site_url(path, "her-blog", HostingEnvironment::Production), "https://her-blog.mosspub.page");
+        assert_eq!(view_site_url(path, "other-site", HostingEnvironment::Production), "https://other-site.mosspub.page");
 
         let dir = folder_with(Some("example.com"), true);
         let path = dir.path().to_str().unwrap();
@@ -326,7 +331,7 @@ mod view_site_url_tests {
                 "her-blog",
                 HostingEnvironment::Production
             ),
-            "https://her-blog.mosspub.com"
+            "https://her-blog.mosspub.page"
         );
     }
 
@@ -339,7 +344,7 @@ mod view_site_url_tests {
                 "her-blog",
                 HostingEnvironment::Production
             ),
-            "https://her-blog.mosspub.com"
+            "https://her-blog.mosspub.page"
         );
     }
 
@@ -449,6 +454,8 @@ pub enum RefusalKind {
     StaleCopy,
     /// A folder with a site, or one that was signed in, has no usable key.
     NotSignedIn,
+    /// The folder's moderation log has events and no trusted key verifies any.
+    ModerationUnverified,
 }
 
 impl Refusal {
@@ -534,6 +541,12 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
             return Some(Refusal::new(RefusalKind::LinksInFlight, in_flight_refusal_text(promised.links.len())));
         }
     }
+    if let Some(events) = records.unverifiable_moderation(folder_path).filter(|n| *n > 0) {
+        return Some(Refusal::new(
+            RefusalKind::ModerationUnverified,
+            crate::build::features::comment::link_block::unverifiable_text(events),
+        ));
+    }
     if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
         return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));
     }
@@ -615,7 +628,7 @@ fn files_are(count: usize, state: &str) -> String {
 /// The refusal a user reads. Says what did not happen, not which subsystem said
 /// no, and where each missing file is named: this text is the only place a
 /// driver without a problems panel learns which line to fix.
-pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccurrence]) -> String {
+pub(crate) fn refusal_text(missing: &[crate::build::types::ReferenceOccurrence]) -> String {
     let subject = files_are(missing.len(), "missing");
     let lines = removal_gate::capped_lines(missing, |m| {
         format!("`{}` line {} names `{}`.", m.source_path, m.source_span.line, m.reference)

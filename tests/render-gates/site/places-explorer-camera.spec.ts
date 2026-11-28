@@ -8,7 +8,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-camera.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 import { decodePng as decodeAnyPng } from "../../e2e/helpers/decode-png";
 import { untilRendering } from "./rendering";
 
@@ -164,15 +164,11 @@ for (const [label, size] of [
     // itself was never wrong. Sample a short run of points a couple of px
     // inside each of `.moss-places-viewport`'s own four edges instead: real
     // map content — coastline, shading, the graticule of rivers and relief —
-    // is almost always visibly textured across more than a few px, so a run
-    // with zero variance is normally the figure's own flat CSS background
-    // (`--moss-place-water`) still showing through, not drawn content — EXCEPT
-    // the polar ice sheet, the one real map feature drawn as a single flat
-    // fill with no internal texture (`places_data`'s own "ice" layer,
-    // `var(--moss-place-ice)`); a camera framed far enough south legitimately
-    // puts a solid band of it at an edge, so the loop below resolves that
-    // layer's own colour once and treats a flat run matching it as content,
-    // not a gap.
+    // is usually textured across more than a few px. A flat run is a gap
+    // only where the world raster did not draw it: open polar water and the
+    // ice sheet are drawn flat, and a camera framed near a pole puts a run of
+    // either at an edge. So a flat run counts as content when the world
+    // surface canvas holds the same opaque colour at every point.
     // The BOTTOM edge is clamped to the browser viewport's own height, not
     // `viewportBox`'s: the figure's CSS height is `100svh` minus its own top
     // offset floored at 480px (`places-explorer.css`'s own doc on
@@ -182,20 +178,6 @@ for (const [label, size] of [
     // a band this check is about.
     const png = await page.screenshot({ animations: "disabled" });
     const image = decodePng(png);
-    const iceFillStr = await page.evaluate(() => {
-      // The "ice" layer is now baked into the world raster (no longer a
-      // live `path` in the DOM — see raster.ts's `splitMapSvg`), so its
-      // colour has to come from the SAME custom property the SVG emitter
-      // bakes it from (`var(--moss-place-ice, ...)`, svg.rs's "ice" call)
-      // rather than a live element's computed style.
-      const probe = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      probe.setAttribute("fill", "var(--moss-place-ice, #fbfcfd)");
-      document.body.append(probe);
-      const fill = getComputedStyle(probe).fill;
-      probe.remove();
-      return fill;
-    });
-    const iceColor = iceFillStr ? (iceFillStr.match(/\d+/g) ?? []).map(Number) : null;
     // WebKit's own project (`devices['Desktop Safari']`) renders at 2x
     // device pixel ratio — the PNG is twice `size`'s own CSS-px dimensions
     // — while every coordinate above is in CSS px (`boundingBox()`'s own
@@ -228,13 +210,22 @@ for (const [label, size] of [
       const samples = points.map((p) => image.at(Math.round(p.x * dpr), Math.round(p.y * dpr)));
       const reds = samples.map((s) => s[0]);
       const variance = Math.max(...reds) - Math.min(...reds);
-      const isFlatIce =
+      const drawn = await page.evaluate((pts) => {
+        const canvas = document.querySelector("canvas.moss-places-world-surface") as HTMLCanvasElement | null;
+        const ctx = canvas?.getContext("2d");
+        if (!canvas || !ctx) return null;
+        const box = canvas.getBoundingClientRect();
+        const sx = canvas.width / box.width;
+        const sy = canvas.height / box.height;
+        return pts.map((p) => [...ctx.getImageData(Math.round((p.x - box.left) * sx), Math.round((p.y - box.top) * sy), 1, 1).data]);
+      }, points);
+      const flatAndDrawn =
         variance === 0 &&
-        iceColor != null &&
-        samples.every((s) => Math.abs(s[0] - iceColor[0]) <= 2 && Math.abs(s[1] - iceColor[1]) <= 2 && Math.abs(s[2] - iceColor[2]) <= 2);
+        drawn != null &&
+        drawn.every((d, i) => d[3] === 255 && [0, 1, 2].every((c) => Math.abs(d[c] - samples[i][c]) <= 2));
       expect(
-        variance > 0 || isFlatIce,
-        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content (canvas contextlost events: ${await page.evaluate(() => (window as unknown as { __contextLost: number }).__contextLost)}): ${JSON.stringify(samples)}`,
+        variance > 0 || flatAndDrawn,
+        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content (canvas contextlost events: ${await page.evaluate(() => (window as unknown as { __contextLost: number }).__contextLost)}): ${JSON.stringify({ samples, drawn })}`,
       ).toBe(true);
     }
   });

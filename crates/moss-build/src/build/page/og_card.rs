@@ -304,6 +304,9 @@ pub fn render_card(
     if let Some((picture, rect)) = layout::theme_strip(inputs) {
         draw_plate(&mut pixmap, &picture.image, rect)?;
     }
+    if let Some((logo, rect)) = layout::theme_logo(inputs, inputs.plate.is_some()) {
+        draw_plate(&mut pixmap, &logo.image, rect)?;
+    }
     let bytes = pixmap.encode_png().map_err(|e| CardError::Encode(e.to_string()))?;
 
     // `write_output`, not a bare write: `output_root` is under `.moss/build.nosync/`,
@@ -994,7 +997,7 @@ mod tests {
                     .and_then(|f| f.set_modified(t))
                     .expect("set mtime");
             }
-            let source = plate_source(&scanned, &cover, &no_previous(), dir.path()).expect("plate");
+            let source = plate_source(&scanned, &cover, &no_previous(), dir.path(), crate::build::page::cover::ShareCover::Auto).expect("plate");
             let inputs = CardInputs { plate: Some(source.as_plate()), ..sample_inputs() };
             card_identity(&inputs).expect("identity").0.as_str().to_string()
         };

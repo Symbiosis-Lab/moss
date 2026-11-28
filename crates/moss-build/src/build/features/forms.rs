@@ -4,7 +4,7 @@
 //! The markup is a plain HTML form that works with no script and posts to
 //! `<endpoint>/<form name>`; `forms.js` upgrades it to a post that stays on
 //! the page. Wire contract: the body is `application/x-www-form-urlencoded`,
-//! `_next` is where the service sends the reader, and `_hp` is a honeypot.
+//! and `_next` is where the service sends the reader.
 
 use super::{html_escape, CHECK_SVG};
 use crate::i18n::{t, Language};
@@ -24,7 +24,7 @@ fn described_by(help_id: &Option<String>) -> String {
     help_id.as_ref().map(|id| format!(r#" aria-describedby="{id}""#)).unwrap_or_default()
 }
 
-fn render_field(form: &str, f: &FormField, lang: Language) -> String {
+pub(crate) fn render_field(form: &str, f: &FormField, lang: Language) -> String {
     let id = format!("{form}-{}", f.name);
     let help_id = f.help.as_ref().map(|_| format!("{id}-help"));
     let name = html_escape(&f.name);
@@ -54,9 +54,18 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
             .enumerate()
             .map(|(i, c)| {
                 let v = html_escape(c);
-                format!(
+                let choice = format!(
                     r#"      <div class="moss-form__choice"><input type="{kind}" id="{id}-{i}" name="{name}" value="{v}"{req}><label for="{id}-{i}">{v}</label></div>"#
-                )
+                );
+                match f.other.as_ref().filter(|o| o.choice == i) {
+                    // Hidden by CSS until its choice is picked, so it works with no script.
+                    Some(o) => format!(
+                        "{choice}\n      <div class=\"moss-form__other\"><label class=\"moss-form__label\" for=\"{id}-{i}-other\">{l}</label><input class=\"moss-input\" type=\"text\" id=\"{id}-{i}-other\" name=\"{n}\"></div>",
+                        l = html_escape(&o.label),
+                        n = html_escape(&o.name)
+                    ),
+                    None => choice,
+                }
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -65,8 +74,16 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
         FieldKind::Radio | FieldKind::Checkbox if !f.choices.is_empty() => {
             let kind = if f.kind == FieldKind::Radio { "radio" } else { "checkbox" };
             let req = if f.kind == FieldKind::Radio { required } else { "" };
+            // The browser cannot require one of several boxes; the script reads this.
+            let group_req = if f.required { r#" data-required="true""# } else { "" };
+            // A pick-several group says so, under its question.
+            let hint = if f.kind == FieldKind::Checkbox && f.help.is_none() {
+                format!("\n    <p class=\"moss-form__help\">{}</p>", t(lang, "form_pick_several"))
+            } else {
+                String::new()
+            };
             format!(
-                "  <fieldset class=\"moss-form__field moss-form__group\" data-field=\"{name}\"{describe}>\n    <legend>{label}{optional}</legend>\n{}{help}{error}\n  </fieldset>",
+                "  <fieldset class=\"moss-form__field moss-form__group\" data-field=\"{name}\"{group_req}{describe}>\n    <legend>{label}{optional}</legend>{hint}\n{}{help}{error}\n  </fieldset>",
                 choice_inputs(kind, req)
             )
         }
@@ -87,7 +104,7 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
                 other => format!(r#"<input class="moss-input" type="{}"{attr}>"#, input_type(other)),
             };
             format!(
-                "  <div class=\"moss-form__field\" data-field=\"{name}\">\n    <label class=\"moss-form__label\" for=\"{id}\">{label}{optional}</label>\n    {control}{help}{error}\n  </div>"
+                "  <div class=\"moss-form__field\" data-field=\"{name}\">\n    <label class=\"moss-form__label\" for=\"{id}\">{label}{optional}</label>{help}\n    {control}{error}\n  </div>"
             )
         }
     }
@@ -101,37 +118,50 @@ pub fn render_form(form: &FormShortcode, lang: Language, endpoint: Option<&str>)
     let next = html_escape(form.next.as_deref().unwrap_or(""));
     let label = form.button.as_deref().filter(|b| !b.is_empty()).map(html_escape).unwrap_or_else(|| t(lang, "form_send").to_string());
     let fields = form.fields.iter().map(|f| render_field(name, f, lang)).collect::<Vec<_>>().join("\n");
-    let copy = [
-        ("required", "form_required"),
-        ("format", "form_format"),
-        ("invalid", "form_invalid"),
-        ("rate_limited", "form_rate_limited"),
-        ("unknown_form", "form_unknown"),
-        ("network", "form_network"),
-    ]
-    .iter()
-    .map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, t(lang, key)))
-    .collect::<String>();
+    let copy = copy_block(
+        lang,
+        &[
+            ("required", "form_required"),
+            ("format", "form_format"),
+            ("invalid", "form_invalid"),
+            ("rate_limited", "form_rate_limited"),
+            ("unknown_form", "form_unknown"),
+            ("network", "form_network"),
+        ],
+    );
     format!(
         r#"<div class="moss-form" data-state="idle"{pending}>
 <form method="post" action="{action}" data-moss-form="{name}" data-next="{next}">
 {fields}
   <input type="hidden" name="_next" value="{next}">
-  <div class="moss-form__hp" aria-hidden="true"><label for="{name}-hp">{hp}</label><input type="text" id="{name}-hp" name="_hp" value="" tabindex="-1" autocomplete="off"></div>
-  <span class="moss-btn-slot">
+{button}
+  <p class="moss-form__status" aria-live="polite"></p>
+{copy}
+</form>
+</div>"#,
+        action = html_escape(&action),
+        button = button_slot(&label),
+    )
+}
+
+/// The submit button every form ends with: its label, the spinner while the
+/// post waits and the check once it is sent.
+pub(super) fn button_slot(label: &str) -> String {
+    format!(
+        r#"  <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
       <span class="moss-btn__spinner" aria-hidden="true"></span>
       <span class="moss-btn__check" aria-hidden="true">{CHECK_SVG}</span>
     </button>
-  </span>
-  <p class="moss-form__status" aria-live="polite"></p>
-  <div hidden>{copy}</div>
-</form>
-</div>"#,
-        action = html_escape(&action),
-        hp = t(lang, "form_hp_label"),
+  </span>"#
     )
+}
+
+/// The hidden words the form script shows, one `data-copy` span per `(key, i18n key)`.
+pub(super) fn copy_block(lang: Language, keys: &[(&str, &str)]) -> String {
+    let spans = keys.iter().map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, t(lang, key))).collect::<String>();
+    format!("  <div hidden>{spans}</div>")
 }
 
 #[cfg(test)]

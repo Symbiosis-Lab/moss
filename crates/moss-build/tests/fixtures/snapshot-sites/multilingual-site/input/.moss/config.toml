@@ -1,2 +1,8 @@
 [site]
 domain = "example.com"
+
+[terms.authors]
+line = true
+
+[terms.tags]
+line = true

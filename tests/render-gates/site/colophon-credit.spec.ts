@@ -3,7 +3,7 @@
 // credit pushes the page sideways; the mark is set on the text's baseline, not
 // centred; every link in the line is at least 24px tall to hit; the middle dot
 // has the same space on both sides.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 
 const longUrl = `http://localhost:${gatePort('colophon-credit:long')}/`;

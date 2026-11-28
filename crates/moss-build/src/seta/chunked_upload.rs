@@ -36,12 +36,13 @@ impl MossSetaClient {
     /// `.partial` where it is so the next attempt resumes from it; the server's
     /// idle sweep handles sessions nobody comes back for.
     ///
-    /// Called by `deploy::upload` for files that do not fit one request at the
-    /// currently measured link speed (`upload_policy::needs_chunking`).
+    /// Called by `deploy::transfer` for files larger than the deploy's
+    /// `request_bytes`.
     ///
-    /// `generation_id` is sent as `X-Moss-Generation` on the **create-session**
-    /// POST only. The server stores the generation in the upload session at
-    /// create time, so per-chunk PATCH and complete POST do not repeat it.
+    /// `generation_id`, the deploy id, is sent as `X-Moss-Generation` on the
+    /// **create-session** POST only. The server stores it in the upload
+    /// session at create time, so per-chunk PATCH and complete POST do not
+    /// repeat it.
     ///
     /// Before creating a session it asks the server whether it already holds
     /// one for this file and generation, and resumes it, so every attempt

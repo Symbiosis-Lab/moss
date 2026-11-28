@@ -30,7 +30,7 @@ pub use anchor::obsidian_heading_anchor;
 pub use opening::opening_words;
 pub use extract::{extract_headings, extract_headings_with_config, HeadingInfo};
 pub use state::{
-    article_title_outcome, body_heading_replacing_title, body_supplies_title, body_without_banner, opening_heading_beyond_title, hero_at_top_owns_title, title_outcome, compute, TitleOutcome, filename_text, filename_text_with_root, is_untitled_stamp, HeadingInputs,
+    article_title_outcome, body_heading_replacing_title, body_supplies_title, body_without_banner, opening_heading_beyond_title, hero_at_top_owns_title, title_outcome, compute, TitleOutcome, filename_text, filename_text_with_root, is_untitled_stamp, page_title, HeadingInputs,
     HeadingSource, HeadingState,
 };
 
@@ -58,3 +58,26 @@ pub fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: 
         format!("<h1 class=\"{class}\"{fm_attr}>{escaped}</h1>\n{html_body}")
     }
 }
+
+/// A folder home's `<h1 class="moss-folder-title">`. `emit_source_fm` points it
+/// at the `title` field in an editor preview; `visually_hidden` keeps the one
+/// top-level heading for screen readers where the page shows none.
+pub fn folder_title(label: &str, emit_source_fm: bool, visually_hidden: bool) -> String {
+    let fm_attr = if emit_source_fm { r#" data-source-fm="title""# } else { "" };
+    let class = if visually_hidden { "moss-folder-title visually-hidden" } else { "moss-folder-title" };
+    format!(r#"<h1 class="{class}"{fm_attr}>{}</h1>"#, range::keep_ranges_together(&crate::media::html_escape(label)))
+}
+
+/// The folder title a folder home without a cover draws above its body: none
+/// when the body's own `# Heading` or an opening hero's heading stands in, hidden
+/// behind a hero, and hidden on a home under a header that already names the site.
+pub fn folder_heading(body_markdown: &str, label: &str, emit_source_fm: bool, hidden_under_header: bool) -> String {
+    match title_outcome(body_markdown, true) {
+        TitleOutcome::None => String::new(),
+        outcome => folder_title(label, emit_source_fm, hidden_under_header || outcome == TitleOutcome::Hidden),
+    }
+}
+
+#[cfg(test)]
+#[path = "heading_tests.rs"]
+mod tests;

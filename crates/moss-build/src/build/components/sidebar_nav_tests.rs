@@ -2,9 +2,6 @@ use super::*;
 
 fn make_article(title: &str, date_raw: Option<&str>, url: &str) -> ArticleListItemProps {
     ArticleListItemProps {
-        date_display: date_raw
-            .map(|d| super::super::date::format_date_string(d))
-            .unwrap_or_default(),
         date_raw: date_raw.map(|s| s.to_string()),
         url: Some(url.to_string()),
         title: title.to_string(),

@@ -16,7 +16,7 @@
  * `[[wikilink]]` cells in one `:::grid 3`, "Card Two" the only one with no
  * `cover:` of its own.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test("a coverless cell in a mixed :::grid gets the quote slot, not the bare placeholder", async ({
   page,

@@ -22,7 +22,7 @@ const { mockNavigationManager } = vi.hoisted(() => ({
     updateDisplay: vi.fn(),
     // With morphing enabled by default, refresh() morphs in place first, falling back to
     // reload() then cache-busting iframe.src. Mock both rungs of that ladder.
-    morph: vi.fn().mockResolvedValue(true),
+    morph: vi.fn().mockResolvedValue('applied'),
     reload: vi.fn().mockResolvedValue(true),
     isNavigationPending: vi.fn().mockReturnValue(false),
     reset: vi.fn(),
@@ -122,58 +122,5 @@ describe("Preview refresh visual feedback", () => {
 
     // flashPill guards on a missing pill; refresh must still resolve cleanly.
     await expect(previewManager.refresh()).resolves.toBeUndefined();
-  });
-});
-
-describe("Preview refresh scroll preservation", () => {
-  let previewManager: PreviewManager;
-
-  beforeEach(() => {
-    setupDOM();
-    vi.clearAllMocks();
-    // Default: reload succeeds (RPC available)
-    mockNavigationManager.reload.mockResolvedValue(true);
-    previewManager = new PreviewManager('moss-preview-iframe');
-  });
-
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
-  // The in-place mechanism is now morph (default-ON); reload is the first
-  // fallback, cache-busting iframe.src the last. Verify the whole ladder.
-  test("refresh morphs in place (default) and does not reload or touch iframe.src", async () => {
-    const iframe = document.getElementById("moss-preview-iframe") as HTMLIFrameElement;
-    const originalSrc = iframe.src;
-
-    await previewManager.refresh();
-
-    expect(mockNavigationManager.morph).toHaveBeenCalled();
-    expect(mockNavigationManager.reload).not.toHaveBeenCalled();
-    expect(iframe.src).toBe(originalSrc);
-  });
-
-  test("refresh falls back to reload() when morph fails", async () => {
-    mockNavigationManager.morph.mockResolvedValue(false);
-    const iframe = document.getElementById("moss-preview-iframe") as HTMLIFrameElement;
-    const originalSrc = iframe.src;
-
-    await previewManager.refresh();
-
-    expect(mockNavigationManager.reload).toHaveBeenCalled();
-    expect(iframe.src).toBe(originalSrc); // reload succeeded → no iframe.src change
-  });
-
-  test("refresh falls back to cache-busting iframe.src when morph AND reload fail", async () => {
-    mockNavigationManager.morph.mockResolvedValue(false);
-    mockNavigationManager.reload.mockResolvedValue(false);
-
-    const iframe = document.getElementById("moss-preview-iframe") as HTMLIFrameElement;
-
-    await previewManager.refresh();
-
-    if (mockNavigationManager.getCurrentUrl()) {
-      expect(iframe.src).toContain("_t=");
-    }
   });
 });

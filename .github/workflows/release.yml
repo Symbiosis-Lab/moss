@@ -30,8 +30,15 @@ permissions:
   contents: read
 
 jobs:
+  # Runs first on every release; see release-notes-guard.yml.
+  notes-guard:
+    uses: ./.github/workflows/release-notes-guard.yml
+    permissions:
+      contents: write
+
   # Only an app release (vX.Y.Z) is a moss version; any other release (the video tool moss downloads, a plugin) publishes nothing.
   release-plz-release:
+    needs: notes-guard
     if: >-
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'crates-io')
@@ -61,6 +68,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   changesets-release:
+    needs: notes-guard
     if: >-
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'npm')

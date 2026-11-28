@@ -1,7 +1,7 @@
 import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-DUaGReqD.mjs";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
-import { RangeSetBuilder, StateField } from "@codemirror/state";
+import { Facet, RangeSetBuilder, StateField } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 
 //#region src/cm6/cm-active-lines.ts
@@ -780,36 +780,29 @@ function mossHighlightExtension() {
 //#endregion
 //#region src/cm6/cm-shortcode-block.ts
 /**
-* Block-decoration StateField for shortcode blocks. Reads the SYNCHRONOUS Lezer
-* syntax tree and pairs Open↔Close fence markers with a stack, so
-* positions are always current for tr.state — no stale offsets, no glitches.
+* Block-decoration StateField for shortcode blocks: pairs Open↔Close fence
+* markers from the synchronous Lezer tree and decorates them. The document alone
+* decides how a block renders, never the caret. The colons of a paired opening
+* fence and the whole closing fence hang into the margin (see `shortcodeFences`).
 *
-* The document alone decides how a block renders, never the caret: every
-* fence is shown as source and token-highlighted; body lines are tinted;
-* nothing hangs into the margin. Editing a line ABOVE the block
-* does not change anything below it — there is nothing caret-driven left to
-* toggle.
-*
-* Large-doc caveat: syntaxTree(state) may be incomplete past the viewport for
-* very long docs. The parse worker extends the tree via effect-only
-* transactions; the field rebuilds on that advance (see `treeAdvanced`), so
-* late-parsed blocks decorate as soon as the parse reaches them. We do not
-* assert whole-doc completeness at any single point in time.
+* On a long document the tree can stop short of the end; the field rebuilds when
+* the parse advances (`treeAdvanced`), so late blocks decorate once it reaches them.
 */
 const DEFAULT_STRINGS = {
 	legacyDividerLabel: () => "old divider — use +++",
 	legacyDividerTooltip: () => "The grid still splits here, but --- is the old way to write a cell divider. Replace it with +++."
 };
 /**
-* Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
-* blocks; each carries its nested `children` so the decoration layer can render
-* `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
-* text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
+* Pair Open↔Close fence markers with a plain stack: a close pops the innermost
+* open, whatever its colon count. Each block carries its nested `children`.
+* When the tree stops short of the document, an open still waiting for its close
+* keeps its margin run, so it does not flicker unhung when the parse reaches the close.
 */
-function collectShortcodeBlocks(state) {
+function pairShortcodes(state, tree) {
 	const stack = [];
-	const out = [];
-	syntaxTree(state).iterate({ enter(node) {
+	const blocks = [];
+	const fences = [];
+	tree.iterate({ enter(node) {
 		if (node.name === "ShortcodeOpenLine") {
 			const lineFrom = state.doc.lineAt(node.from).from;
 			const m = SHORTCODE_OPEN_RE.exec(state.doc.sliceString(lineFrom, node.to));
@@ -820,12 +813,19 @@ function collectShortcodeBlocks(state) {
 				if (c.name === "ShortcodeName") name = state.doc.sliceString(c.from, c.to);
 				else if (c.name === "ShortcodeAttrs") attrs = state.doc.sliceString(c.from, c.to).trim();
 			while (c.nextSibling());
+			const fence = {
+				from: node.from,
+				to: node.from + arity,
+				role: "open",
+				depth: stack.length + 1
+			};
 			stack.push({
 				from: lineFrom,
 				arity,
 				name,
 				attrs,
-				children: []
+				children: [],
+				fence
 			});
 		} else if (node.name === "ShortcodeCloseLine") {
 			const open = stack.pop();
@@ -840,12 +840,56 @@ function collectShortcodeBlocks(state) {
 					children: open.children
 				};
 				if (stack.length > 0) stack[stack.length - 1].children.push(block);
-				else out.push(block);
+				else blocks.push(block);
+				fences.push(open.fence, {
+					from: node.from,
+					to: node.from + state.doc.sliceString(node.from, node.to).trimEnd().length,
+					role: "close",
+					depth: open.fence.depth
+				});
 			}
 		}
 	} });
-	return out;
+	if (tree.length < state.doc.length) for (const open of stack) fences.push(open.fence);
+	return {
+		blocks,
+		fences: fences.sort((a, b) => a.from - b.from)
+	};
 }
+/**
+* True when the incremental parse extended the tree without a doc change —
+* the parse worker's effect-only transactions on large documents. Without
+* this trigger, blocks beyond the initially-parsed region never decorate
+* until the next edit or cursor move (scrolling produces no transaction at
+* all for StateFields).
+*/
+function treeAdvanced(tr) {
+	return syntaxTree(tr.state) != syntaxTree(tr.startState);
+}
+const shortcodeStringsFacet = Facet.define({ combine: (parts) => Object.assign({ ...DEFAULT_STRINGS }, ...parts) });
+const buildState = (state) => {
+	const pairs = pairShortcodes(state, syntaxTree(state));
+	return {
+		...pairs,
+		decorations: buildBlockDecorations(state, pairs.blocks, state.facet(shortcodeStringsFacet))
+	};
+};
+/** The pairing every reader of the blocks needs, rebuilt with the decorations when the document changes or the parse advances. An extension that reads it lists it; the editor's `shortcodeBlockExtension` shares it. */
+const shortcodeBlockField = StateField.define({
+	create: buildState,
+	update(value, tr) {
+		if (!tr.docChanged && !treeAdvanced(tr)) return value;
+		return buildState(tr.state);
+	},
+	provide: (f) => EditorView.decorations.from(f, (v) => v.decorations)
+});
+const pairsOf = (state) => state.field(shortcodeBlockField);
+/** The TOP-LEVEL blocks of the document as the field last paired them (needs `shortcodeBlockField` installed); each carries its nested `children`. On a long document that is only as far as the parse has reached: a command that must see every pair uses `shortcodeBlocksIn` on a forced tree. */
+const collectShortcodeBlocks = (state) => pairsOf(state).blocks;
+/** The top-level blocks of `tree`, paired afresh (the field's pairing stops where its tree does). */
+const shortcodeBlocksIn = (state, tree) => pairShortcodes(state, tree).blocks;
+/** The margin runs of every paired fence, in document order. */
+const shortcodeFences = (state) => pairsOf(state).fences;
 /** Flatten a block tree to a document-ordered list (parent before children). */
 function flattenBlocks(blocks) {
 	const out = [];
@@ -932,6 +976,19 @@ function dividesCellsAt(lineFrom, subtree) {
 */
 function legacyDividesCellsAt(lineFrom, subtree) {
 	return innermostBlockAt(lineFrom, subtree)?.name === "grid";
+}
+/** The lines of `block`'s own cell dividers (`+++`, and the old `---` in a grid), never those of a block nested in it. */
+function ownDividerLines(state, block) {
+	const subtree = flattenBlocks([block]);
+	const out = [];
+	for (let n = state.doc.lineAt(block.from).number + 1; n < state.doc.lineAt(block.closeFrom).number; n++) {
+		const ln = state.doc.line(n);
+		if ((isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree) || isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) && innermostBlockAt(ln.from, subtree) === block) out.push({
+			from: ln.from,
+			to: ln.to
+		});
+	}
+	return out;
 }
 /**
 * Count the legacy `---` dividers the Rust `editor_scan` would also count:
@@ -1030,9 +1087,13 @@ function addFenceLineMark(builder, ln) {
 	const len = ln.text.trim().length;
 	if (len > 0) builder.add(ln.from + indent, ln.from + indent + len, MARK_SC_FENCE);
 }
-function buildBlockDecorations(state, strings) {
+function buildBlockDecorations(state, blocks, strings) {
 	const builder = new RangeSetBuilder();
-	for (const top of collectShortcodeBlocks(state)) {
+	const line = (kind, depth) => Decoration.line({
+		class: `cm-sc-line cm-sc-line-${kind} cm-sc-rail`,
+		attributes: { style: `--sc-depth:${depth}` }
+	});
+	for (const top of blocks) {
 		const subtree = flattenBlocks([top]);
 		const openByStart = /* @__PURE__ */ new Map();
 		const closeByStart = /* @__PURE__ */ new Map();
@@ -1040,57 +1101,34 @@ function buildBlockDecorations(state, strings) {
 			openByStart.set(b.from, b);
 			closeByStart.set(b.closeFrom, b);
 		}
+		let depth = 0;
 		let pos = state.doc.lineAt(top.from).from;
 		while (pos <= top.to) {
 			const ln = state.doc.lineAt(pos);
 			if (openByStart.has(ln.from)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence" }));
+				builder.add(ln.from, ln.from, line("fence", ++depth));
 				addOpenFenceTokenMarks(builder, ln);
 			} else if (closeByStart.has(ln.from)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-fence" }));
+				builder.add(ln.from, ln.from, line("fence", depth--));
 				addFenceLineMark(builder, ln);
 			} else if (isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-divider" }));
+				builder.add(ln.from, ln.from, line("divider", depth));
 				addFenceLineMark(builder, ln);
 			} else if (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) {
-				builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-legacy-divider" }));
+				builder.add(ln.from, ln.from, line("legacy-divider", depth));
 				builder.add(ln.to, ln.to, Decoration.widget({
 					widget: new LegacyDividerHintWidget(ln.from, strings),
 					side: 1
 				}));
-			} else builder.add(ln.from, ln.from, Decoration.line({ class: "cm-sc-line cm-sc-line-body" }));
+			} else builder.add(ln.from, ln.from, line("body", depth));
 			if (ln.to + 1 > top.to) break;
 			pos = ln.to + 1;
 		}
 	}
 	return builder.finish();
 }
-/**
-* True when the incremental parse extended the tree without a doc change —
-* the parse worker's effect-only transactions on large documents. Without
-* this trigger, blocks beyond the initially-parsed region never decorate
-* until the next edit or cursor move (scrolling produces no transaction at
-* all for StateFields).
-*/
-function treeAdvanced(tr) {
-	return syntaxTree(tr.state) != syntaxTree(tr.startState);
-}
-function shortcodeBlockField(opts) {
-	const strings = {
-		...DEFAULT_STRINGS,
-		...opts.strings
-	};
-	return StateField.define({
-		create: (state) => buildBlockDecorations(state, strings),
-		update(value, tr) {
-			if (!tr.docChanged && !treeAdvanced(tr)) return value;
-			return buildBlockDecorations(tr.state, strings);
-		},
-		provide: (f) => EditorView.decorations.from(f)
-	});
-}
 function shortcodeBlockExtension(opts = {}) {
-	return [shortcodeBlockField(opts)];
+	return [shortcodeStringsFacet.of(opts.strings ?? {}), shortcodeBlockField];
 }
 
 //#endregion
@@ -1362,4 +1400,4 @@ function footnoteExtension() {
 }
 
 //#endregion
-export { buildLinkDecorations, childrenNamed, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };
+export { buildLinkDecorations, childrenNamed, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, ownDividerLines, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBlockField, shortcodeBlocksIn, shortcodeBodyRanges, shortcodeFences, topLevelLegacyDividerCount, widthFromPipe };

@@ -1,4 +1,5 @@
 use super::*;
+use moss_core::event::EventTime;
 use crate::build::types::EventFields;
 
 fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
@@ -49,24 +50,6 @@ fn the_page_time_carries_the_listing_date_parts() {
 }
 
 #[test]
-fn clock_collapses_the_meridiem_only_when_shared() {
-    let d = doc("2026-11-01 11:00", Some("2026-11-01 13:00"));
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 11:00 AM–1:00 PM");
-}
-
-#[test]
-fn midnight_and_noon_read_as_twelve() {
-    let d = doc("2026-11-01 00:30", None);
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 12:30 AM");
-}
-
-#[test]
-fn chinese_uses_a_24_hour_clock_and_weekday_after_the_date() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
-    assert_eq!(time_text(&d, Language::ZhHans), "2026年11月1日 星期日 14:00–16:00");
-}
-
-#[test]
 fn unsafe_link_schemes_are_not_linked() {
     let mut d = doc("2026-11-01", None);
     d.event.as_mut().unwrap().tickets = Some("javascript:alert(1)".into());
@@ -90,6 +73,23 @@ fn tickets_and_online_links_each_carry_their_own_class() {
 }
 
 #[test]
+fn a_past_event_drops_tickets_and_keeps_online() {
+    let mut d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    d.event.as_mut().unwrap().tickets = Some("https://example.test/tickets".into());
+    d.event.as_mut().unwrap().online = Some("https://example.test/recording".into());
+    let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+    let meta = |now| render(&d, Language::En, false, Some("/e.ics"), UpcomingLabel::Shown, now).unwrap();
+
+    let before = meta(at("2026-11-01 15:59"));
+    assert!(before.contains("moss-event-tickets") && before.contains("moss-event-calendar"), "{before}");
+
+    let after = meta(at("2026-11-01 16:00"));
+    assert!(after.contains(r#"data-when="past""#), "{after}");
+    assert!(!after.contains("moss-event-tickets"), "{after}");
+    assert!(after.contains("moss-event-online"), "{after}");
+}
+
+#[test]
 fn an_event_page_prints_its_place_only_when_no_place_line_names_it() {
     let meta = |d: &ParsedDocument| render(d, Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).unwrap();
     let mut d = doc("2026-11-01", None);
@@ -109,41 +109,4 @@ fn an_event_page_prints_its_place_only_when_no_place_line_names_it() {
 #[test]
 fn a_page_without_an_event_renders_nothing() {
     assert!(render(&ParsedDocument::default(), Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).is_none());
-}
-
-#[test]
-fn end_before_start_is_treated_as_no_end() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 09:00"));
-    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00 PM");
-}
-
-#[test]
-fn the_separator_before_a_clock_time_is_its_own_span() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
-    let element = time_element(&d, Language::En);
-    assert!(
-        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">"#),
-        "{element}"
-    );
-}
-
-#[test]
-fn a_date_only_event_has_no_separator_span() {
-    let d = doc("2026-11-01", None);
-    assert!(!time_element(&d, Language::En).contains("moss-when-sep"));
-}
-
-#[test]
-fn both_date_to_time_separators_of_a_timed_multi_day_range_are_spans() {
-    let d = doc("2026-11-01 14:00", Some("2026-11-03 16:00"));
-    let element = time_element(&d, Language::En);
-    assert_eq!(element.matches(r#"<span class="moss-when-sep">"#).count(), 2, "{element}");
-    assert!(
-        element.contains(r#"<span class="moss-when-time">2:00 PM</span> – <span class="moss-when-weekday">Tuesday</span>"#),
-        "{element}"
-    );
-    assert!(
-        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">4:00 PM</span>"#),
-        "{element}"
-    );
 }

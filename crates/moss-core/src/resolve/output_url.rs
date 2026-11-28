@@ -93,6 +93,72 @@ pub fn reference_output_url(
     relative_asset_path(&from_out, &target_out)
 }
 
+/// Convert file path to pretty URL format.
+///
+/// - `foo/bar/index.html` → `foo/bar/` (WITH trailing slash for directory-style)
+/// - `foo/bar.html` → `foo/bar` (NO trailing slash for file-style)
+/// - Leading slashes are stripped
+///
+/// # Examples
+/// ```ignore
+/// assert_eq!(to_pretty_url("news/article/index.html"), "news/article/");
+/// assert_eq!(to_pretty_url("posts/hello.html"), "posts/hello");
+/// ```
+pub fn to_pretty_url(file_path: &str) -> String {
+    let path = file_path.trim_start_matches('/');
+    if path == "index.html" {
+        // Root homepage: "index.html" -> "" (becomes "/" when nav prepends slash)
+        String::new()
+    } else if path.ends_with("/index.html") {
+        // "foo/bar/index.html" -> "foo/bar/"
+        path.strip_suffix("index.html").unwrap_or(path).to_string()
+    } else if path.ends_with(".html") {
+        // "foo/bar.html" -> "foo/bar" (NO trailing slash!)
+        path.strip_suffix(".html").unwrap_or(path).to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// A path written on the page at `doc_url_path`, as a path from the site root,
+/// so it works on any page that shows it (a cover on the home page's listing).
+///
+/// # Examples
+/// - cover "../../assets/img.jpg" from doc "articles/travel/index.html" → "assets/img.jpg"
+/// - cover "assets/img.jpg" from doc "index.html" → "assets/img.jpg"
+/// - cover "https://example.com/img.jpg" from any doc → "https://example.com/img.jpg" (unchanged)
+pub fn resolve_to_root_relative(path: &str, doc_url_path: &str) -> String {
+    // Skip absolute URLs and already root-relative paths
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
+    }
+    // Leading `/` means site root — strip it to get a root-relative path
+    if let Some(stripped) = path.strip_prefix('/') {
+        return stripped.to_string();
+    }
+
+    // Get document directory parts from url_path
+    let doc_dir: Vec<&str> = doc_url_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Resolve the relative path against the document directory
+    let mut parts = doc_dir.clone();
+    for segment in path.split('/') {
+        match segment {
+            ".." => { parts.pop(); }
+            "." | "" => {}
+            other => { parts.push(other); }
+        }
+    }
+
+    parts.join("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

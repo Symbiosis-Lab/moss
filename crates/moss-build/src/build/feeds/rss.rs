@@ -7,6 +7,7 @@ use moss_core::render::image::{
     synthesize_image_html, ImageContext, ImageRenderOptions,
 };
 use crate::build::types::ParsedDocument;
+use std::collections::HashMap;
 use moss_core::asset_snapshot::AssetSnapshot;
 
 /// True when the document has an absolute `external_url:` in its frontmatter —
@@ -50,7 +51,7 @@ fn percent_encode_feed_url(url: &str) -> String {
 /// and a feed entry with a coarse timestamp orders better than one with none.
 /// Returns None if the date cannot be parsed.
 fn date_to_rfc822(date_str: &str) -> Option<String> {
-    let pd = crate::build::components::date::parse_partial_date(date_str)?;
+    let pd = moss_core::date::parse_partial_date(date_str)?;
     let year = pd.year;
     let month = pd.month.unwrap_or(1);
     let day = pd.day.unwrap_or(1);
@@ -137,7 +138,7 @@ pub(crate) fn article_url(site_url: &str, url_path: &str) -> String {
 /// email uses, because feed readers strip inline `<svg>` and the figure would
 /// vanish; refused-math `<code>` passes through. Computed once for `rss.xml`
 /// and `feed.json`: rewriting every body is most of either feed's cost.
-pub(crate) fn feed_items<'a>(documents: &'a [ParsedDocument], site_url: &str) -> Vec<(&'a ParsedDocument, String)> {
+pub(crate) fn feed_items<'a>(documents: &'a [ParsedDocument], site_url: &str, never_made: &HashMap<String, String>) -> Vec<(&'a ParsedDocument, String)> {
     let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
     feed_articles(documents)
         .into_iter()
@@ -145,7 +146,7 @@ pub(crate) fn feed_items<'a>(documents: &'a [ParsedDocument], site_url: &str) ->
         .map(|(index, article)| {
             let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
             let page = article_url(site_url, &article.url_path);
-            let html = for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url);
+            let html = for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url, &article.url_path, never_made);
             let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(html.trim_start(), site_url);
             (article, crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url))
         })
@@ -157,7 +158,7 @@ pub(crate) fn feed_items<'a>(documents: &'a [ParsedDocument], site_url: &str) ->
 /// Links and pictures become absolute; a fragment link stays relative, so it
 /// still jumps within the item. `srcset` and `<source>` go, since their
 /// candidates are relative and `src` already names the picture.
-fn for_readers(html: &str, page: &str, site: &str) -> String {
+fn for_readers(html: &str, page: &str, site: &str, doc_url_path: &str, never_made: &HashMap<String, String>) -> String {
     lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
             lol_html::element!("h1.moss-article-title", |el| {
@@ -180,6 +181,7 @@ fn for_readers(html: &str, page: &str, site: &str) -> String {
             }),
             lol_html::element!("img", |el| {
                 if let Some(src) = el.get_attribute("src") {
+                    let src = crate::build::markdown::html_post::original_src(&src, doc_url_path, never_made).unwrap_or(src);
                     el.set_attribute("src", &crate::syndication::shape::absolute(&src, page, site))?;
                 }
                 el.remove_attribute("srcset");
@@ -311,7 +313,7 @@ mod tests {
     use moss_core::PageKind;
 
     fn generate_rss_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_description: Option<&str>, analytics: Option<&AnalyticsConfig>) -> String {
-        rss_feed(&feed_items(documents, site_url), site_title, site_url, site_description, analytics)
+        rss_feed(&feed_items(documents, site_url, &Default::default()), site_title, site_url, site_description, analytics)
     }
 
     fn create_test_document(title: &str, date: Option<&str>, url_path: &str, html_content: &str) -> ParsedDocument {
@@ -335,13 +337,24 @@ mod tests {
 <p data-source-line="2">See <a href="../other/">other</a>.</p><img src="bank.webp" alt="Bank">"#;
         let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
         let rss = generate_rss_feed(&docs, "A site", "https://example.org", None, None);
-        let json = crate::build::feeds::json_feed::json_feed(&feed_items(&docs, "https://example.org"), "A site", "https://example.org", "en", &Default::default());
+        let json = crate::build::feeds::json_feed::json_feed(&feed_items(&docs, "https://example.org", &Default::default()), "A site", "https://example.org", "en", &Default::default());
         for feed in [&rss, &json] {
             assert!(!feed.contains("data-source"), "{feed}");
             assert!(!feed.contains("moss-article-title"), "{feed}");
             assert!(feed.contains("https://example.org/notes/spring/bank.webp"), "{feed}");
         }
         assert!(rss.contains(r#"href="https://example.org/notes/other/?utm_source=rss&utm_medium=feed""#), "{rss}");
+    }
+
+    /// A variant the build will never make is not what a feed names: the
+    /// reader gets the original.
+    #[test]
+    fn a_feed_names_the_original_of_a_variant_never_made() {
+        let html = r#"<img src="IMG_1.heic.w1200.webp" srcset="IMG_1.heic.w800.webp 800w" alt="">"#;
+        let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
+        let never_made = [("notes/spring/IMG_1.heic.w1200.webp".to_string(), "notes/spring/IMG_1.HEIC".to_string())].into();
+        let items = feed_items(&docs, "https://example.org", &never_made);
+        assert!(items[0].1.contains(r#"src="https://example.org/notes/spring/IMG_1.HEIC""#), "{}", items[0].1);
     }
 
     #[test]

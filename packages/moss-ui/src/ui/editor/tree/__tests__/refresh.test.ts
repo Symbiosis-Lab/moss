@@ -153,6 +153,20 @@ describe('keep-last-good refreshTree', () => {
     expect(String(mockWarn.mock.calls[0][0])).toMatch(/did not resolve/);
   });
 
+  test('a listTree answering after the bound still lands its tree', async () => {
+    priv<{ handleToggleTop(index: number): void }>(fileTree).handleToggleTop(0);
+    let answer!: (v: unknown) => void;
+    mockListTree.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+
+    const refreshPromise = refresher(fileTree).refreshTree();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await refreshPromise).toBe(false);
+    answer({ status: 'ok', data: makeTree(['posts', 'drafts']) });
+
+    await vi.waitFor(() => expect(priv<{ isDirectory(path: string): boolean }>(fileTree).isDirectory('drafts')).toBe(true));
+    expect(container.querySelector('.seg[data-path="drafts"]')).not.toBeNull();
+  });
+
   test('an immediately-rejected listTree logs the rejection cause, not a timeout claim', async () => {
     const dirIndexBefore = new Map(priv<{ dirIndex: Map<string, unknown> }>(fileTree).dirIndex);
     mockListTree.mockRejectedValueOnce(new Error('IPC channel closed'));

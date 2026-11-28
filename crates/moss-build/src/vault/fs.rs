@@ -766,6 +766,15 @@ impl PluginPath {
                     .to_string(),
             );
         }
+        // A setting named in the manifest's `network.setting_hosts` grants
+        // its value's host, so only moss, writing what the person typed,
+        // writes `config.toml`.
+        if leaf.eq_ignore_ascii_case("config.toml") {
+            return Err(
+                "Plugins cannot write config.toml — it holds the settings the person chose"
+                    .to_string(),
+            );
+        }
         Ok(Self(relative_path.to_string()))
     }
 

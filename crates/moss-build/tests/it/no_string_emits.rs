@@ -41,6 +41,8 @@ const ALLOWLIST: &[&str] = &[
     // webview / QuickJS shim; the only occurrences in this crate's Rust
     // source are JS plugin-bundle fixture strings inside engine tests.
     "plugin-message",
+    // A moss-contract fixture plugin's JS event, matched by the scripted person.
+    "asked",
     "browser-url-changed",
     "matters-room-skipped",
     "matters-room-published",

@@ -235,6 +235,22 @@ impl Editions {
     }
 }
 
+/// True for a root-level homepage url_path: `index.html` or `<seg>/index.html`
+/// where `<seg>` is a language tree (exactly one segment before index.html).
+/// `<lang>/sub/index.html` is a sub-page, not a language root.
+pub fn is_language_root(url_path: &str) -> bool {
+    if url_path == "index.html" {
+        return true;
+    }
+    match url_path.strip_suffix("/index.html") {
+        // Single segment (no further '/') AND a recognized language tree.
+        Some(prefix) => {
+            !prefix.contains('/') && lang_tree_prefix(url_path).is_some()
+        }
+        None => false,
+    }
+}
+
 /// True when `path` sits at the top of its edition: directly at the site root,
 /// or directly inside an edition's language tree (`"de/About.md"`). The default
 /// language's own tree is no edition, so nothing in it is top level.

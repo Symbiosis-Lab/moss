@@ -8,7 +8,7 @@
  * layer below this one stayed green while opening any notebook failed with
  * "Could not find content with path".
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test("JupyterLite renders the notebook's cells from moss's contents index", async ({
   page,

@@ -1,3 +1,4 @@
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -9,7 +10,7 @@ import { resolve } from 'node:path';
 
 /** What the hang puts on each line of `doc`: the line's `--lp-hang`/`--lp-pfx` source text, the shim position, the measured mark's range. */
 function hangOf(doc: string) {
-  const state = EditorState.create({ doc, extensions: [markdown({ extensions: [GFM] })] });
+  const state = EditorState.create({ doc, extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
   const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: doc.length }]);
   const lines = new Map<number, { hang?: string; pfx?: string; shim?: number; mark?: [number, number]; key?: string }>();
   for (const cur = set.iter(); cur.value; cur.next()) {
@@ -73,7 +74,7 @@ describe('list hanging indent decorations', () => {
 
 describe('list decoration edge cases', () => {
   test('an item whose line holds no item prefix decorates nothing instead of throwing', () => {
-    const state = EditorState.create({ doc: '1: a', extensions: [markdown({ extensions: [GFM] })] });
+    const state = EditorState.create({ doc: '1: a', extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
     const item = { name: 'ListItem', from: 0, to: 4, firstChild: { from: 0, to: 1, name: 'ListMark', firstChild: null, nextSibling: null }, nextSibling: null } as unknown as SyntaxNode;
     const decos: DecoRange[] = [];
     expect(() => listHang(item, state, 0, 4, decos)).not.toThrow();
@@ -88,7 +89,7 @@ describe('list decoration edge cases', () => {
   });
 
   test('a tab in a prefix is fixed to the columns it spans, so it ends on the same stop wherever the shim puts it', () => {
-    const state = EditorState.create({ doc: '- p\n\t- a\n-\tb\n- c\n  \td', extensions: [markdown({ extensions: [GFM] })] });
+    const state = EditorState.create({ doc: '- p\n\t- a\n-\tb\n- c\n  \td', extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: state.doc.length }]);
     const tabs: [number, string][] = [];
     for (const cur = set.iter(); cur.value; cur.next()) {
@@ -100,7 +101,7 @@ describe('list decoration edge cases', () => {
   });
 
   test('only the indent before a marker is widened: not the gap after it, not a continuation line', () => {
-    const state = EditorState.create({ doc: '- a\n  - b\n    cont\n-  c', extensions: [markdown({ extensions: [GFM] })] });
+    const state = EditorState.create({ doc: '- a\n  - b\n    cont\n-  c', extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: state.doc.length }]);
     const ind: [number, number][] = [];
     for (const cur = set.iter(); cur.value; cur.next()) if ((cur.value.spec as { class?: string }).class === 'cm-li-ind') ind.push([cur.from, cur.to]);
@@ -108,7 +109,7 @@ describe('list decoration edge cases', () => {
   });
 
   test('guides of two parents at one depth and column are one cached decoration', () => {
-    const state = EditorState.create({ doc: '- a\n  - b\n- c\n  - d', extensions: [markdown({ extensions: [GFM] })] });
+    const state = EditorState.create({ doc: '- a\n  - b\n- c\n  - d', extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: state.doc.length }]);
     const guides = [];
     for (const cur = set.iter(); cur.value; cur.next()) if ((cur.value.spec as { class?: string }).class === 'cm-lp-guided') guides.push(cur.value);
@@ -118,7 +119,7 @@ describe('list decoration edge cases', () => {
 
   /** The lines carrying a guide in the slot of `depth`, 1-based. */
   function guidedLines(doc: string, depth: number): number[] {
-    const state = EditorState.create({ doc, extensions: [markdown({ extensions: [GFM] })] });
+    const state = EditorState.create({ doc, extensions: [markdown({ extensions: [GFM] }), shortcodeBlockExtension()] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: doc.length }]);
     const out: number[] = [];
     for (const cur = set.iter(); cur.value; cur.next()) {

@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Transaction, StateField, StateEffect, ChangeSet } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { forceParsing, syntaxTree } from '@codemirror/language';
 import { undo, undoDepth } from '@codemirror/commands';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { CmEditor, applyEmbedWidth } from '../cm-editor';
+import { cardField, cardProviders, openCardAt, referenceCardExtension } from '../cm-reference-card';
 import { commentParsedField } from '../cm-comment';
 import { mossHighlight } from '@symbiosis-lab/moss-syntax/cm6';
 
@@ -14,9 +15,16 @@ vi.mock('../../engine', async (orig) => {
 });
 import { engine } from '../../engine';
 
+/** Parse to the end whatever the machine's load, so the state carries the whole tree: the first parse stops at a 20 ms budget. */
+const parsed = (editor: CmEditor): EditorView => {
+  const view = editor.getView();
+  forceParsing(view, view.state.doc.length, 1e9);
+  return view;
+};
+
 function nodeNames(editor: CmEditor): Set<string> {
   const names = new Set<string>();
-  syntaxTree(editor.getView().state).iterate({ enter: (n) => { names.add(n.name); } });
+  syntaxTree(parsed(editor).state).iterate({ enter: (n) => { names.add(n.name); } });
   return names;
 }
 
@@ -67,6 +75,7 @@ describe('CmEditor', () => {
       onChange: () => {},
       getFromFile: () => 'note.md',
     });
+    parsed(editor);
 
     expect(container.querySelector('.cm-line.cm-lp-h1')).not.toBeNull();
     expect(container.querySelector('.cm-line.cm-callout-block')).not.toBeNull();
@@ -353,106 +362,37 @@ describe('CmEditor', () => {
     });
   });
 
-  // ── sealed-state scrim ────────────────────────────────────────────
-  describe('setReadOnly / scrim', () => {
-    test('setReadOnly(true) adds .cm-seal-scrim with status text inside the editor DOM', () => {
+  describe('setHeld', () => {
+    test('a held editor refuses a direct change and still takes another writer\'s', () => {
       const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
+      const view = editor.getView();
+      editor.setHeld(true);
+      expect(view.state.readOnly).toBe(true);
+      expect(view.dom.classList.contains('cm-held')).toBe(true); // no caret, no handles
 
-      const scrim = editor.getView().dom.querySelector('.cm-seal-scrim');
-      expect(scrim).not.toBeNull();
+      view.dispatch({ changes: { from: 0, insert: 'x' } });
+      expect(view.state.doc.toString()).toBe('hello');
 
-      const status = scrim?.querySelector('.cm-seal-scrim__status');
-      expect(status).not.toBeNull();
-      expect(status?.textContent).toBe('Publishing your site…');
+      editor.applyExternal(ChangeSet.of({ from: 5, insert: ' there' }, 5));
+      expect(view.state.doc.toString()).toBe('hello there');
 
+      editor.setHeld(false);
+      expect(view.dom.classList.contains('cm-held')).toBe(false);
+      view.dispatch({ changes: { from: 0, insert: 'x' } });
+      expect(view.state.doc.toString()).toBe('xhello there');
       editor.destroy();
     });
 
-    test('a rename/move commit freeze never says it is publishing', () => {
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true, 'commit');
-      const status = editor.getView().dom.querySelector('.cm-seal-scrim__status');
-      expect(status?.textContent).toBe('Updating links…');
-
-      // The same scrim is reused: a publish seal afterwards says publishing again.
-      editor.setReadOnly(false, 'commit');
-      editor.setReadOnly(true, 'publish');
-      expect(editor.getView().dom.querySelector('.cm-seal-scrim__status')?.textContent).toBe('Publishing your site…');
-
-      editor.destroy();
-    });
-
-    test('setReadOnly(false) removes (or hides) the .cm-seal-scrim', () => {
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
-      editor.setReadOnly(false);
-
-      // After unseal, the scrim must either be absent or have opacity:0 /
-      // aria-hidden — the DOM element may be kept for fade-out but it should
-      // not be "active" (no .is-sealing class on the wrapper).
-      const dom = editor.getView().dom;
-      expect(dom.classList.contains('sealed')).toBe(false);
-      // The scrim should not carry .is-sealing (fading-in state) after unseal.
-      const scrim = dom.querySelector('.cm-seal-scrim');
-      if (scrim) {
-        expect(scrim.classList.contains('is-sealing')).toBe(false);
-      }
-
-      editor.destroy();
-    });
-
-    test('setReadOnly(false) makes the scrim non-blocking so clicks reach the editor (regression: editor uneditable after publish)', () => {
-      // Regression for the v0.7.9 "editor cannot be edited" bug: _updateScrim(false)
-      // used to only drop the .is-sealing class, leaving the scrim div in the DOM
-      // with the base rule's `pointer-events: all` even at opacity:0 — an invisible
-      // overlay that swallowed every click after the first publish.
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
-      editor.setReadOnly(false);
-
-      const scrim = editor.getView().dom.querySelector<HTMLElement>('.cm-seal-scrim');
-      // If the element is kept for fade-out it MUST NOT intercept pointer events.
-      if (scrim) {
-        expect(scrim.style.pointerEvents).toBe('none');
-      }
-
-      editor.destroy();
-    });
-
-    test('re-sealing after an unseal restores the click barrier', () => {
-      // The pointer-events:none applied on unseal must be reverted on re-seal,
-      // or a second publish would not block edits.
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
-      editor.setReadOnly(false);
-      editor.setReadOnly(true);
-
-      const scrim = editor.getView().dom.querySelector<HTMLElement>('.cm-seal-scrim');
-      expect(scrim).not.toBeNull();
-      // Inline override cleared → defers to the `.is-sealing` rule's pointer-events:all.
-      expect(scrim?.style.pointerEvents).toBe('');
-      expect(scrim?.classList.contains('is-sealing')).toBe(true);
-
-      editor.destroy();
-    });
-
-    test('setReadOnly(true) adds .sealed class on the cm-editor DOM element', () => {
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
-
-      expect(editor.getView().dom.classList.contains('sealed')).toBe(true);
-
-      editor.destroy();
-    });
-
-    test('setReadOnly(true) marks the scrim with .is-sealing for asymmetric fade-in', () => {
-      const editor = new CmEditor({ content: 'hello', container, onChange: () => {} });
-      editor.setReadOnly(true);
-
-      const scrim = editor.getView().dom.querySelector('.cm-seal-scrim');
-      expect(scrim?.classList.contains('is-sealing')).toBe(true);
-
+    test('a hold closes an open card', () => {
+      const editor = new CmEditor({
+        content: 'hello', container, onChange: () => {},
+        extraExtensions: [referenceCardExtension(), cardProviders.of(() => ({ title: 'Link', body: document.createElement('div') }))],
+      });
+      const view = editor.getView();
+      expect(openCardAt(view, 0)).toBe(true);
+      expect(view.state.field(cardField)).not.toBeNull();
+      editor.setHeld(true);
+      expect(view.state.field(cardField)).toBeNull();
       editor.destroy();
     });
   });

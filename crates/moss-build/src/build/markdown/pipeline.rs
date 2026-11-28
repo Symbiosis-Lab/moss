@@ -24,7 +24,7 @@ use super::frontmatter::{
 };
 use super::html_post::{
     adjust_relative_paths_for_pretty_urls, inject_article_title_h1,
-    prepare_markdown_source, resolve_to_root_relative,
+    prepare_markdown_source,
 };
 
 /// The text the parser reads for a whole file: its body with CriticMarkup
@@ -32,39 +32,7 @@ use super::html_post::{
 /// nothing, so a second read of the same file (the page as authored) cannot
 /// repeat the build's warnings.
 fn parse_ready_body(content: &str) -> String {
-    let body = if is_simplified_frontmatter(content) {
-        parse_simplified_frontmatter(content).1
-    } else {
-        normalize_body_like_gray_matter(moss_core::frontmatter::parse(content).render_body())
-    };
-    moss_core::resolve::prepare_markdown_source(&body, 0).0
-}
-
-/// Reproduce gray_matter's body normalization byte-for-byte.
-///
-/// The traditional-YAML branch historically took the markdown body from
-/// `gray_matter`'s `result.content`. gray_matter (0.2.9) builds the body by
-/// re-emitting each line prefixed with `\n` and then calling
-/// `trim_start_matches('\n')` — the net effect is:
-///   * leading blank lines are removed, and
-///   * the trailing newline is dropped (the line-join leaves no terminator).
-/// Per-line content (including trailing spaces) is otherwise preserved verbatim.
-///
-/// `moss_core::frontmatter::parse` instead returns the verbatim slice after the
-/// closing `---\n`, keeping both the leading and trailing newlines. To switch to
-/// the unified parser without churning any snapshot, run that same transform on
-/// `moss_core`'s body. `str::lines()` joined with `\n` reproduces gray_matter's
-/// line walk (CRLF already normalized to LF by `moss_core::frontmatter::parse`),
-/// and `trim_start_matches('\n')` drops the leading blanks.
-///
-/// FOLLOW-UP: the verbatim body is the *correct* output; this shim
-/// only exists to keep the snapshot fixtures byte-stable across the gray_matter
-/// removal. A future cleanup should regenerate the snapshots against the
-/// verbatim body and delete this function — do NOT "simplify" the call site to
-/// `parsed.body` without that regeneration, or ~200 fixtures will churn.
-fn normalize_body_like_gray_matter(body: &str) -> String {
-    let joined = body.lines().collect::<Vec<&str>>().join("\n");
-    joined.trim_start_matches('\n').to_string()
+    moss_core::resolve::prepare_markdown_source(&moss_core::frontmatter::read_page(content).1, 0).0
 }
 
 /// Builds a [`moss_core::asset_snapshot::AssetSnapshot`] from the desktop
@@ -455,12 +423,8 @@ impl Default for PageContext<'_> {
 /// `content` and `page.authored_source` are the page's public view
 /// (`MemberCascade::public_source`); this function never restricts them.
 ///
-/// `site_lang` is the site's default language, used as the final fallback
-/// when a document has no `lang:` frontmatter, no filename suffix, no
-/// ancestor lang folder, and content too short for `whatlang` to detect.
-/// The five-step priority chain (frontmatter > filename suffix > ancestor
-/// folder > content detection > site default) lives in
-/// [`crate::i18n::resolve_document_language`].
+/// `site_lang` is the language of a page with no `lang:`, filename suffix or
+/// folder language; the order is [`crate::i18n::resolve_document_language`]'s.
 pub fn process_markdown_file(
     file_path: &str,
     content: &str,
@@ -585,21 +549,8 @@ pub fn process_markdown_file(
             // `parsed.body` is the verbatim `content[fm_end..]` (leading + trailing
             // newlines intact). Reproduce gray_matter's exact transform so the body
             // text is byte-identical and snapshots don't churn.
-            let body = normalize_body_like_gray_matter(render_body);
-            // Plugin fields (e.g. `syndicated`) + children normalization come from
-            // the raw serde_yaml map exactly as before.
+            let body = moss_core::frontmatter::normalize_body(render_body);
             let raw_fm = crate::build::scan::article_map::parse_frontmatter(content);
-            // Extract children_source from the authored value via the shared
-            // normalizer (handles wikilink "[[News]]" AND resolved path forms).
-            // raw_fm holds serde_json::Value; the normalizer takes serde_yaml::Value
-            // — re-express through serde_yaml::to_value (cheap in-memory hop).
-            if let Some(children_val) = raw_fm.get("children") {
-                if let Ok(yaml_val) = serde_yaml::to_value(children_val) {
-                    let norm = moss_core::frontmatter_union::normalize_children(&yaml_val);
-                    fm.children = Some(norm.children);
-                    fm.children_source = norm.source;
-                }
-            }
             (fm, body, raw_fm, fm_lines)
         };
     // The frontmatter the declared fields are read from, as authored, in either
@@ -940,6 +891,8 @@ pub fn process_markdown_file(
         page: file_path,
         members_leads: std::cell::Cell::new(0),
         members_lead: std::cell::Cell::new(None),
+        subscribe_forms: std::cell::Cell::new(0),
+        form_id: std::cell::Cell::new(None),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -963,7 +916,7 @@ pub fn process_markdown_file(
     //      CM6 (editor-main.ts `new CmEditor({ content: body })`) — the
     //      frontmatter-stripped body, NOT the raw file — so annotations must be
     //      relative to THAT buffer. The parser here sees a further-processed
-    //      body (`normalize_body_like_gray_matter`, which drops leading blanks
+    //      body (`moss_core::frontmatter::normalize_body`, which drops leading blanks
     //      + the trailing newline), so we bridge the two in two steps:
     //
     //        raw-body offset  — lines of `content` before the parser body's
@@ -1117,27 +1070,9 @@ pub fn process_markdown_file(
         None => band_over,
     };
 
-    // 4. Capture the first body image for the cover chain.
-    //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
-    //    query descends into Hero overlay (query.rs:145-153) — if hero is
-    //    still in `doc.blocks`, an overlay image could be returned as the
-    //    body cover, double-counting against the OG image already captured
-    //    from `hero_extraction.image_url`.
-    //
-    //    Only raster pictures with a file-like href qualify: the share image
-    //    and listing cards cannot use a vector, a video or a folder URL.
-    let body_images = moss_core::ast::block_images(&doc);
-    let raster_href = |url: &moss_core::ast::Url| match url {
-        moss_core::ast::Url::Resolved(r)
-            if !r.href.ends_with('/') && crate::build::page::cover::is_raster_picture(&r.href) =>
-        {
-            Some(r.href.clone())
-        }
-        _ => None,
-    };
-    let body_cover_path: Option<String> = body_images.first().and_then(|u| raster_href(u));
-    let body_cover_candidates: Vec<String> =
-        body_images.iter().filter_map(|u| raster_href(u)).collect();
+    // 4. The body's pictures for the cover chain, read after `extract_hero`
+    //    so the hero overlay's picture is not counted twice.
+    let pictures = moss_core::page::card_pictures::PagePictures::of(&doc, hero_image_url.clone());
 
     // 5. Final safety net: any `Url::Unresolved` that escaped phases 1-2
     //    (e.g., a future URL-bearing variant added before its phase wires
@@ -1233,7 +1168,7 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
-    let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
+    let has_forms = moss_core::ast::has_form_fields_recursive(&doc);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
 
     // `:::toc` was removed in the unified grammar migration; the post-pass
@@ -1294,20 +1229,7 @@ pub fn process_markdown_file(
         moss_core::heading::opening_words(&excerpt).unwrap_or_else(|| filename_title.clone())
     } else if heading.text.is_empty() { filename_title.clone() } else { heading.text.clone() };
 
-    // Title source: NEVER the document body. For index/folder pages,
-    // `title:` if set, else the filename/folder name (`filename_title`,
-    // which resolves index/self-named notes to their folder name). For
-    // articles, the chrome `label` (which itself derives from
-    // `title:`/filename via heading::compute). Matches Obsidian: a body
-    // `# H1` is content, not the page title.
-    let title = if is_index_file {
-        match frontmatter.title.as_deref() {
-            Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-            _ => filename_title.clone(),
-        }
-    } else {
-        label.clone()
-    };
+    let title = moss_core::heading::page_title(is_index_file, frontmatter.title.as_deref(), &filename_title, &label);
 
     // Top of the page's edition: the site root, or directly inside a language
     // tree. Feeds the nav membership check below and auto-navigation downstream.
@@ -1320,7 +1242,7 @@ pub fn process_markdown_file(
     // body that opens with its own `# Heading`: that heading is the title, so
     // no title is injected above it. `is_nav_page` decides only that rule.
     // `is_index_file && is_root_level` stands in for `url_path == "index.html"`
-    // (the form `is_nav_bar_item_doc` uses at the render sites). It is EXACT for
+    // (the form `is_nav_bar_page` uses at the render sites). It is EXACT for
     // every page this gate can actually affect: the gate below also requires
     // an injected title, which moss-core withholds from all index/folder
     // pages — so only non-index articles reach it, and for an article both this
@@ -1328,8 +1250,8 @@ pub fn process_markdown_file(
     // only disagree on index pages (e.g. a root index with a `url:` override),
     // which this gate never injects for. Keeping the proxy avoids depending on
     // `url_path`, computed a few lines below.
-    let is_nav_page = crate::build::components::nav::is_nav_bar_item(
-        crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
+    let is_nav_page = moss_core::page::nav::is_nav_bar_item(
+        moss_core::page::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
             slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) || frontmatter.search_engines == Some(false) },
         is_root_level,
         is_index_file && is_root_level,
@@ -1381,86 +1303,10 @@ pub fn process_markdown_file(
     // Extract analytics configuration from frontmatter
     let analytics = frontmatter.analytics;
 
-    // Extract cover image from frontmatter and resolve to root-relative path.
-    // After the resolve phase, wikilinks are already resolved to paths
-    // (possibly with |attrs appended). The wikilink fallback handles direct
-    // process_markdown_file calls that bypass the resolve phase.
-    //
-    // Pipe-aware: split on | to separate path from display attrs, resolve
-    // only the path part, then rejoin with attrs for downstream rendering.
     let cover_opted_out = frontmatter.cover.as_deref().is_some_and(|c| c.trim() == "false");
-    let cover = frontmatter.cover.filter(|_| !cover_opted_out).map(|c| {
-        let trimmed = c.trim();
-        // Strip optional surrounding quotes. A lone `"` is not a quoted empty
-        // string — `strip_prefix`/`strip_suffix` require two distinct quotes,
-        // where the old start/end test accepted one and then sliced `1..0`.
-        let unquoted = trimmed
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .or_else(|| {
-                trimmed
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''))
-            })
-            .unwrap_or(trimmed);
-        // Embed wikilink: strip ![[...]] — pipe content = display params (preserved)
-        // Regular wikilink: strip [[...]] — pipe content = alias (discarded per Obsidian convention)
-        let (is_embed, wikilink_inner) = if let Some(inner) = unquoted
-            .strip_prefix("![[")
-            .and_then(|s| s.strip_suffix("]]"))
-        {
-            (true, inner)
-        } else if let Some(inner) = unquoted
-            .strip_prefix("[[")
-            .and_then(|s| s.strip_suffix("]]"))
-        {
-            (false, inner)
-        } else {
-            (false, "")
-        };
-        let resolved_path = if !wikilink_inner.is_empty() {
-            let inner = wikilink_inner;
-            // Split on | to separate path from pipe content
-            let (path_part, attrs_str) = moss_core::media::split_pipe(inner);
-            let resolved = path_part.trim_start_matches('/').to_string();
-            // Only preserve pipe attrs for embed syntax (![[...|attrs]])
-            // For regular wikilinks ([[...|alias]]), discard the alias
-            if is_embed && !attrs_str.is_empty() {
-                format!("{}|{}", resolved, attrs_str)
-            } else {
-                resolved
-            }
-        } else if let Some((alt_section, url_part)) = unquoted
-            // Inline image syntax: ![alt|params](url)
-            .strip_prefix("![")
-            .and_then(|s| s.strip_suffix(')'))
-            .and_then(|s| s.rsplit_once("]("))
-        {
-            // Extract attrs from alt text (after pipe)
-            let attrs_str = alt_section.split_once('|').map_or("", |(_, attrs)| attrs);
+    let cover = frontmatter.cover.as_deref().and_then(|c| moss_core::page::card::frontmatter_cover(c, &url_path));
 
-            let resolved = resolve_to_root_relative(url_part, &url_path);
-            if attrs_str.is_empty() {
-                resolved
-            } else {
-                format!("{}|{}", resolved, attrs_str)
-            }
-        } else {
-            // Plain or relative path — split on | before resolving
-            let (path_part, attrs_str) = moss_core::media::split_pipe(unquoted);
-            let resolved = resolve_to_root_relative(path_part, &url_path);
-            if attrs_str.is_empty() {
-                resolved
-            } else {
-                format!("{}|{}", resolved, attrs_str)
-            }
-        };
-        resolved_path
-    });
-
-    let card_cover = (!cover_opted_out)
-        .then(|| crate::build::page::cover::card_cover_from_page(hero_image_url.as_deref(), body_cover_path.as_deref()))
-        .flatten();
+    let card_cover = pictures.card_cover(frontmatter.cover.as_deref());
 
     // Extract page tree fields from frontmatter
     let nav = frontmatter.nav;
@@ -1693,8 +1539,8 @@ pub fn process_markdown_file(
         body_claims_eager,
         lists_folders,
         hero_image_url,
-        body_cover_path,
-        body_cover_candidates,
+        body_cover_path: pictures.first,
+        body_cover_candidates: pictures.body,
         opening_heading,
         hero_overlay_text,
         citations: moss_core::ast::quote_source::citations(&doc.blocks),
@@ -1706,7 +1552,6 @@ pub fn process_markdown_file(
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
             marquee: moss_core::ast::has_marquee_recursive(&doc),
-            hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
             diagrams: moss_core::ast::has_diagram_recursive(&doc),
@@ -1752,6 +1597,7 @@ pub fn process_markdown_file(
         // still logged here, but they are not physical-source coordinates and
         // must not become publish evidence.
         missing_reference_occurrences: Vec::new(),
+        remote_picture_occurrences: Vec::new(),
     })
 }
 
@@ -2115,6 +1961,8 @@ fn render_markdown_to_html_with_config(
         page: "",
         members_leads: std::cell::Cell::new(0),
         members_lead: std::cell::Cell::new(None),
+        subscribe_forms: std::cell::Cell::new(0),
+        form_id: std::cell::Cell::new(None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2198,6 +2046,10 @@ struct PipelineHooks<'a> {
     members_leads: std::cell::Cell<usize>,
     /// The id of the notice the last subscribe form drew, for the segmented render.
     members_lead: std::cell::Cell<Option<String>>,
+    /// How many subscribe forms the page has drawn, and the last one's id
+    /// prefix, kept so a re-render with the page's scope keeps its ids.
+    subscribe_forms: std::cell::Cell<usize>,
+    form_id: std::cell::Cell<Option<String>>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2209,21 +2061,23 @@ impl<'a> PipelineHooks<'a> {
     /// pending form, consistent with the auto-injected footer form.
     fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
         use moss_core::frontmatter::members::Members;
-        let form = crate::build::features::email::render_hosted_subscribe_form(
+        use sha2::Digest;
+        // A stream listing shows many pages' forms on one page.
+        let page = sha2::Sha256::digest(self.page.as_bytes());
+        let form_id = format!("moss-subscribe-{:02x}{:02x}{:02x}{:02x}-{}", page[0], page[1], page[2], page[3], self.subscribe_forms.replace(self.subscribe_forms.get() + 1));
+        let form = crate::build::features::email::render_subscribe_block(
+            args,
+            &form_id,
             Some(self.site_id).filter(|s| !s.is_empty()),
             self.lang,
             "",
-            args.placeholder.as_deref(),
-            args.button.as_deref(),
             self.seta_base,
         );
+        self.form_id.set(Some(form_id));
         let Some(members) = args.members.filter(|m| *m != Members::Public) else {
             self.members_lead.set(None);
             return form;
         };
-        // A stream listing shows many pages' notices on one page.
-        use sha2::Digest;
-        let page = sha2::Sha256::digest(self.page.as_bytes());
         let n = self.members_leads.replace(self.members_leads.get() + 1);
         let id = format!("moss-members-lead-{:02x}{:02x}{:02x}{:02x}-{n}", page[0], page[1], page[2], page[3]);
         let html = crate::build::features::email::with_members_lead(&form, self.lang, members, &id);
@@ -2251,6 +2105,9 @@ impl<'a> PipelineHooks<'a> {
 impl super::body_plan::SegmentHooks for PipelineHooks<'_> {
     fn take_members_lead(&self) -> Option<String> {
         self.members_lead.take()
+    }
+    fn take_form_id(&self) -> Option<String> {
+        self.form_id.take()
     }
 }
 

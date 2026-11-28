@@ -6,17 +6,18 @@
 //! joined onto the folder.
 
 use super::{CommandHost, NoArgs};
-use crate::deploy::history::panel;
+use crate::deploy::history::{panel, RestoreMode, VersionScope};
 
 #[derive(serde::Deserialize, specta::Type)]
 pub struct ListVersionsArgs {
-    pub scope: String,
-    pub path: Option<String>,
+    pub scope: VersionScope,
+    /// A site or folder version's id: its drill-down instead of the timeline.
+    pub version: Option<String>,
 }
 
 pub async fn list_versions(host: &dyn CommandHost, a: ListVersionsArgs) -> Result<panel::VersionList, String> {
     let root = host.root().to_path_buf();
-    tokio::task::spawn_blocking(move || panel::list_versions(&root, &a.scope, a.path))
+    tokio::task::spawn_blocking(move || panel::list_versions(&root, a.scope, a.version))
         .await.map_err(|e| e.to_string())?
 }
 
@@ -42,15 +43,15 @@ pub async fn reveal_history_store(host: &dyn CommandHost, _: NoArgs) -> Result<(
 #[derive(serde::Deserialize, specta::Type)]
 pub struct RestoreVersionArgs {
     pub id: String,
-    pub path: Option<String>,
-    pub mode: String,
+    pub scope: VersionScope,
+    pub mode: RestoreMode,
 }
 
-/// Saves the present as a version first; restoring the whole site moves pages
-/// added since to the OS trash.
+/// Saves the present as a version first; restoring a folder or the whole site
+/// moves the pages it gained since to the OS trash.
 pub async fn restore_version(host: &dyn CommandHost, a: RestoreVersionArgs) -> Result<panel::RestoreReport, String> {
     let root = host.root().to_path_buf();
-    tokio::task::spawn_blocking(move || panel::restore_version(&root, &a.id, a.path, &a.mode))
+    tokio::task::spawn_blocking(move || panel::restore_version(&root, &a.id, a.scope, a.mode))
         .await.map_err(|e| e.to_string())?
 }
 

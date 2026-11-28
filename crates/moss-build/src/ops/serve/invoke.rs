@@ -230,7 +230,7 @@ mod tests {
         let root = dir.path().to_string_lossy().to_string();
         crate::system::build_records::records().install_publish_preflight(
             &root,
-            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![], drafts_linked: vec![] },
+            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![], drafts_linked: vec![], remote_pictures: vec![] },
         );
 
         let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({ "folderPath": root }))

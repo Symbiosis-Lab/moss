@@ -15,7 +15,7 @@
  * has resolved, and "is this element clipped" is a layout question jsdom
  * cannot answer.
  */
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page, newPage } from "../../support/browser-test";
 import { decodePng } from "../../e2e/helpers/decode-png";
 import { parseColor, worstCaseContrast } from "../../e2e/helpers/wcag-contrast";
 
@@ -451,7 +451,7 @@ test.describe("hero overlay panel edge", () => {
     test(`${dpr}x: every side of the panel that faces the picture fades into it, and the words keep the solid panel`, async ({ browser }) => {
       for (const c of CASES) {
         const context = await browser.newContext({ viewport: { width: c.width, height: 900 }, deviceScaleFactor: dpr });
-        const page = await context.newPage();
+        const page = await newPage(context);
         await page.goto(c.path);
         if (c.css) await page.addStyleTag({ content: c.css });
         const sides = await stripsFacingPicture(page, dpr);

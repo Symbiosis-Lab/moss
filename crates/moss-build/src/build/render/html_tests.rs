@@ -41,7 +41,7 @@ fn render_with_evidence(
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
     let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), evidence);
-    crate::build::render::generate_blocking_content_for_build(
+    let mut output = crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(test_dir),
         &project_structure,
         &output_dir,
@@ -55,6 +55,7 @@ fn render_with_evidence(
         instant,
     )
     .expect("generate_blocking_content_for_build should succeed");
+    crate::build::render::blocking::write_site_files_now(&mut output, &output_dir, &mut pending).unwrap();
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
     output_dir
 }
@@ -114,8 +115,8 @@ thread_local! {
 /// fallback cascades (cover + description). Critical for multilingual
 /// sites: a Chinese sub-page should pull from `zh-hans/index.html` (if
 /// present), NOT the English-default `index.html`.
-mod find_homepage_doc_tests {
-    use super::super::find_homepage_doc;
+mod edition_home_tests {
+    use moss_core::page::site_page::edition_home;
     use crate::build::types::ParsedDocument;
     use crate::i18n::Language;
 
@@ -130,7 +131,7 @@ mod find_homepage_doc_tests {
     #[test]
     fn page_in_default_lang_returns_root_index() {
         let docs = vec![doc("index.html", Language::En)];
-        let found = find_homepage_doc(&docs, Language::En, Language::En);
+        let found = edition_home(&docs, Language::En, Language::En);
         assert_eq!(found.map(|d| d.url_path.as_str()), Some("index.html"));
     }
 
@@ -140,7 +141,7 @@ mod find_homepage_doc_tests {
             doc("index.html", Language::En),
             doc("zh-hans/index.html", Language::ZhHans),
         ];
-        let found = find_homepage_doc(&docs, Language::ZhHans, Language::En);
+        let found = edition_home(&docs, Language::ZhHans, Language::En);
         assert_eq!(
             found.map(|d| d.url_path.as_str()),
             Some("zh-hans/index.html"),
@@ -154,20 +155,20 @@ mod find_homepage_doc_tests {
         // fall back to the site-default homepage so the page still gets
         // SOMETHING rather than emitting an empty share card.
         let docs = vec![doc("index.html", Language::En)];
-        let found = find_homepage_doc(&docs, Language::ZhHans, Language::En);
+        let found = edition_home(&docs, Language::ZhHans, Language::En);
         assert_eq!(found.map(|d| d.url_path.as_str()), Some("index.html"));
     }
 
     #[test]
     fn empty_docs_returns_none() {
         let docs: Vec<ParsedDocument> = vec![];
-        assert!(find_homepage_doc(&docs, Language::En, Language::En).is_none());
+        assert!(edition_home(&docs, Language::En, Language::En).is_none());
     }
 
     #[test]
     fn no_homepage_in_docs_returns_none() {
         let docs = vec![doc("about/index.html", Language::En)];
-        assert!(find_homepage_doc(&docs, Language::En, Language::En).is_none());
+        assert!(edition_home(&docs, Language::En, Language::En).is_none());
     }
 }
 
@@ -3176,12 +3177,7 @@ mod children_field_tests {
             html.find(&format!("serial/{slug}/\""))
                 .unwrap_or_else(|| panic!("{slug} missing from the sidebar: {html}"))
         });
-        let chain: Vec<String> = super::super::sequence_siblings(
-            &all_docs,
-            "serial/index.html",
-            "serial/",
-            &folder_index.resolve_for_direct_children(),
-        )
+        let chain: Vec<String> = moss_core::page::series::chain(&all_docs, &folder_index)
         .iter()
         .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
         .collect();
@@ -5895,7 +5891,6 @@ mod children_field_tests {
         homepage.direct_children_sort = Some(moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: None,
-            series_default: false,
         });
 
         let mut older = make_doc("Older Post", "essays/older/index.html");
@@ -5969,7 +5964,6 @@ mod children_field_tests {
         homepage.direct_children_sort = Some(moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: None,
-            series_default: false,
         });
 
         let mut writings = make_doc("Writings", "writings/index.html");
@@ -6594,7 +6588,7 @@ mod article_cover_tests {
 /// in `folder_cover.rs` (cover branch) and the no-cover branch in this file.
 #[test]
 fn test_auto_folder_index_includes_h1_heading() {
-    let folder_h1 = crate::build::components::folder_title::render("文字", false, false);
+    let folder_h1 = moss_core::heading::folder_title("文字", false, false);
     let article_list = "<div class=\"moss-cards\" data-layout=\"list\">...</div>";
     let content_html = format!("{}\n{}", folder_h1, article_list);
 
@@ -6614,32 +6608,13 @@ fn test_auto_folder_index_includes_h1_heading() {
 /// as the cover branch — single source of the class string.
 #[test]
 fn folder_index_without_cover_prepends_folder_title_h1() {
-    let folder_h1 = crate::build::components::folder_title::render("Projects", false, false);
+    let folder_h1 = moss_core::heading::folder_title("Projects", false, false);
     assert!(folder_h1.contains(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     // Integration: the no-cover branch in this file concatenates folder_h1 \n content.
     let content = "<p>Body.</p>";
     let result = format!("{}\n{}", folder_h1, content);
     assert!(result.starts_with(r#"<h1 class="moss-folder-title">Projects</h1>"#));
     assert!(result.contains("<p>Body.</p>"));
-}
-
-#[test]
-fn no_cover_folder_heading_shows_visible_title() {
-    let doc = crate::build::types::ParsedDocument::default();
-    assert_eq!(
-        super::no_cover_folder_heading(&doc, "Projects", false),
-        r#"<h1 class="moss-folder-title">Projects</h1>"#
-    );
-}
-
-#[test]
-fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
-    // The body's own `# Title` is already the page's h1.
-    let doc = crate::build::types::ParsedDocument {
-        content: "# Projects\n\nBody.".to_string(),
-        ..Default::default()
-    };
-    assert_eq!(super::no_cover_folder_heading(&doc, "Projects", false), "");
 }
 
 // home_file_winner_tests have been moved to page_map.rs
@@ -7162,9 +7137,9 @@ mod og_url_tests {
             "a 1.75:1 cover should be handed over as itself: {wide}"
         );
         assert!(
-            wide.contains(r#"og:image:width" content="2000""#)
-                && wide.contains(r#"og:image:height" content="1145""#),
-            "a passed-through cover should carry the dimensions moss scanned: {wide}"
+            wide.contains(r#"og:image:width" content="1200""#)
+                && wide.contains(r#"og:image:height" content="687""#),
+            "a passed-through cover should carry the size of the served raster: {wide}"
         );
     }
 
@@ -9537,7 +9512,6 @@ mod lang_tree_root_home_tests {
 /// must NOT be reachable as a neighbour: a subfolder's own index page, and a
 /// page that opted out with `series: false`.
 mod sequence_siblings_tests {
-    use super::super::sequence_siblings;
     use crate::build::types::ParsedDocument;
     use crate::build::types::SeriesField;
     use moss_core::PageKind;
@@ -9578,7 +9552,6 @@ mod sequence_siblings_tests {
         ResolvedSort {
             axis: SortAxis::Weight,
             explicit_order: None,
-            series_default: true,
         }
     }
 
@@ -9587,7 +9560,8 @@ mod sequence_siblings_tests {
     }
 
     fn chain_sorted(docs: &[ParsedDocument], sort: &ResolvedSort) -> Vec<String> {
-        sequence_siblings(docs, "guide/index.html", "guide/", sort)
+        let parent = ParsedDocument { direct_children_sort: Some(sort.clone()), ..parent() };
+        moss_core::page::series::chain(docs, &parent)
             .iter()
             .map(|d| d.clean_stem.clone())
             .collect()
@@ -9598,7 +9572,7 @@ mod sequence_siblings_tests {
     }
 
     fn newest_first(explicit_order: Option<Vec<String>>) -> ResolvedSort {
-        ResolvedSort { axis: SortAxis::Date, explicit_order, series_default: false }
+        ResolvedSort { axis: SortAxis::Date, explicit_order }
     }
 
     #[test]
@@ -9746,12 +9720,7 @@ mod sequence_siblings_tests {
                     .unwrap_or_else(|| panic!("{slug} missing from the {style}/{group} listing: {listing}"))
             });
 
-            let chain: Vec<String> = sequence_siblings(
-                &docs,
-                "serial/index.html",
-                "serial/",
-                &index.resolve_for_direct_children(),
-            )
+            let chain: Vec<String> = moss_core::page::series::chain(&docs, &index)
             .iter()
             .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
             .collect();
@@ -10512,4 +10481,52 @@ fn one_build_clock_decides_upcoming_for_the_page_and_every_card() {
             assert!(!html.contains(&format!(r#"data-when="{other}""#)), "{page} at {year}: {html}");
         }
     }
+}
+
+/// The preview reads the shared registry while a build renders. A build fills a
+/// registry of its own and puts it in place once its promises are made, so a
+/// request in between still finds what the previous build promised; emptying the
+/// shared one at the start made a picture still encoding answer 404 until then.
+#[test]
+fn a_build_replaces_the_shared_asset_registry_only_once_its_promises_are_made() {
+    use crate::build::ports::reporter::BuildReporter;
+    use crate::build::progress::PipelineEvent;
+    use crate::types::assets::{AssetRegistry, AssetState, Failure};
+    struct Probe(std::sync::Arc<AssetRegistry>, std::sync::Mutex<Vec<(u8, bool)>>);
+    impl BuildReporter for Probe {
+        fn report(&self, event: &PipelineEvent) {
+            if let PipelineEvent::Progress { percentage, .. } = event {
+                self.1.lock().unwrap().push((*percentage, self.0.is_registered("door.webp")));
+            }
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let site = tmp.path();
+    std::fs::write(site.join("index.md"), "---\ntitle: Home\n---\n![Door](door.png)\n").unwrap();
+    image::RgbImage::from_pixel(24, 24, image::Rgb([200, 30, 30])).save(site.join("door.png")).unwrap();
+    let output_dir = MossPaths::new(site).build_dir().join("site");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let shared = std::sync::Arc::new(AssetRegistry::new());
+    shared.set_pending("door.webp".into(), Some((24, 24)), None);
+    shared.set_failed("gone.webp".into(), Failure::encode("a previous build's encode error"));
+    shared.set_source_passthrough("gone.webp".into(), site.join("gone.png"));
+    let services = crate::types::services::BuildServices { assets: Some(shared.clone()), ..crate::types::services::BuildServices::headless() };
+    let probe = Probe(shared.clone(), Default::default());
+
+    let project_structure = crate::build::scan_folder(site.to_str().unwrap()).expect("scan_folder should succeed");
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(site));
+    crate::build::render::generate_blocking_content_for_build(
+        &crate::vault::paths::VaultRoot::resolve(site), &project_structure, &output_dir, Some(&services), Some(&probe),
+        true, crate::build::render::blocking::SiteConfig::default(), &mut pending, false, false, crate::build::inputs::build_instant(),
+    )
+    .expect("the render succeeds");
+
+    let seen = probe.1.lock().unwrap();
+    assert!(seen.iter().any(|(pct, _)| *pct == 92), "premise: no progress was reported between the build's first promise and its last: {seen:?}");
+    assert!(seen.iter().all(|(_, registered)| *registered), "the previous build's promise went missing while this one rendered: {seen:?}");
+    assert!(matches!(shared.get("door.webp"), Some(AssetState::Pending(_))), "this build's own promise is not in place");
+    assert!(shared.get("gone.webp").is_none(), "a previous build's failure outlived the build that replaced it");
+    assert_eq!(shared.source_passthrough("gone.webp"), None, "a previous build's source path outlived the build that replaced it");
 }

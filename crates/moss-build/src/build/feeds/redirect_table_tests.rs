@@ -50,7 +50,7 @@ fn build(files: &[(&str, &str)]) -> Built {
         .ok()
         .map(|text| crate::config::ConfigFile::parse(&text).unwrap().declared_redirects())
         .unwrap_or_default();
-    crate::build::render::generate_blocking_content_for_build(
+    let mut output = crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(dir.path()),
         &structure,
         &out,
@@ -68,6 +68,8 @@ fn build(files: &[(&str, &str)]) -> Built {
         crate::build::inputs::build_instant(),
     )
     .unwrap();
+    // The background phase writes the site files and their copies.
+    crate::build::render::blocking::write_site_files_now(&mut output, &out, &mut pending).unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
     // The seal writes the file copies and folder moves, from what is served.
     let mut sealed = pending.seal();
@@ -215,6 +217,16 @@ fn a_declared_page_address_gets_a_stub_in_each_spelling() {
     for stub in ["old-a/index.html", "old-b/index.html", "old-c.html", "old-d.html"] {
         assert!(b.read(stub).contains("url=/about/"), "{stub}");
     }
+    assert_eq!(b.problems, 0);
+}
+
+/// The sitemap is written after the preview paints; a former address of it
+/// is a copy the same worker writes from the bytes it holds.
+#[test]
+fn a_declared_address_of_the_sitemap_is_a_copy_of_it() {
+    let cfg = config(r#""/old-sitemap.xml" = "/sitemap.xml""#);
+    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
+    assert_eq!(b.read("old-sitemap.xml"), b.read("sitemap.xml"));
     assert_eq!(b.problems, 0);
 }
 

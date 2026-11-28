@@ -5,7 +5,7 @@
 // site's own stylesheet is, so they outrank moss's: a picture paragraph's
 // bottom margin collapses into the heading's top margin in block flow and
 // would add to it in a flex column.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

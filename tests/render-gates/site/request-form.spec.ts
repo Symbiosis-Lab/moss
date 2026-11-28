@@ -1,8 +1,8 @@
 // A `:::form` stacks its fields in one column that never scrolls the page
 // sideways, keeps every control inside the form and the button 44px tall, shows
 // a focus ring a keyboard user can see, marks a refused field in a colour that
-// reads as text, and keeps the honeypot out of sight and out of the tab order.
-import { test, expect, type Page } from '@playwright/test';
+// reads as text.
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { expectFocusOnOwnEdge, expectNothingPaintedOutside } from './field-focus-edge';
 
@@ -39,7 +39,7 @@ for (const scheme of ['light', 'dark'] as const) {
           const form = document.querySelector('.moss-form form') as HTMLElement;
           const fr = form.getBoundingClientRect();
           const boxes = [...form.querySelectorAll('.moss-form__field')].map((f) => f.getBoundingClientRect());
-          const controls = [...form.querySelectorAll('input:not([type=hidden]):not([name=_hp]), select, textarea')].map((c) => c.getBoundingClientRect());
+          const controls = [...form.querySelectorAll('input:not([type=hidden]), select, textarea')].map((c) => c.getBoundingClientRect()).filter((r) => r.width > 0);
           const btn = (form.querySelector('.moss-btn') as HTMLElement).getBoundingClientRect();
           return {
             scrollWidth: document.documentElement.scrollWidth,
@@ -60,7 +60,7 @@ for (const scheme of ['light', 'dark'] as const) {
         await page.screenshot({ path: `target/test-tmp/request-form-${scheme}-${width}.png`, fullPage: true });
       });
 
-      test('keyboard focus draws a ring and never lands on the honeypot', async ({ page }) => {
+      test('keyboard focus draws a ring on every control', async ({ page }) => {
         await page.goto(url, { waitUntil: 'load' });
         await page.locator('main, body').first().focus().catch(() => {});
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -82,9 +82,6 @@ for (const scheme of ['light', 'dark'] as const) {
         }
         expect(seen).toContain('your_name');
         expect(seen).toContain('anything_we_should_know'); // Safari's Tab skips radio buttons
-        expect(seen).not.toContain('_hp');
-        const hp = await page.locator('.moss-form__hp').boundingBox();
-        expect(hp!.width).toBeLessThanOrEqual(1);
       });
 
       test('a click into the text area shows focus on its own edge, under a theme focus ring', async ({ page }) => {
@@ -97,7 +94,7 @@ for (const scheme of ['light', 'dark'] as const) {
         const field = page.locator('.moss-form input.moss-input:not(.moss-input--boxed)').first();
         await field.click();
         expect(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'no outline, whatever the theme says').toBe('none');
-        expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), 'the underline takes the accent').toContain('inset');
+        expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), 'a 2px ring inside the field, not an underline alone').toMatch(/0px 0px 0px 2px inset|inset 0px 0px 0px 2px/);
         await expectNothingPaintedOutside(page, field, 'underline field');
       });
 
@@ -146,3 +143,21 @@ for (const scheme of ['light', 'dark'] as const) {
     });
   }
 }
+
+test.describe('a follow-up box in a wide group', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('sits directly under the choice that opens it', async ({ page }) => {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.getByLabel('Other', { exact: true }).check();
+    const m = await page.evaluate(() => {
+      const box = document.querySelector('.moss-form__other') as HTMLElement;
+      const choice = box.previousElementSibling as HTMLElement;
+      const rect = (e: Element) => e.getBoundingClientRect();
+      return { choiceLeft: rect(choice).left, choiceBottom: rect(choice).bottom, boxLeft: rect(box).left, boxTop: rect(box).top, columns: getComputedStyle(box.parentElement!).gridTemplateColumns.split(' ').length };
+    });
+    expect(m.columns, 'the group is laid in columns here').toBeGreaterThan(1);
+    expect(Math.abs(m.boxLeft - m.choiceLeft), 'indented a little, at the choice, not a column away').toBeLessThan(12);
+    expect(m.boxTop).toBeGreaterThanOrEqual(m.choiceBottom - 1);
+  });
+});

@@ -199,6 +199,9 @@ pub fn adopt_key(project_path: &str, pubkey: &str, site: &str) -> Result<(), Str
 pub enum ModKind {
     Hide,
     Unhide,
+    /// Refuse a link host (`source` [`super::link_block::LINK_SOURCE`], `target` the host).
+    Block,
+    Unblock,
 }
 
 impl ModKind {
@@ -206,6 +209,8 @@ impl ModKind {
         match self {
             ModKind::Hide => "hide",
             ModKind::Unhide => "unhide",
+            ModKind::Block => "block",
+            ModKind::Unblock => "unblock",
         }
     }
 }

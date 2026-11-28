@@ -102,6 +102,12 @@ describe("site settings form", () => {
     document.body.replaceChildren();
   });
 
+  it("does not draw a setting sign-in fills", () => {
+    draw({}, [{ key: "account", type: "acct", label: "Account", from: "account" }, { key: "name", type: "string", label: "Name" }]);
+    expect(container.querySelector('[data-field="account"]')).toBeNull();
+    expect(container.querySelector('[data-field="name"]')).not.toBeNull();
+  });
+
   it("shows an amount kept in cents in its units and writes it back in cents, at its own path", async () => {
     draw({ services: { walk: { name: "Walk", per_hour: 12000, hours: { min: 2, max: 6 } } } });
     const rate = input(entry("walk"), "per_hour");
@@ -222,5 +228,66 @@ describe("translateFields", () => {
     expect(fields[0]!.label).toBe("服务");
     expect(fields[0]!.items!.fields![1]!.options![0]!.label).toBe("按小时");
     expect(fields[0]!.items!.fields![0]!.label).toBe("Name");
+  });
+});
+
+describe("a site secret", () => {
+  const CALENDAR = { id: "calendar", label: "Calendar", group: "Calendar", placeholder: "https://…/basic.ics" };
+  const drawWith = (service: { state: { connected: boolean; host: string | null; read_at: number | null; error: string | null }; sent: (string | null)[]; unread?: string }) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    drawSiteSettings(host, [], {}, {
+      write: async () => true,
+      secrets: [CALENDAR],
+      secret: {
+        status: async () => {
+          if (service.unread) throw new Error(service.unread);
+          return service.state;
+        },
+        set: async (_id, value) => {
+          service.sent.push(value);
+          service.state = value === null ? { connected: false, host: null, read_at: null, error: null } : { connected: true, host: "calendar.example", read_at: Math.floor(Date.now() / 1000) - 180, error: null };
+          return service.state;
+        },
+      },
+    });
+    return host.querySelector<HTMLElement>('[data-secret="calendar"]')!;
+  };
+
+  beforeEach(() => document.body.replaceChildren());
+
+  it("takes the value in a hidden field, sends it once and then shows only where it points", async () => {
+    const service = { state: { connected: false, host: null, read_at: null, error: null }, sent: [] as (string | null)[] };
+    const row = drawWith(service);
+    await flush();
+    const field = row.querySelector<HTMLInputElement>("input")!;
+    expect(field.type).toBe("password");
+    field.value = " https://calendar.example/private-9f3a/basic.ics ";
+    row.querySelector<HTMLButtonElement>('[data-action="connect"]')!.click();
+    await flush();
+    await flush();
+    expect(service.sent).toEqual(["https://calendar.example/private-9f3a/basic.ics"]);
+    expect(row.textContent).toContain("calendar.example");
+    expect(row.textContent).toContain("3 minutes ago");
+    expect(row.innerHTML).not.toContain("private-9f3a");
+    expect(row.querySelector("input")).toBeNull();
+    row.querySelector<HTMLButtonElement>('[data-action="disconnect"]')!.click();
+    await flush();
+    await flush();
+    expect(service.sent).toEqual(["https://calendar.example/private-9f3a/basic.ics", null]);
+    expect(row.querySelector("input")).not.toBeNull();
+  });
+
+  it("says the address no longer works when the service could not use it", async () => {
+    const row = drawWith({ state: { connected: true, host: "calendar.example", read_at: null, error: "gone" }, sent: [] });
+    await flush();
+    expect(row.textContent).toContain("calendar.example · the address no longer works");
+  });
+
+  it("says why when moss could not ask the service, and still offers the field", async () => {
+    const row = drawWith({ state: { connected: false, host: null, read_at: null, error: null }, sent: [], unread: "publish this folder once first" });
+    await flush();
+    expect(row.querySelector(".moss-input-feedback--error")?.textContent).toBe("publish this folder once first");
+    expect(row.querySelector("input")).not.toBeNull();
   });
 });

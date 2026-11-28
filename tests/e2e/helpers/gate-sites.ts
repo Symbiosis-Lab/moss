@@ -3864,6 +3864,58 @@ precision = "city"
   },
 };
 
+/** The same site under `[site].header = "nav"`: no name in the masthead, the Home link first. */
+export const NAV_SPLIT_ORDER_NAV_GATE: ScratchSiteSpec = {
+  name: "nav-split-order-nav-gate",
+  files: {
+    ...NAV_SPLIT_ORDER_GATE.files,
+    ".moss/config.toml": (NAV_SPLIT_ORDER_GATE.files[".moss/config.toml"] as string).replace('[site]\nlang = "en"\n', '[site]\nlang = "en"\nheader = "nav"\n'),
+  },
+};
+
+/** A short plain name with three links: one row, the links ending a group gap before the toggles. */
+export const NAV_SPLIT_ORDER_SHORT_GATE: ScratchSiteSpec = {
+  name: "nav-split-order-short-gate",
+  files: {
+    "index.md": `---
+title: Garden
+uid: "nss00101"
+---
+
+# Garden
+`,
+    "Essays.md": `---
+title: Essays
+uid: "nss00102"
+nav: true
+---
+
+# Essays
+`,
+    "Notes.md": `---
+title: Notes
+uid: "nss00103"
+nav: true
+---
+
+# Notes
+`,
+    "About.md": `---
+title: About
+uid: "nss00104"
+nav: true
+---
+
+# About
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_ONE_ROW_GATE: ScratchSiteSpec = {
   name: "nav-one-row-gate",
   files: {
@@ -3878,7 +3930,6 @@ logo: assets/lockup.svg
 Scratch site for the one-row masthead render gate.
 `,
     "assets/lockup.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="45" height="44" viewBox="0 0 45 44"><rect width="45" height="44" fill="#a11d1d"/></svg>`,
-    ".moss/theme/style.css": `.site-logo { height: 44px; }\n`,
     "Work.md": `---
 title: Work
 uid: "nor00102"
@@ -3902,6 +3953,14 @@ nav: true
 ---
 
 # Visit
+`,
+    "Scroll.md": `---
+title: Scroll
+uid: "nor00105"
+typesetting: vertical
+---
+
+# Scroll
 `,
     "index.zh-hans.md": `---
 title: 示例
@@ -4481,6 +4540,23 @@ description: A play about bridges.
 ---
 
 Body.
+`,
+    "shows/late-show.md": `---
+title: Late Show
+uid: "hfg00105"
+start: 2099-04-01 19:30
+end: 2099-04-01 21:30
+tickets: https://example.test/tickets
+---
+
+Body.
+`,
+    "listing.md": `---
+title: Listing
+uid: "hfg00106"
+---
+
+![[shows/|style:summary]]
 `,
   },
   siteUrl: "https://example.test",
@@ -5128,6 +5204,14 @@ uid: "rfm00101"
 - Colour {type=select}
   - Red
   - Blue
+- Where did you hear about us {type=checkbox}
+  - [ ] A friend
+  - [ ] A talk
+  - [ ] A newsletter
+  - [ ] A search
+  - [ ] An article
+  - [ ] Other
+    - Where else
 - Anything we should know {type=textarea}
   Who is coming, and any ideas for the session.
 - Send me the newsletter {type=checkbox}
@@ -5480,15 +5564,105 @@ uid: "nnw00101"
   },
 };
 
-// A theme that lays the masthead out itself: `.nav-right` flattened, the name alone on row 1 at a full-row basis,
-// the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum overflows at every
-// width, so the split would otherwise take over everywhere.
+// The same masthead with a logo beside the name, which the float layout sizes through its own strut.
+export const NAV_NOWRAP_LOGO_GATE: ScratchSiteSpec = {
+  name: "nav-nowrap-logo-gate",
+  files: {
+    ...NAV_NOWRAP_GATE.files,
+    "index.md": `---
+title: Harbour Watch
+uid: "nnw00101"
+logo: assets/mark.svg
+---
+
+# Harbour Watch
+`,
+    "assets/mark.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><rect width="40" height="40" fill="#1d3aa1"/></svg>`,
+    ".moss/theme/style.css": `${NAV_NOWRAP_GATE.files[".moss/theme/style.css"]}.site-logo { height: 40px; }\n`,
+  },
+};
+
+// A theme written against the flex masthead: it hides the toggles and shows moss's menu button, drawn as two
+// bars, up to 760px. The page links its own stylesheet, so the build marks the masthead themed and the
+// button stays on the name's row. Served by playwright/nav-themed.config.ts.
+export const NAV_THEMED_MENU_GATE: ScratchSiteSpec = {
+  name: "nav-themed-menu-gate",
+  files: {
+    "index.md": `---\ntitle: Linden Studio\nuid: "nth0m101"\n---\n\n# Linden Studio\n`,
+    ...Object.fromEntries(
+      ["About", "Work", "Talks", "Contact"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nth0m20${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `header .nav-links { gap: 6px 24px; }
+header .nav-icons { display: none; }
+@media (max-width: 760px) {
+  header .mobile-menu-button svg { display: none; }
+  header .mobile-menu-button { display: block; margin-inline-start: auto; inline-size: 34px; block-size: 24px; border: 0; background: none; }
+  header .nav-links:not(.mobile-open) { display: none; }
+}
+`,
+  },
+};
+
+// A theme that styles the flex row itself (a minimum height, its gap, and the split's columns) under a plain
+// name too long to share a row with its links: nav-split splits it, as the theme expects.
+export const NAV_THEMED_SPLIT_GATE: ScratchSiteSpec = {
+  name: "nav-themed-split-gate",
+  files: {
+    "index.md": `---\ntitle: The Laboratory for Coastal Air and Water\nuid: "nth0s101"\n---\n\n# Home\n`,
+    ...Object.fromEntries(
+      ["Research", "Publications", "People", "Teaching", "Contact"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nth0s20${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `.nav-content { min-block-size: 76px; padding-block-end: 0; gap: 24px; }
+.site-name { font: 500 1.375rem/1 serif; padding-block: 11px; }
+.nav-content[data-nav-split] .nav-links { gap: 0 20px; }
+`,
+  },
+};
+
+// A themed breadcrumb masthead with one link: on a phone, the trail, the link and the toggles share a row once both
+// gaps tighten, the one before the links and the one before the toggles. Served by playwright/nav-themed.config.ts.
+export const NAV_THEMED_COMPACT_GATE: ScratchSiteSpec = {
+  name: "nav-themed-compact-gate",
+  files: {
+    "index.md": `---\ntitle: Field Notes from the Northern Coast\nuid: "nth0c101"\nbreadcrumb: true\n---\n\n# Field Notes from the Northern Coast\n`,
+    "Blog.md": `---\ntitle: Blog\nuid: "nth0c102"\nnav: true\n---\n\n# Blog\n`,
+    "Awards/index.md": `---\ntitle: Awards\nuid: "nth0c103"\n---\n\n# Awards\n`,
+    "Awards/Writing.md": `---\ntitle: Writing\nuid: "nth0c104"\n---\n\n# Writing\n`,
+    ".moss/theme/style.css": `.site-name { font-weight: 500; }\n`,
+  },
+};
+
+// A long site name over a trail two ancestors deep: at a phone width the row runs out of room even after the
+// middle crumb has collapsed to its "…", and something must give before the parent crumb is clipped.
+// Served by playwright/nav-trail-clip.config.ts.
+export const NAV_TRAIL_CLIP_GATE: ScratchSiteSpec = {
+  name: "nav-trail-clip-gate",
+  files: {
+    "index.md": `---\ntitle: Field Notes from the Northern Ridge\nuid: "ntc0c101"\nbreadcrumb: true\n---\n\n# Field Notes from the Northern Ridge\n`,
+    "Journal/index.md": `---\ntitle: Journal\nuid: "ntc0c102"\n---\n\n# Journal\n`,
+    "Journal/Expeditions/index.md": `---\ntitle: Expeditions\nuid: "ntc0c103"\n---\n\n# Expeditions\n`,
+    "Journal/Expeditions/Winter Camp Records/index.md": `---\ntitle: Winter Camp Records\nuid: "ntc0c104"\n---\n\n# Winter Camp Records\n`,
+    "Journal/Expeditions/Winter Camp Records/Day Twelve on the Ice.md": `---\ntitle: Day Twelve on the Ice\nuid: "ntc0c105"\n---\n\n# Day Twelve on the Ice\n`,
+    ".moss/theme/style.css": null,
+  },
+};
+
+// A theme that lays a breadcrumb masthead out itself: `.nav-right` flattened, the trail alone on row 1 at a
+// full-row basis, the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum
+// overflows at every width, so the split would otherwise take over everywhere.
 export const NAV_FLATTENED_GATE: ScratchSiteSpec = {
   name: "nav-flattened-gate",
   files: {
     "index.md": `---
 title: Fifty-three Stations of the Coast Road at Dawn
 uid: "nfl00101"
+breadcrumb: true
 ---
 
 # Fifty-three Stations of the Coast Road at Dawn
@@ -5499,6 +5673,8 @@ uid: "nfl00101"
         `---\ntitle: ${title}\nuid: "nfl0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
       ]),
     ),
+    "Stations/index.md": `---\ntitle: Stations\nuid: "nfl00301"\n---\n\n# Stations\n`,
+    "Stations/Akasaka.md": `---\ntitle: Akasaka\nuid: "nfl00302"\n---\n\n# Akasaka\n`,
     ".moss/theme/style.css": `.nav-content { gap: 0 20px; padding-block-end: 0; }
 .nav-content .nav-left { flex: 1 1 100%; padding-block: 22px 8px; }
 .nav-content .nav-right { display: contents; }

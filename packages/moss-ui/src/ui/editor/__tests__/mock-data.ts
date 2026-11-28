@@ -3,7 +3,7 @@
 
 import type { ContentSchema, JsonValue, WikilinkCompletion } from '@symbiosis-lab/moss-ui';
 import type { ParsedFrontmatter } from '@symbiosis-lab/moss-ui';
-import type { PageFacts, TreeNode } from '@symbiosis-lab/moss-ui';
+import type { PageFacts, RestoreMode, TreeNode, VersionScope } from '@symbiosis-lab/moss-ui';
 
 // ── Tree ────────────────────────────────────────────────────────────────
 
@@ -202,6 +202,7 @@ export const mockCommands = {
     status: 'ok' as const,
     data: { position: 'page', auto: {} } satisfies PageFacts,
   }),
+  pageComments: async (_filePath: string) => ({ status: 'ok' as const, data: { comments: [] } }),
   // Batched cold-start bootstrap (editor-main.ts:456) — replaced the serial
   // getSchema → getProjectPath → parseFrontmatter chain. Mirror those three
   // mock values; `initial_file: null` makes the frontend fall back to
@@ -385,34 +386,30 @@ export const mockCommands = {
       data: { visible: true, text, source: 'Filename' as const },
     };
   },
-  // Versions mode. `path` does double duty for
-  // 'folder'/'site' scope exactly like the real command: the top-level list
-  // call passes the folder to filter by ('' for site), and the drill-down
-  // (screen three's "Changed since / Unchanged" split) passes a record id
-  // instead — distinguished here by checking whether `path` names a known
-  // record, standing in for the real backend's argument-shape split
-  // documented in versions-surface.ts's file header ("Two backend gaps").
-  listVersions: async (scope: string, path: string | null) => {
+  // Versions mode, standing in for the engine's own scope filter: `version`
+  // asks for that site or folder version's drill-down.
+  listVersions: async (scope: VersionScope, version: string | null) => {
     const records = allVersionRecords();
     const liveId = records.find((r) => r.live)?.id ?? null;
-    const base = { live_id: liveId, has_multiple_targets: false, store_dir: '/mock/history/刘果' };
+    const base = { live_id: liveId, has_multiple_targets: false, store_dir: '/mock/history/刘果', to_trash: [] };
+    const folder = scope.kind === 'folder' ? scope.path : null;
 
-    if (scope === 'page') {
+    if (scope.kind === 'page') {
       const rows = records
-        .filter((r) => r.trigger !== 'publish' || r.changed.includes(path ?? ''))
+        .filter((r) => r.trigger !== 'publish' || r.changed.includes(scope.path))
         .map((r) => toVersionRow(r, null));
       return { status: 'ok' as const, data: { ...base, rows, changed_since: [], unchanged: [] } };
     }
 
-    const drillDown = records.find((r) => r.id === path);
+    const drillDown = records.find((r) => r.id === version);
     if (drillDown) {
+      const inScope = VERSION_FILES.filter((f) => folder === null || underFolder(f, folder));
       const changedSet = new Set(drillDown.changed);
-      const changed_since = VERSION_FILES.filter((f) => changedSet.has(f)).map((f) => ({ source_path: f, verb: 'edited' as const }));
-      const unchanged = VERSION_FILES.filter((f) => !changedSet.has(f));
+      const changed_since = inScope.filter((f) => changedSet.has(f)).map((f) => ({ source_path: f, verb: 'edited' as const }));
+      const unchanged = inScope.filter((f) => !changedSet.has(f));
       return { status: 'ok' as const, data: { ...base, rows: [], changed_since, unchanged } };
     }
 
-    const folder = path || null; // '' (site) becomes null: "no folder filter"
     const rows = records
       .filter((r) => r.trigger !== 'publish' || folder === null || r.changed.some((p) => underFolder(p, folder)))
       .map((r) => toVersionRow(r, folder));
@@ -423,10 +420,10 @@ export const mockCommands = {
     if (!rec) return { status: 'ok' as const, data: { kept: false, text: null } };
     return { status: 'ok' as const, data: { kept: true, text: versionText(rec, path) } };
   },
-  restoreVersion: async (id: string, path: string | null, mode: string) => {
+  restoreVersion: async (id: string, scope: VersionScope, mode: RestoreMode) => {
     const rec = allVersionRecords().find((r) => r.id === id);
-    const restored = path === null ? VERSION_FILES.slice() : VERSION_FILES.filter((f) => underFolder(f, path));
-    // 'copy' writes beside the original, never over it — a real reopen of
+    const restored = scope.kind === 'site' ? VERSION_FILES.slice() : VERSION_FILES.filter((f) => underFolder(f, scope.path));
+    // 'as_copy' writes beside the original, never over it — a real reopen of
     // the SAME file must keep showing the current content, only 'in_place'
     // overwrites what parseFrontmatter returns for it.
     if (rec && mode === 'in_place') {

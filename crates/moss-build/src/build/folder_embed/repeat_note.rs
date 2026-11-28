@@ -19,6 +19,8 @@ pub(crate) struct ListingHost {
     pub streamed: RefCell<BTreeSet<String>>,
     /// The id prefixes the bodies drawn whole on it took.
     pub id_scopes: RefCell<IdScopes>,
+    /// Its `children_count:`, which every listing on it counts in.
+    pub count: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
 
 impl ListingHost {
@@ -31,7 +33,16 @@ impl ListingHost {
             stream: Cell::new(false),
             streamed: Default::default(),
             id_scopes: RefCell::new(IdScopes::around(&own_html)),
+            count: doc.children_count.clone(),
         }
+    }
+
+    /// `pages` without those a listing above on this page drew (`repeat:none`).
+    /// Embeds expand in body order on one thread (this type is not `Sync`), so
+    /// `urls` holds exactly what came before.
+    pub(crate) fn not_yet_drawn<'a>(&self, pages: Vec<&'a ParsedDocument>) -> Vec<&'a ParsedDocument> {
+        let drawn = self.urls.borrow();
+        pages.into_iter().filter(|d| !drawn.contains(&d.url_path)).collect()
     }
 }
 

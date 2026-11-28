@@ -1,7 +1,6 @@
 "use strict";
 // Tries each way a hook can write into the folder and records, in its own
-// storage, whether each was allowed or the error it got. Always returns an
-// offer; moss reads it only from a run a build started. A build's run first
+// storage, whether each was allowed or the error it got. A build's run first
 // parks for a moment, so a test can start the person's run while it is going.
 var FolderWriter = (() => ({
   async listing() {
@@ -31,6 +30,6 @@ var FolderWriter = (() => ({
     await attempt("download", "download_asset", { url: "http://127.0.0.1:9/a.jpg", targetDir: "assets", timeoutMs: 2000 });
     await attempt("program", "execute_binary", { binaryPath: "git", args: ["status"], timeoutMs: 2000 });
     await invoke("write_plugin_file", { relativePath: "outcome.json", content: JSON.stringify(outcome) });
-    return { success: true, offer: { title: "2 new notes" } };
+    return { success: true };
   },
 }))();

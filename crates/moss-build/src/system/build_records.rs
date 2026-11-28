@@ -108,6 +108,7 @@ pub struct BuildRecords {
     /// placeholder because their text was still being read. A publish waits
     /// for zero: a placeholder is not something to put on the web.
     pending_derivations: FolderSlot<usize>,
+    unverifiable_moderation: FolderSlot<usize>,
     /// How the newest build ended, with its build generation.
     build_end: FolderSlot<Option<(u64, BuildEnd)>>,
     /// What the last seal found going offline, and what the author accepted
@@ -214,6 +215,28 @@ impl BuildRecords {
         self.publish_preflight.install_if_newer(Self::key(folder_path), projection);
     }
 
+    /// Every record the publish gate reads, as the kept seal left them, for a
+    /// build that ended at its entry. Each slot starts empty in a new process,
+    /// and an empty slot would permit the publish.
+    pub(crate) fn install_kept_seal(&self, folder_path: &str, evidence: &crate::build::inputs::SealEvidence) {
+        let build_generation = crate::build::ship::next_promotion_epoch();
+        self.install_publish_preflight(folder_path, PublishPreflightProjection {
+            build_generation,
+            missing_references: evidence.missing_references.clone(),
+            unresolved_inputs: Vec::new(),
+            drafts_linked: evidence.drafts_linked.clone(),
+            remote_pictures: evidence.remote_pictures.clone(),
+        });
+        self.record_promised_dead_links(folder_path, PromisedDeadLinks::default());
+        self.record_pending_derivations(folder_path, 0);
+        self.record_unverifiable_moderation(folder_path, 0);
+        self.record_build_end(folder_path, build_generation, BuildEnd::Publishable);
+        self.record_kept(folder_path, evidence.kept.clone());
+        if let Some(scripts) = &evidence.public_scripts {
+            self.record_public_scripts(folder_path, scripts.clone());
+        }
+    }
+
     /// The last completed build's atomic publish evidence. `None` means no
     /// build has finished in this process — which is not a clean verdict.
     pub fn publish_preflight(&self, folder_path: &str) -> Option<PublishPreflightProjection> {
@@ -243,6 +266,16 @@ impl BuildRecords {
     /// `None` means no render has recorded an answer yet.
     pub fn pending_derivations(&self, folder_path: &str) -> Option<usize> {
         self.pending_derivations.get(&Self::key(folder_path))
+    }
+
+    /// How many moderation events the last build found with no trusted key
+    /// verifying any of them; zero when the log verifies or comments are off.
+    pub fn record_unverifiable_moderation(&self, folder_path: &str, events: usize) {
+        self.unverifiable_moderation.record(Self::key(folder_path), events);
+    }
+
+    pub fn unverifiable_moderation(&self, folder_path: &str) -> Option<usize> {
+        self.unverifiable_moderation.get(&Self::key(folder_path))
     }
 
     /// `build_generation` orders the answers: a failed build can end after the
@@ -372,6 +405,20 @@ impl BuildRecords {
         self.content_hashes.forget(&Self::key(folder_path));
     }
 
+    /// Every slot the publish gate reads, as a new process finds them.
+    #[cfg(test)]
+    pub(crate) fn forget_folder(&self, folder_path: &str) {
+        let key = Self::key(folder_path);
+        self.publish_preflight.forget(&key);
+        self.promised_dead_links.forget(&key);
+        self.pending_derivations.forget(&key);
+        self.unverifiable_moderation.forget(&key);
+        self.build_end.forget(&key);
+        self.removals.forget(&key);
+        self.kept.forget(&key);
+        self.public_scripts.forget(&key);
+    }
+
     pub fn record_late_redirects(&self, folder_path: &str, late: crate::build::feeds::kept_addresses::LateRedirects) {
         self.late_redirects.record(Self::key(folder_path), late);
     }
@@ -396,7 +443,7 @@ mod tests {
     fn projection(generation: u64, reference: &str) -> PublishPreflightProjection {
         PublishPreflightProjection {
             build_generation: generation,
-            missing_references: vec![crate::build::types::MissingReferenceOccurrence {
+            missing_references: vec![crate::build::types::ReferenceOccurrence {
                 source_path: "page.md".to_string(),
                 source_revision: crate::build::types::SourceRevision::from_source("page"),
                 reference: reference.to_string(),
@@ -408,6 +455,7 @@ mod tests {
             }],
             unresolved_inputs: vec![],
             drafts_linked: vec![],
+            remote_pictures: vec![],
         }
     }
 

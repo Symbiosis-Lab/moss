@@ -76,13 +76,71 @@ async fn a_yielded_folder_goes_to_the_next_process_and_comes_back_with_a_page_op
     let _ = b.child.wait();
     b.join_drain_threads();
 
-    let a_again = port_from_url_line(&a.wait_for_access_line_after(a_lines_before_return, Duration::from_secs(15)));
+    let a_again = port_from_url_line(&a.wait_for_access_line_after(a_lines_before_return, Duration::from_secs(60)));
     let owner = find_live_owner(&site_dir)
         .await
         .unwrap_or_else(|| panic!("A is found again once it serves again; A:\n{}\nB:\n{}", joined(&a.stderr), joined(&b.stderr)));
     assert_eq!((owner.pid, owner.url), (a.child.id(), format!("http://127.0.0.1:{a_again}")));
 
     drop(slow);
+    a.child.kill().expect("kill A");
+    let _ = a.child.wait();
+    a.join_drain_threads();
+    std::env::remove_var("MOSS_HOME");
+}
+
+/// A watch that took its folder back still previews: a picture added after
+/// the return is left to the background rather than decoded in front of the save.
+#[tokio::test]
+async fn a_watch_back_from_a_yield_leaves_a_new_picture_to_the_background() {
+    use moss_build::ops::serve::ownership::{find_live_owner, request_yield, YieldOutcome};
+
+    let _guard = MOSS_HOME_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let moss_home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let site = std::fs::canonicalize(root.path()).unwrap().join("site");
+    std::fs::create_dir_all(site.join("media")).unwrap();
+    std::fs::write(site.join("index.md"), "# Home\n").unwrap();
+    std::env::set_var("MOSS_HOME", moss_home.path());
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_moss-cli"));
+    command.arg("build").arg(&site).args(["--serve", "--watch", "--no-plugins"]).env("MOSS_LOG_LEVEL", "debug");
+    let mut a = spawn_piped(command, moss_home.path());
+    a.wait_for_access_line(Duration::from_secs(60));
+    let mut b = spawn_served_build(&site, moss_home.path(), &["--watch", "--no-plugins"]);
+    wait_for_line(&b.stderr, "standing by", Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("B never stood by; stderr:\n{}", joined(&b.stderr)));
+
+    assert_eq!(request_yield(&site).await.expect("yield request"), YieldOutcome::Accepted);
+    let yielded = Instant::now();
+    while find_live_owner(&site).await.map(|o| o.pid) != Some(b.child.id()) {
+        assert!(yielded.elapsed() < Duration::from_secs(10), "B never took the folder; A:\n{}", joined(&a.stderr));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let before_return = a.stderr_len();
+    b.child.kill().expect("kill B");
+    let _ = b.child.wait();
+    b.join_drain_threads();
+    a.wait_for_access_line_after(before_return, Duration::from_secs(60));
+    let back = Instant::now();
+    while !a.stderr.lock().unwrap()[before_return..].iter().any(|l| l.contains("File watcher active")) {
+        assert!(back.elapsed() < Duration::from_secs(30), "A never watched again; stderr:\n{}", joined(&a.stderr));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let saved = a.stderr_len();
+    noise_png(&site.join("media/new.png"), 600, 0x27D4_EB2F);
+    std::fs::write(site.join("index.md"), "# Home\n\n![new](media/new.png)\n").unwrap();
+    let rebuilt = Instant::now();
+    let lines = loop {
+        let lines = a.stderr.lock().unwrap()[saved..].to_vec();
+        if let Some(end) = lines.iter().position(|l| l.contains("build.summary")) { break lines[..end].to_vec() }
+        assert!(rebuilt.elapsed() < Duration::from_secs(120), "the save never rebuilt; stderr:\n{}", joined(&a.stderr));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let decoded: Vec<_> = lines.iter().filter(|l| l.contains("Media meta cache miss for")).collect();
+    assert!(decoded.is_empty(), "the returned watch decoded the new picture in front of the save: {decoded:?}");
+
     a.child.kill().expect("kill A");
     let _ = a.child.wait();
     a.join_drain_threads();

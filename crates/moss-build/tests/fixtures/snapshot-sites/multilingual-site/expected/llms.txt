@@ -1,44 +1,22 @@
 # My Blog
 
----
-
-## About
-
-# About
-
-This is the about page in English. It describes the author and the purpose of this personal blog about software engineering.
-
----
-
-## Alex Rivera
-
----
-
 ## My Blog
 
-Welcome to my blog. This is a personal website where I share my thoughts and experiences about software engineering and web development.
+- [About](https://example.com/about/)
+- [My Blog](https://example.com/)
+- [关于](https://example.com/zh-hans/about/)
 
----
+## Authors
 
-## essays
+- [Alex Rivera](https://example.com/authors/alex-rivera/)
 
----
+## Tags
 
-## 关于
-
-# 关于
-
-这是关于页面的中文版本。本博客主要分享软件工程和网页开发方面的经验和心得体会。
-
----
+- [essays](https://example.com/tags/essays/)
 
 ## 简体中文
 
----
-
-## 陳小華
-
----
-
-## 随笔
+- [简体中文](https://example.com/zh-hans/)
+- [陳小華](https://example.com/zh-hans/authors/陳小華/)
+- [随笔](https://example.com/zh-hans/tags/随笔/)
 

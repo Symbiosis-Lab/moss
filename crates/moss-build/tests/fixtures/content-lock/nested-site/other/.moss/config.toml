@@ -1,0 +1,6 @@
+schema_version = 6
+
+[site]
+lang = "en"
+url = "https://example.com/"
+

@@ -20,6 +20,7 @@ use crate::build::scan::article_map::to_pretty_url;
 use crate::build::scan::classify::{classify_extension, compute_passthrough_roots, left_out, reserved_home_dirs, ScanBucket};
 use crate::build::scan::page_map::pages_before_dedup;
 use crate::build::types::ParsedDocument;
+use crate::i18n::detect::SiteLang;
 use crate::i18n::Language;
 use crate::types::content::FileInfo;
 use crate::vault_root::VaultRoot;
@@ -102,7 +103,8 @@ struct ServedAddresses {
 impl ServedAddresses {
     /// `pairs` are `(path now, path in the tree this map is for)` for every
     /// file of the site, in the order the site folder lists them.
-    fn build(root: &VaultRoot, site_lang: Language, pairs: &[(&str, &str)]) -> Self {
+    fn build(root: &VaultRoot, site: SiteLang, pairs: &[(&str, &str)]) -> Self {
+        let site_lang = site.language();
         let mut now_of: HashMap<&str, &str> = HashMap::new();
         let mut files: Vec<FileInfo> = Vec::new();
         for &(now, then) in pairs.iter().filter(|(_, then)| bucket(then) == ScanBucket::Page) {
@@ -115,7 +117,7 @@ impl ServedAddresses {
         let config = crate::build::site_config::get_build_passthrough(&root.path().to_string_lossy()).unwrap_or_default();
         let html_paths: Vec<&str> = html.iter().map(|f| f.path.as_str()).collect();
         let reserved = reserved_home_dirs(&html, &compute_passthrough_roots(&html_paths, &config));
-        let pages = pages_before_dedup(&files, root, &reserved, site_lang, &locate, &is_evicted);
+        let pages = pages_before_dedup(&files, root, &reserved, &site, &locate, &is_evicted);
 
         // A page moved under a new name takes a place in the folder listing
         // that is not known yet; an address that depends on that place is
@@ -163,7 +165,7 @@ impl ServedAddresses {
 /// The home page is chosen the way the build's scan chooses it; a root page
 /// moved under a new name is not at that name yet, so a `home: true` it
 /// carries is not seen there.
-fn site_language(root: &VaultRoot, pairs: &[(&str, &str)]) -> Language {
+fn site_language(root: &VaultRoot, pairs: &[(&str, &str)]) -> SiteLang {
     let tree: Vec<FileInfo> = pairs
         .iter()
         .filter(|(_, then)| matches!(bucket(then), ScanBucket::Page | ScanBucket::Html | ScanBucket::Other))
@@ -175,14 +177,13 @@ fn site_language(root: &VaultRoot, pairs: &[(&str, &str)]) -> Language {
         pairs.iter().filter(|(_, then)| bucket(then) == ScanBucket::Page).map(|(now, _)| file_info(now)).collect();
     let root_str = root.path().to_string_lossy();
     let declared = crate::build::site_config::read_project_config(&root_str).ok();
-    let code = crate::i18n::detect::resolve_site_default_lang_with(
+    crate::i18n::detect::resolve_site_lang_with(
         declared.as_ref().and_then(|c| c.site_lang()),
         homepage_now,
         &pages_now,
         &root_str,
         &is_evicted,
-    );
-    Language::from_code(&code).unwrap_or(Language::En)
+    )
 }
 
 /// Each page's final address after slug deduplication, slot files left out.

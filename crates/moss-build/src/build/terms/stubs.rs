@@ -33,14 +33,14 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
         // false` empties the built-in too, and owes no redirect — those
         // pages are gone, not relocated.
         let builtin_kept_it = index
-            .kinds
+            .kinds()
             .iter()
             .any(|k| k.key == builtin_ns && k.fields.iter().any(|f| f == field));
         if builtin_kept_it {
             continue;
         }
         let Some(new_kind) = index
-            .kinds
+            .kinds()
             .iter()
             .find(|k| k.key != builtin_ns && k.fields.iter().any(|f| f == field))
         else {
@@ -58,7 +58,7 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
         // One stub per name, whatever editions use it: the old address was
         // site-wide.
         let mut seen = std::collections::HashSet::new();
-        for key in index.sites.keys() {
+        for key in index.sites().keys() {
             let Some(term) = TermKey::parse(key) else {
                 continue;
             };
@@ -69,7 +69,7 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
             // this namespace only through `editor:` never had an `authors/`
             // URL, so forwarding one would invent a page that never existed.
             let reached_through_moved_field = index
-                .members_by_field
+                .members_by_field()
                 .get(&(key.clone(), field.to_string()))
                 .is_some_and(|members| !members.is_empty());
             if !reached_through_moved_field || !seen.insert(term.slug) {
@@ -89,7 +89,7 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
 /// 404s" true for claimed terms too.
 pub fn claim_stubs(index: &TermIndex) -> Vec<(String, String)> {
     let mut stubs = Vec::new();
-    for (key, site) in &index.sites {
+    for (key, site) in index.sites() {
         let Some(claim) = &site.claimed_by else {
             continue;
         };
@@ -107,15 +107,15 @@ pub fn claim_stubs(index: &TermIndex) -> Vec<(String, String)> {
 pub fn edition_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
     let mut stubs = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for key in index.sites.keys() {
+    for key in index.sites().keys() {
         let Some(term) = TermKey::parse(key) else { continue };
-        if term.edition.is_empty() || index.sites.contains_key(term.plain()) || !seen.insert(term.plain()) {
+        if term.edition.is_empty() || index.sites().contains_key(term.plain()) || !seen.insert(term.plain()) {
             continue;
         }
         let Some(target) = index.forward_target(term.plain()) else { continue };
         stubs.push((format!("{}/", term.plain()), target)); // allow:served-path-url-construct (the address before terms were per edition, the redirect source)
     }
-    for kind in &index.kinds {
+    for kind in index.kinds() {
         let ns = kind.key.as_str();
         if index.kind_for(ns).is_some() {
             continue;
@@ -132,14 +132,14 @@ pub fn edition_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
 /// others.
 pub fn place_slug_stubs(index: &TermIndex) -> Vec<(String, String)> {
     let mut stubs = Vec::new();
-    for (key, site) in &index.sites {
+    for (key, site) in index.sites() {
         let Some(term) = TermKey::parse(key) else { continue };
-        let Some(kind) = index.kinds.iter().find(|k| k.key == term.ns) else { continue };
+        let Some(kind) = index.kinds().iter().find(|k| k.key == term.ns) else { continue };
         let derived = moss_core::terms::term_slug(&site.display);
         if derived == term.slug || kind.slugs.get(&derived).map(String::as_str) != Some(term.slug) {
             continue;
         }
-        stubs.push((format!("{}/{derived}/", term.ns), index.site_target(key, site))); // allow:served-path-url-construct (the address a place's name gave it, the redirect source)
+        stubs.push((format!("{}/{derived}/", term.ns), TermIndex::site_target(key, site))); // allow:served-path-url-construct (the address a place's name gave it, the redirect source)
     }
     stubs
 }

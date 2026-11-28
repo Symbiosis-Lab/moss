@@ -1,6 +1,6 @@
-import { HighlightStyle } from "@codemirror/language";
+import { HighlightStyle, syntaxTree } from "@codemirror/language";
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { EditorState, Extension } from "@codemirror/state";
+import { EditorState, Extension, StateField } from "@codemirror/state";
 
 //#region src/cm6/cm-active-lines.d.ts
 
@@ -341,13 +341,30 @@ interface ShortcodeBlockInfo {
   arity: number;
   children: ShortcodeBlockInfo[];
 }
-/**
- * Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
- * blocks; each carries its nested `children` so the decoration layer can render
- * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
- * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
- */
-declare function collectShortcodeBlocks(state: EditorState): ShortcodeBlockInfo[];
+/** The margin run of a paired fence: an opening fence's colons, a closing fence whole. `depth` is the nesting depth (1 outermost). */
+interface ShortcodeFence {
+  from: number;
+  to: number;
+  role: 'open' | 'close';
+  depth: number;
+}
+type Tree = ReturnType<typeof syntaxTree>;
+interface ShortcodePairs {
+  blocks: ShortcodeBlockInfo[];
+  /** Document order. */
+  fences: ShortcodeFence[];
+}
+interface ShortcodeBlockState extends ShortcodePairs {
+  decorations: DecorationSet;
+}
+/** The pairing every reader of the blocks needs, rebuilt with the decorations when the document changes or the parse advances. An extension that reads it lists it; the editor's `shortcodeBlockExtension` shares it. */
+declare const shortcodeBlockField: StateField<ShortcodeBlockState>;
+/** The TOP-LEVEL blocks of the document as the field last paired them (needs `shortcodeBlockField` installed); each carries its nested `children`. On a long document that is only as far as the parse has reached: a command that must see every pair uses `shortcodeBlocksIn` on a forced tree. */
+declare const collectShortcodeBlocks: (state: EditorState) => ShortcodeBlockInfo[];
+/** The top-level blocks of `tree`, paired afresh (the field's pairing stops where its tree does). */
+declare const shortcodeBlocksIn: (state: EditorState, tree: Tree) => ShortcodeBlockInfo[];
+/** The margin runs of every paired fence, in document order. */
+declare const shortcodeFences: (state: EditorState) => readonly ShortcodeFence[];
 /** Flatten a block tree to a document-ordered list (parent before children). */
 declare function flattenBlocks(blocks: ShortcodeBlockInfo[]): ShortcodeBlockInfo[];
 /**
@@ -402,6 +419,11 @@ declare function dividesCellsAt(lineFrom: number, subtree: ShortcodeBlockInfo[])
  * there would be wrong.
  */
 declare function legacyDividesCellsAt(lineFrom: number, subtree: ShortcodeBlockInfo[]): boolean;
+/** The lines of `block`'s own cell dividers (`+++`, and the old `---` in a grid), never those of a block nested in it. */
+declare function ownDividerLines(state: EditorState, block: ShortcodeBlockInfo): {
+  from: number;
+  to: number;
+}[];
 /**
  * Count the legacy `---` dividers the Rust `editor_scan` would also count:
  * only those directly in a TOP-LEVEL `:::grid` body. Exists so the dev-only
@@ -563,4 +585,4 @@ declare const footnoteViewPluginForTest: ViewPlugin<{
  */
 declare function footnoteExtension(): Extension;
 //#endregion
-export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, childrenNamed, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };
+export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, ShortcodeFence, TreeNode, buildLinkDecorations, childrenNamed, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, ownDividerLines, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBlockField, shortcodeBlocksIn, shortcodeBodyRanges, shortcodeFences, topLevelLegacyDividerCount, widthFromPipe };

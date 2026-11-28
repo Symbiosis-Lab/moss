@@ -3202,3 +3202,15 @@ fn a_decomposed_map_layer_source_is_left_out() {
     let pages: Vec<&str> = found.markdown_files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(pages, ["index.md"]);
 }
+
+const HEIC_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/heic");
+
+#[test]
+fn a_heic_has_its_size_as_shown_with_its_turn_applied_once() {
+    let at = |name: &str| std::path::Path::new(HEIC_FIXTURES).join(name);
+    assert_eq!(extract_image_dimensions(&at("quadrants-64x48.heic")), Some((64, 48)));
+    // Stored 64×48 with `irot` and EXIF both saying a quarter turn: one swap, not two.
+    assert_eq!(extract_image_dimensions(&at("quadrants-64x48-orient6.heic")), Some((48, 64)));
+    // A grid of tiles: the picture's size, not one tile's.
+    assert_eq!(extract_image_dimensions(&at("tiled-1100x700.heic")), Some((1100, 700)));
+}

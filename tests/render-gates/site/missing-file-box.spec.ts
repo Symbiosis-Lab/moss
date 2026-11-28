@@ -9,7 +9,7 @@
  * Site: tests/e2e/helpers/gate-sites.ts → MISSING_FILE_BOX_GATE.
  * `GATE_SHOTS=<dir>` keeps a picture of the page in each colour scheme.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 import { join } from "node:path";
 
 for (const scheme of ["light", "dark"] as const) {

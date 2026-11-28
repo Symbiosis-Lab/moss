@@ -4,6 +4,7 @@
 //! into a complete HTML page using the template system.
 
 use crate::build::render::incremental::listing::draws_own_listing;
+use moss_core::page::site_page::SitePage;
 use crate::build::types::ParsedDocument;
 #[cfg(test)]
 use crate::types::content::ProjectStructure;
@@ -53,49 +54,6 @@ pub(crate) fn load_js_asset(disk_path: &str, embedded: &str) -> String {
 pub const DEFAULT_OG_BG: &str = "#faf8f5";
 pub const DEFAULT_OG_FG: &str = "#1a1816";
 pub const DEFAULT_OG_ACCENT: &str = "#8a7a6f";
-
-/// Look up the homepage `ParsedDocument` for a given page language.
-///
-/// Multilingual sites have one homepage per language: the site-default
-/// homepage at `index.html` and per-language homepages at `<lang>/index.html`.
-/// Pages in a non-default language should pull homepage-cascade fields
-/// (cover, hero, description) from THEIR language's homepage so share cards
-/// don't surface English copy on Chinese pages.
-///
-/// Fallback order: language-specific homepage → site-default homepage → None.
-/// Used by both the OG cover chain and the OG description chain.
-fn find_homepage_doc<'a>(
-    all_docs: &'a [crate::build::types::ParsedDocument],
-    page_lang: crate::i18n::Language,
-    site_lang: crate::i18n::Language,
-) -> Option<&'a crate::build::types::ParsedDocument> {
-    if page_lang != site_lang {
-        let lang_homepage = format!("{}/index.html", page_lang.code());
-        if let Some(d) = all_docs.iter().find(|d| d.url_path == lang_homepage) {
-            return Some(d);
-        }
-    }
-    all_docs.iter().find(|d| d.url_path == "index.html")
-}
-
-/// Resolve the site name visible on a page in `page_lang` from that edition's
-/// authored root. A missing or filename-derived localized title falls back to
-/// the canonical site name, so English and single-language sites are unchanged.
-pub(crate) fn localized_site_title(
-    all_docs: &[ParsedDocument],
-    page_lang: crate::i18n::Language,
-    site_lang: crate::i18n::Language,
-    fallback: &str,
-) -> String {
-    if page_lang == site_lang {
-        return fallback.to_string();
-    }
-    find_homepage_doc(all_docs, page_lang, site_lang)
-        .filter(|d| d.url_path != "index.html" && d.source_path.is_some())
-        .map(|d| d.title.clone())
-        .filter(|t| !t.is_empty() && !moss_core::home::is_index_stem(t))
-        .unwrap_or_else(|| fallback.to_string())
-}
 
 /// One page rendered outside any build, with shared state built for it alone.
 #[cfg(test)]
@@ -186,35 +144,6 @@ pub fn generate_html_collect_og<'d>(
     )
 }
 
-/// The folder-index heading to prepend in the no-cover branch: the shared
-/// `<h1 class="moss-folder-title">`, unless something else on the page is
-/// already showing the title. Three things can be —
-///
-/// - the body has its own `# Title` (anywhere outside a code fence), which is
-///   then both the visible title and the heading landmark: nothing is
-///   emitted, for nav and non-nav folders alike,
-/// - the body opens with a `:::hero` that carries its own heading: nothing is
-///   emitted, since the hero already supplies the `<h1>`.
-///
-/// A nav folder shows its title like any other folder.
-///
-/// Covered folder indexes bypass this helper entirely (they render the label
-/// inside the cover via `folder_cover::render`), and synthetic folder indexes
-/// are generated in `render/blocking.rs` and never reach it — so this is the
-/// only folder-title site that omits or hides it.
-fn no_cover_folder_heading(
-    doc: &crate::build::types::ParsedDocument,
-    h1_text: &str,
-    emit_source_fm: bool,
-) -> String {
-    use moss_core::heading::TitleOutcome;
-    match moss_core::heading::title_outcome(&doc.content, true) {
-        TitleOutcome::None => String::new(),
-        TitleOutcome::Hidden => crate::build::components::folder_title::render(h1_text, emit_source_fm, true),
-        TitleOutcome::Visible => crate::build::components::folder_title::render(h1_text, emit_source_fm, false),
-    }
-}
-
 /// Split a pipe-encoded `cover:` value ("path|attrs") into its resolved URL
 /// and display attrs. Shared by the folder-index cover branch and the
 /// claimed-leaf-page cover branch below — both draw the page's own `cover:`
@@ -246,48 +175,6 @@ fn annotate_children_listing(listing: String, emit_source_lines: bool) -> String
         r#"<div class="moss-cards-container" data-source-fm="children">"#,
         1,
     )
-}
-
-/// The folder a page's own listing shows and whether it names an edition home
-/// (the listing then takes that home's filters), or `None` when the page ends
-/// in no listing. A home (the root's or a language's) lists its tree; any
-/// other page a claimed term, else its own folder when it is a folder index,
-/// else the folder its `children_source` names. `children_source` redirects a
-/// home too. The renderer and whatever must agree with it ask here.
-pub(crate) fn own_listing_target(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> Option<(String, bool)> {
-    let source = doc.children_source.as_deref().map(|r| resolve_children_source_folder_path(r, all_docs));
-    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        return Some(source.unwrap_or_else(|| (crate::build::folder_embed::home_defaults(doc).tree.to_string(), false)));
-    }
-    let names_scoped_home = source.as_ref().is_some_and(|t| t.1);
-    let folder = match doc.term_listing.as_deref() {
-        Some(term) => term.to_string(),
-        None if doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") => doc.url_path.trim_end_matches("/index.html").to_string(),
-        None => source?.0,
-    };
-    Some((folder, names_scoped_home))
-}
-
-/// Resolves `children_source:`'s wikilink target to a folder's site path (no
-/// leading/trailing slash; `""` for the root) — the NAMED folder, never the
-/// hosting page's own `url_path`. Shared by both `children:` branches below.
-/// The flag is true when the target is an edition home listing its own edition
-/// only; the listing then carries the same filters as that home's.
-fn resolve_children_source_folder_path(children_source: &str, all_docs: &[ParsedDocument]) -> (String, bool) {
-    if let Some(home) = crate::build::render::lang_roots::named_edition_home(children_source, all_docs) {
-        let defaults = crate::build::folder_embed::home_defaults(home);
-        return (defaults.tree.to_string(), defaults.scoped);
-    }
-    let stem = crate::build::markdown::frontmatter_ref_to_stem(children_source);
-    let path = all_docs
-        .iter()
-        .find(|d| {
-            let d_stem = d.url_path.trim_end_matches("/index.html").trim_end_matches('/');
-            d_stem.eq_ignore_ascii_case(&stem) && d.kind == PageKind::Folder
-        })
-        .map(|d| d.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string())
-        .unwrap_or_else(|| stem.to_lowercase());
-    (path, false)
 }
 
 /// Insert the place-map locator into `body` at `placement` (a no-op for
@@ -412,7 +299,7 @@ fn generate_html_inner<'d>(
             documents: all_docs, project, layout: layout_config, site_lang,
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates, theme_modules: &shared.theme_modules },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
-            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
+            home_breadcrumb: moss_core::page::nav::home_breadcrumb_setting(all_docs),
             media_lookup: shared.media_lookup,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
@@ -522,7 +409,7 @@ impl<'a> PageFacts<'a> {
         // site-default homepage, so zh-hans/ pages do not surface the English
         // homepage's description.
         let cascade_homepage = if doc.is_some() && !is_homepage {
-            find_homepage_doc(all_docs, ui_lang, site_lang)
+            moss_core::page::site_page::edition_home(all_docs, ui_lang, site_lang)
         } else {
             None
         };
@@ -636,7 +523,7 @@ impl<'a> PageFacts<'a> {
     /// `children_source` ends in that listing; a term page and a place
     /// namespace root also get their map.
     fn host_listing(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, content: String, is_folder_index: bool) -> String {
-        let Some((folder_path, names_scoped_home)) = own_listing_target(doc, context.chrome.documents) else {
+        let Some((folder_path, names_scoped_home)) = moss_core::page::listing::own_listing_target(doc, context.chrome.documents) else {
             return content;
         };
         let term_listing = doc.term_listing.as_deref();
@@ -721,45 +608,17 @@ fn with_colophon(mut html: String, doc: &ParsedDocument, emit_source_lines: bool
 /// neighbours become adjacent. Silencing only its own nav would leave the page
 /// before it pointing "next" at a page that leads nowhere back.
 fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesetting: Option<&str>) -> Option<String> {
+    use moss_core::page::series;
     let all_docs = context.chrome.documents;
     let path_resolver = &context.chrome.assets.paths;
-    let parts: Vec<&str> = d.url_path.split('/').collect();
-    if parts.len() < 3 {
-        return None;
-    }
-    // "series/part-1/index.html" -> parent folder "series"
-    let parent_folder = parts[..parts.len() - 2].join("/");
-    let parent_index = format!("{}/index.html", parent_folder);
-    let parent_doc = all_docs.iter().find(|pd| pd.url_path == parent_index)?;
-    // The nav walks direct siblings only, so a flatten scope would be wrong.
-    let resolved = parent_doc.resolve_for_direct_children();
-    let page_opted_out = matches!(&d.series, Some(crate::build::types::SeriesField::Flag(false)));
-    if !series_chrome_on(parent_doc) || page_opted_out {
-        return None;
-    }
-    let parent_prefix = format!("{}/", parent_folder);
-    let siblings = context.shared.sequences.chain(&parent_index, || sequence_siblings(
-        all_docs, &parent_index, &parent_prefix, &resolved,
-    ));
-    // By url_path: every folder index's clean_stem is "index".
-    let pos = siblings.iter().position(|pd| pd.url_path == d.url_path)?;
-    // Labels are chrome: plain text.
-    let clean_url = |path: &str| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(path));
-    let neighbour = |i: usize| (siblings[i].label.clone(), clean_url(&siblings[i].url_path));
-    let prev = (pos > 0).then(|| neighbour(pos - 1));
-    let next = (pos + 1 < siblings.len()).then(|| neighbour(pos + 1));
-    let resolved_parent = clean_url(&parent_index);
-    let html = components::series_nav::render(
-        &parent_doc.label,
-        &resolved_parent,
-        prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-        next.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-        // Where you are, over the same set the arrows walk. A lone page gets
-        // no ordinal: "1 of 1" is noise, not orientation.
-        if siblings.len() > 1 { Some((pos + 1, siblings.len())) } else { None },
-        d.lang, typesetting,
-    );
-    (!html.is_empty()).then_some(html)
+    let parent_doc = series::series_parent(d, all_docs)?;
+    let siblings = context.shared.sequences.chain(&parent_doc.url_path, || {
+        #[cfg(test)]
+        tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
+        series::chain(all_docs, parent_doc)
+    });
+    let url = |path: &str| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(path));
+    series::nav(d, parent_doc, &siblings[..], &url, d.lang, typesetting)
 }
 
 pub(super) fn render_page<'d>(
@@ -783,6 +642,7 @@ pub(super) fn render_page<'d>(
     let page_lang_tag = &facts.page_lang_tag;
     let site_title = &facts.site_title;
     let resolved_typesetting = facts.typesetting;
+    let cards = components::child_list::BuildCards::new(dir_overrides, resolved_typesetting, now);
     let shell_type = facts.shell_type;
     let is_article_page = facts.is_article_page;
     let locator_placement = facts.locator_placement;
@@ -807,19 +667,13 @@ pub(super) fn render_page<'d>(
                 // One top-level heading is required: the header names the
                 // site, so the heading is visually hidden; with no header it
                 // is shown, unless an opening hero stands in for it.
-                use moss_core::heading::{title_outcome, TitleOutcome};
-                let outcome = title_outcome(&doc.content, true);
-                if outcome == TitleOutcome::None {
-                    content
-                } else {
-                    let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
-                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
-                    format!("{h1}\n{content}")
-                }
+                let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
+                let h1 = moss_core::heading::folder_heading(&doc.content, &doc.label, emit_source_lines, !headerless);
+                if h1.is_empty() { content } else { format!("{h1}\n{content}") }
             };
 
-            let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
-            let (target_folder_path, names_scoped_home) = own_listing_target(doc, all_docs).unwrap_or_default();
+            let own_tree = moss_core::page::listing::home_defaults(doc).tree;
+            let (target_folder_path, names_scoped_home) = moss_core::page::listing::own_listing_target(doc, all_docs).unwrap_or_default();
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
             let mut content = content;
@@ -892,7 +746,7 @@ pub(super) fn render_page<'d>(
                 let h1_text = &doc.title;
                 // `layout: article` reads as a plain article: no auto-inserted
                 // cover component, even when `cover:` is set.
-                let is_article_layout = doc.layout.as_deref() == Some("article");
+                let is_article_layout = moss_core::page::site_page::SitePage::is_article_layout(doc);
                 // `byline:` under the title; skipped when `is_article_page`,
                 // because a `layout: article` folder runs through both
                 // assemblies and the article path below emits both.
@@ -933,17 +787,9 @@ pub(super) fn render_page<'d>(
                     // gets a hidden one instead (no byline), skipping that dedup,
                     // which guards a second visible title.
                     let heading = if is_explorer_root {
-                        crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
+                        moss_core::heading::folder_title(h1_text, emit_source_lines, true)
                     } else {
-                        format!(
-                            "{}{}",
-                            no_cover_folder_heading(
-                                doc,
-                                h1_text,
-                                emit_source_lines,
-                            ),
-                            folder_byline,
-                        )
+                        format!("{}{}", moss_core::heading::folder_heading(&doc.content, h1_text, emit_source_lines, false), folder_byline)
                     };
                     if heading.is_empty() {
                         content
@@ -972,7 +818,7 @@ pub(super) fn render_page<'d>(
                         } else {
                             format!(
                                 "{}{}",
-                                components::folder_title::render(&doc.title, emit_source_lines, true),
+                                moss_core::heading::folder_title(&doc.title, emit_source_lines, true),
                                 lead,
                             )
                         };
@@ -1019,7 +865,7 @@ pub(super) fn render_page<'d>(
             // stays honest (matches the placeholder removal in year_group /
             // folder_embed).
             let article_list =
-                generate_year_grouped_article_list(all_docs, project, true, context.chrome.site_lang, resolved_typesetting);
+                generate_year_grouped_article_list(all_docs, project, &cards, true, context.chrome.site_lang);
             let content = if article_list.is_empty() {
                 String::new()
             } else {
@@ -1115,26 +961,8 @@ pub(super) fn render_page<'d>(
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
                 // Nested subfolder articles are excluded from sidebar listings.
-                .filter(|d| is_direct_child(&d.url_path, &target_prefix))
-                .map(|d| {
-                    let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
-                    components::ArticleListItemProps {
-                        credits: None,
-                        subtitle: None,
-                        date_display,
-                        date_raw,
-                        url: Some(path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&d.url_path))),
-                        // chrome; plain-text label
-                        title: d.label.clone(),
-                        url_path: d.url_path.clone(),
-                        weight: d.weight,
-                        place: d.place_names.clone(),
-                        when_html: None,
-                        when: None,
-                        source_file: d.source_path.clone(),
-                        lang: None,
-                    }
-                })
+                .filter(|d| moss_core::page::series::is_direct_child(&d.url_path, &target_prefix))
+                .map(|d| components::ArticleListItemProps::from(&moss_core::page::card::props_for(d, all_docs, &cards, None)))
                 .collect();
 
             // Always newest-first: a "Latest" sidebar has no folder of its own
@@ -1203,7 +1031,7 @@ pub(super) fn render_page<'d>(
     // The page's own picture, or the card moss draws when it has none — and
     // when the picture is a shape no platform crop can hold, the card it
     // draws AROUND that picture. `og_choice` holds the whole decision.
-    let (resolved_cover_for_og, cover_dims_for_og) = crate::build::page::og_choice::resolve(
+    let og_cover = crate::build::page::og_choice::resolve(
         &crate::build::page::og_choice::OgCoverInputs {
             doc,
             project,
@@ -1216,6 +1044,7 @@ pub(super) fn render_page<'d>(
             ui_lang,
             vertical_typesetting,
             output_dir: context.output_dir,
+            share_cover: layout_config.share_cover,
         },
         og_outputs.as_deref_mut(),
     );
@@ -1227,9 +1056,9 @@ pub(super) fn render_page<'d>(
     // legacy "above the body" position is no longer used.
     // An event page shows its event facts here instead of the posted date.
     // Its "Add to calendar" link goes in this meta line when the page has one,
-    // and closes the body otherwise (a Page-shell event has no meta line). This
-    // is the one place that decides which spot gets the link.
-    let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
+    // and closes the body otherwise (a Page-shell event has no meta line). Only
+    // here is it decided which spot gets the link, and that a past event has none.
+    let event_calendar_href = doc.filter(|d| d.event.as_ref().is_some_and(|ev| ev.span().is_upcoming(&crate::build::folder_embed::upcoming::minute(now)))).and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
         .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), components::event_meta::UpcomingLabel::Hidden, now));
@@ -1243,7 +1072,7 @@ pub(super) fn render_page<'d>(
         // The size control's "Aa" would hang off the end of the event facts.
         let has_size_control = event_meta_html.is_none() && d.reader_controls != Some(false);
         let when_html = event_meta_html.unwrap_or_else(|| {
-            let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
+            let formatted = moss_core::i18n::dates::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
             let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
             format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
         });
@@ -1303,7 +1132,7 @@ pub(super) fn render_page<'d>(
         // The `breadcrumb: label` link is chrome around the finished title
         // block, so it goes on last: the splices above see the title at the
         // head of the content and need not step past anything.
-        let label = doc.and_then(|d| crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb));
+        let label = doc.and_then(|d| moss_core::page::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb));
         let label = label.and_then(|parent| crate::build::markdown::html_post::prepend_parent_label(&mut finished, &parent));
         if let Some(d) = doc {
             crate::build::components::field_places::warn_title_block_unplaced(d, &finished);
@@ -1313,7 +1142,7 @@ pub(super) fn render_page<'d>(
         } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
             finished = crate::build::components::field_places::beside_leading_picture(&finished);
         }
-        let thread = doc.map(|d| crate::build::folder_embed::stream::page_thread(d, all_docs, &project.root_path, dir_overrides, resolved_typesetting, now)).unwrap_or_default();
+        let thread = doc.map(|d| crate::build::folder_embed::stream::page_thread(d, all_docs, dir_overrides, resolved_typesetting, now)).unwrap_or_default();
         // Under the parent label while it still heads the page, else first.
         finished.insert_str(label.filter(|l| finished.starts_with(l.as_str())).map_or(0, |l| l.len()), &thread.before);
         finished = crate::build::page::default_width::apply(finished, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
@@ -1323,7 +1152,7 @@ pub(super) fn render_page<'d>(
         // A page with its listing off shows no events here; its embedded
         // listings carry their own folders' links (`folder_embed`).
         if let Some(d) = doc {
-            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &crate::build::components::field_places::EndCards { graph: context.content_graph, root_path: &project.root_path, dir_overrides, typesetting: resolved_typesetting, now, media_lookup }));
+            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &crate::build::components::field_places::EndCards { graph: context.content_graph, dir_overrides, typesetting: resolved_typesetting, now, media_lookup }));
             if let Some(href) = calendar_at_body_end.as_deref() {
                 finished.push_str(&context.shared.calendar.event_link_html(href, d.lang));
             }
@@ -1350,7 +1179,7 @@ pub(super) fn render_page<'d>(
         },
         formatted_date: if is_article_page && doc.is_some() && doc.unwrap().date.is_some() {
             let date_str = doc.unwrap().date.as_ref().unwrap();
-            Some(components::format_display_date(date_str, doc.unwrap().lang, resolved_typesetting))
+            Some(moss_core::i18n::dates::format_display_date(date_str, doc.unwrap().lang, resolved_typesetting))
         } else {
             None
         },
@@ -1362,7 +1191,7 @@ pub(super) fn render_page<'d>(
         date_line: None,
         short_date: if is_article_page && doc.is_some() && doc.unwrap().date.is_some() {
             let date_str = doc.unwrap().date.as_ref().unwrap();
-            Some(components::format_compact_date(date_str, doc.unwrap().lang, resolved_typesetting))
+            Some(moss_core::i18n::dates::format_compact_date(date_str, doc.unwrap().lang, resolved_typesetting))
         } else {
             None
         },
@@ -1421,8 +1250,7 @@ pub(super) fn render_page<'d>(
                 &url,
                 &site_title,
                 d.date.as_deref(),
-                resolved_cover_for_og.as_ref(),
-                cover_dims_for_og,
+                og_cover.as_ref(),
                 d.tags.as_deref().unwrap_or(&[]),
                 "",          // locale — TODO(4.3c): plumb real per-page lang from frontmatter
                 site_url,
@@ -1456,8 +1284,7 @@ pub(super) fn render_page<'d>(
                 &site_title,
                 share_card_description_str,
                 &og_url,
-                resolved_cover_for_og.as_ref(),
-                cover_dims_for_og,
+                og_cover.as_ref(),
                 "",          // locale — TODO(4.3c): plumb real per-page lang from frontmatter
                 site_url,
             ))
@@ -1472,11 +1299,8 @@ pub(super) fn render_page<'d>(
             Some(crate::build::page::meta::build_twitter_tags(
                 &d.label,
                 share_card_description_str,
-                resolved_cover_for_og.as_ref(),
-                // When the cover came from auto-card, alt should match the
-                // card's visible text (page label). For frontmatter covers,
-                // leave None — build_twitter_tags falls back to title.
-                if cover_dims_for_og.is_some() { Some(&d.label) } else { None },
+                og_cover.as_ref().map(|o| &o.cover),
+                og_cover.as_ref().and_then(|o| o.alt.as_deref()),
                 site_url,
             ))
         } else if is_card_eligible {
@@ -1488,8 +1312,8 @@ pub(super) fn render_page<'d>(
             Some(crate::build::page::meta::build_twitter_tags(
                 card_title,
                 share_card_description_str,
-                resolved_cover_for_og.as_ref(),
-                if cover_dims_for_og.is_some() { Some(card_title) } else { None },
+                og_cover.as_ref().map(|o| &o.cover),
+                og_cover.as_ref().and_then(|o| o.alt.as_deref()),
                 site_url,
             ))
         } else {
@@ -1533,7 +1357,7 @@ pub(super) fn render_page<'d>(
         },
         schema_json_ld: crate::build::page::meta::page_json_ld(
             doc, is_article_page, is_homepage, share_card_description_str, &site_title,
-            resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
+            og_cover.as_ref().map(|o| &o.cover), site_url, &homepage_meta_url, &page_lang_tag,
         )?,
         embed_head_assets,
         lightbox: if doc.is_some_and(|d| d.features.viewer) {
@@ -1551,90 +1375,6 @@ pub(super) fn render_page<'d>(
         crate::build::cli_output::log_warn_problem!("[{name}] a folder listing was left unexpanded in the built page");
     }
     Ok(page)
-}
-
-/// Is this page a **step in the reading order** — one of the pages the series
-/// nav walks a reader through, prev by prev?
-///
-/// That is a different question from "does this page show up in the folder's
-/// listing?" (`is_listable`), even though the two agree for every page that
-/// says nothing. They part ways in exactly two places:
-///
-/// 1. **A subfolder's own index page that said nothing.** It belongs in the
-///    listing — it is how a reader reaches the subfolder — but by default it
-///    is a doorway, not a step, so it is not threaded into its siblings'
-///    prev/next chain. `layout: article` overrides that: the author has said
-///    "this is a piece", and a piece that happens to own an appendix folder is
-///    still something you read in order. Kind comes from the kind-aware
-///    `SortableDoc::is_folder_index`, never the URL — under pretty URLs *every*
-///    article also ends with `<stem>/index.html`.
-/// 2. **`series: false` on a leaf page.** It stays in the listing but steps
-///    out of the sequence, so no sibling may point at it as prev or next. This
-///    is the whole-chain half of the opt-out; the page's own nav is separately
-///    suppressed by `nav_enabled` at the call site.
-///
-/// Every page that sets neither answers exactly as `is_listable_in` its own
-/// folder does: a chain runs among siblings, so a hidden folder holding the
-/// page holds the whole chain, and the page's own address lies inside it.
-pub(crate) fn is_sequence_step(pd: &ParsedDocument) -> bool {
-    use moss_core::sort::SortableDoc;
-    pd.is_listable_in(&pd.url_path)
-        && (!pd.is_folder_index() || ShellRegistry::is_article_layout(pd))
-        && !matches!(&pd.series, Some(crate::build::types::SeriesField::Flag(false)))
-}
-
-/// Whether `parent_doc`'s series prev/next chrome is on for its children —
-/// the chrome-trigger precedence: an explicit `series:` on the parent wins
-/// (`Flag(true)`/`Flag(false)`, or the legacy `Ordered(_)` list form, which
-/// always means on); otherwise the resolved sort's own `series_default`
-/// (weight axis, or an explicit list order) decides. Shared by the two
-/// places that need this one precedence decision on a parent folder: this
-/// module's own series-nav block (a leaf's own opt-out, `page_opted_out`
-/// below, is a separate, per-leaf check on top of it) and
-/// `render::incremental::listing::is_series_member`, which needs the same
-/// answer to know whether an edit anywhere in the chain can move any
-/// sibling's rendered chrome.
-pub(crate) fn series_chrome_on(parent_doc: &ParsedDocument) -> bool {
-    match &parent_doc.series {
-        Some(crate::build::types::SeriesField::Flag(b)) => *b,
-        Some(crate::build::types::SeriesField::Ordered(_)) => true,
-        None => parent_doc.resolve_for_direct_children().series_default,
-    }
-}
-
-/// The ordered prev/next chain for the folder at `parent_prefix`: its direct
-/// children that are steps in the reading order, sorted by the folder's
-/// resolved sort. Excludes the folder's own index (`parent_index`).
-fn sequence_siblings<'a>(
-    all_docs: &'a [ParsedDocument],
-    parent_index: &str,
-    parent_prefix: &str,
-    resolved: &moss_core::sort::ResolvedSort,
-) -> Vec<&'a ParsedDocument> {
-    #[cfg(test)]
-    tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
-    let siblings: Vec<&ParsedDocument> = all_docs.iter()
-        .filter(|pd| {
-            pd.url_path != parent_index
-                && pd.url_path.starts_with(parent_prefix)
-                && is_sequence_step(pd)
-        })
-        .filter(|pd| is_direct_child(&pd.url_path, parent_prefix))
-        .collect();
-    // However a folder lists its pages, a series is read forward in time: next is the newer page.
-    let forward = (resolved.axis == moss_core::sort::SortAxis::Date && resolved.explicit_order.is_none())
-        .then(|| moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::DateAsc, ..resolved.clone() });
-    moss_core::sort::sort_by_resolved(&siblings, forward.as_ref().unwrap_or(resolved))
-}
-
-/// Is `url_path` a direct child of `prefix` — one segment below it, tolerating
-/// the pretty-URL `<slug>/index.html` form? False when it is not below it at all.
-fn is_direct_child(url_path: &str, prefix: &str) -> bool {
-    url_path.strip_prefix(prefix).is_some_and(|rem| {
-        !rem.trim_end_matches("/index.html")
-            .trim_end_matches('/')
-            .contains('/')
-    })
 }
 
 #[cfg(test)]

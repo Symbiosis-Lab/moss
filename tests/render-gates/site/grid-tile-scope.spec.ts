@@ -5,7 +5,7 @@
  * listing in a `:::grid` cell and a real tile; `/plain/` has the same listing
  * outside any grid.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const rowStyle = (page: Page, selector: string) =>
   page.$$eval(selector, (els) =>

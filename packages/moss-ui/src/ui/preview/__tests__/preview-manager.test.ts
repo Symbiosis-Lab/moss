@@ -106,6 +106,10 @@ vi.mock('../navigation-manager', () => ({
     navigateToPage(urlPath: string) { this.beginNavigation(this.resolveFullUrl(urlPath)); }
     reset() { mockNavState.resetCalled = true; }
     isNavigationPending() { return mockNavState.requestedUrl != null; }
+    onSite(url: string) {
+      const at = mockNavState.activePage?.url;
+      return !!at && new URL(at).origin === new URL(url).origin;
+    }
     // Capture the rename 404-retry observer so tests can drive it directly.
     setNavigationResultListener(cb: ((info: { url: string; notFound: boolean }) => void) | null) {
       mockNavState.navResultListener = cb;
@@ -119,7 +123,7 @@ vi.mock('../navigation-manager', () => ({
     }
     // Both return false so refresh() exercises the cache-busting iframe.src
     // fallback (morph default-ON tries morph first, then reload, then iframe.src).
-    async morph() { return false; }
+    async morph() { return 'failed'; }
     async reload() { return false; }
     async callBridge(...args: unknown[]) { mockNavState.bridgeCalls.push(args); return mockNavState.bridgeAnswer?.(...args) ?? null; }
   },
@@ -1192,6 +1196,41 @@ describe('PreviewManager', () => {
       expect(loadPreviewSpy).not.toHaveBeenCalled();
     });
 
+    describe('a served site arriving after the preview has a page of it', () => {
+      const served: ProgressUpdate = {
+        step: 'serving', message: 'Server started', percentage: 100, completed: true, port: 3000, is_empty: false,
+      };
+      test('keeps a page the preview is leaving a page of the site for', () => {
+        mockNavState.activePage = { url: 'http://localhost:3000/', sourceFile: null };
+        mockNavState.requestedUrl = 'http://localhost:3000/pictures/';
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).not.toHaveBeenCalled();
+      });
+
+      test('keeps a page the preview shows', () => {
+        mockNavState.activePage = { url: 'http://localhost:3000/pictures/', sourceFile: null };
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).not.toHaveBeenCalled();
+      });
+
+      test('loads the site over a page asked for while the site had failed', () => {
+        (previewManager as any).renderStatus({ type: 'error', message: 'x', verdict: 'reported' });
+        previewManager.navigateToPage('pictures/');
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).renderStatus({ type: 'ready', url: 'http://localhost:8080' });
+        expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:8080');
+      });
+
+      test("loads the site over a page of another server", () => {
+        mockNavState.activePage = { url: 'http://localhost:4000/pictures/', sourceFile: null };
+        const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
+        (previewManager as any).handleProgressUpdate(served);
+        expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:3000');
+      });
+    });
+
     // Empty-folder onboarding lives in the editor action-panel folder-mode, not in
     // the preview overlay. The preview now loads the served empty-home
     // artifact (empty_home.rs) instead of painting an overlay. These
@@ -1954,7 +1993,7 @@ describe('PreviewManager', () => {
 
     test('a FileChanged before the first bridge navigation waits for it before requesting a morph', async () => {
       const nav = (previewManager as any).navigationManager;
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       nav.beginNavigation('http://localhost:8080/');
       expect(nav.getCurrentUrl()).toBe('http://localhost:8080/');
       expect(nav.getActivePage()).toBeNull();
@@ -1990,7 +2029,7 @@ describe('PreviewManager', () => {
     test('a FileChanged affecting the current page: morph lands → outcome=morph-applied', async () => {
       mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
-      vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue(true);
+      vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue('applied');
       const refreshSpy = vi.spyOn(previewManager, 'refresh');
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html'] });
@@ -2022,7 +2061,7 @@ describe('PreviewManager', () => {
         // resolved in preview-actions.test.ts against the real URL).
         { attributes: { rel: 'stylesheet', href: 'http://localhost:3000/notes/handout.css' } },
       ]);
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['notes/handout.css', 'sitemap.xml'] });
@@ -2055,7 +2094,7 @@ describe('PreviewManager', () => {
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       const nav = (previewManager as any).navigationManager;
       vi.spyOn(nav, 'callBridge').mockResolvedValue([{ attributes: { href: 'http://localhost:3000/_moss/theme/style.css' } }]);
-      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue('applied');
       vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', '_moss/theme/style.css'] });
@@ -2071,7 +2110,7 @@ describe('PreviewManager', () => {
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       const nav = (previewManager as any).navigationManager;
       vi.spyOn(nav, 'callBridge').mockResolvedValue([]);
-      vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      vi.spyOn(nav, 'morph').mockResolvedValue('applied');
 
       (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', 'rss.xml'] });
 
@@ -2089,6 +2128,20 @@ describe('PreviewManager', () => {
 
       expect(vi.mocked(info)).toHaveBeenCalledWith(
         '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=morph-failed→reload',
+      );
+    });
+
+    test('a page that declines the morph reloads → outcome=reload, not a morph failure', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      vi.spyOn(nav, 'morph').mockResolvedValue('declined');
+      vi.spyOn(nav, 'reload').mockResolvedValue(true);
+
+      await previewManager.refresh('file-changed');
+
+      expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=reload',
       );
     });
 
@@ -2911,6 +2964,20 @@ describe('PreviewManager', () => {
       // early-returns on an already-visible overlay, and nothing else repaints.
       expect(mockOverlay.classList.contains('home-gate-active')).toBe(false);
       expect(mockOverlay.classList.contains('visible')).toBe(false);
+    });
+
+    test('the gate lifting over nothing of the site on screen loads it', async () => {
+      await setup();
+      const load = vi.spyOn(previewManager as any, 'loadPreview').mockImplementation(() => {});
+      cloudSync.ingest({ phase: 'home_waiting', downloaded: 1, total: 4, remaining: 3 });
+      (previewManager as any).handleProgressUpdate({
+        step: 'serving', message: 'Server started', percentage: 100, completed: true, port: 3000, is_empty: false,
+      });
+      expect(load).not.toHaveBeenCalled();
+
+      cloudSync.ingest({ phase: 'home_ready', downloaded: 4, total: 4, remaining: 0 });
+
+      expect(load).toHaveBeenCalledWith('http://localhost:3000');
     });
 
     test('a resolved target stays in the iframe when its seal clears the gate', async () => {

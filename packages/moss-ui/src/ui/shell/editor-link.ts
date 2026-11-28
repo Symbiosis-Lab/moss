@@ -96,9 +96,11 @@ export class EditorLink {
 
     uiHost.bus.on<{ path: string }>('editor:file-ready', (payload) => { this.editorFile = payload.path; });
 
-    uiHost.bus.on<{ urlPath: string; awaitingBuild?: boolean }>('editor:navigate-preview', (payload) => {
+    uiHost.bus.on<{ urlPath: string; awaitingBuild?: boolean; echo?: boolean }>('editor:navigate-preview', (payload) => {
       const preview = this.host.preview();
       this.hold('pageSwitch');
+      // The editor followed the page the preview showed: a load the preview started since stands.
+      if (payload.echo && preview?.isNavigationPending()) return;
       // A page created moments ago has no build yet: cover the 404 before navigating, or it paints first.
       if (payload.awaitingBuild) preview?.armNewPageWait(payload.urlPath);
       // Registered before navigating, so the bridge's bounce-back reads as an acknowledgment.

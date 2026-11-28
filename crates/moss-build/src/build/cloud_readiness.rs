@@ -148,10 +148,48 @@ pub fn request_download(path: &Path) {
     #[cfg(test)]
     icloud::pretend::requested(path);
     #[cfg(not(test))]
-    if let Err(error) = crate::platform::request_download(path) {
+    SYSTEM_REQUESTS.send(path);
+    PREFETCH.read(path);
+}
+
+/// The system's download request is a round trip to the sync provider (about
+/// 1.3 ms each on a Mac Studio, more on a laptop), and a build asks once per
+/// record or input it finds in the cloud: made on the caller's thread, a few
+/// hundred of them held an evicted folder's first preview for seconds. One
+/// thread makes them, in the order asked.
+#[cfg(not(test))]
+static SYSTEM_REQUESTS: std::sync::LazyLock<SystemRequests> =
+    std::sync::LazyLock::new(|| SystemRequests::spawn(crate::platform::request_download));
+
+type SystemRequest = fn(&Path) -> Result<(), String>;
+
+struct SystemRequests {
+    queue: Option<std::sync::mpsc::Sender<PathBuf>>,
+    request: SystemRequest,
+}
+
+impl SystemRequests {
+    fn spawn(request: SystemRequest) -> Self {
+        let (queue, asked) = std::sync::mpsc::channel::<PathBuf>();
+        let started = std::thread::Builder::new()
+            .name("cloud-download-requests".into())
+            .spawn(move || asked.into_iter().for_each(|path| ask_system(request, &path)));
+        Self { queue: started.ok().map(|_| queue), request }
+    }
+
+    /// Without its thread (the system refused one), asks on the caller's.
+    fn send(&self, path: &Path) {
+        match &self.queue {
+            Some(queue) if queue.send(path.to_path_buf()).is_ok() => {}
+            _ => ask_system(self.request, path),
+        }
+    }
+}
+
+fn ask_system(request: SystemRequest, path: &Path) {
+    if let Err(error) = request(path) {
         log::debug!("cloud: the system did not take a download request for {}: {error}", path.display());
     }
-    PREFETCH.read(path);
 }
 
 /// Move a needed input ahead of background files already queued by the sweep.
@@ -830,6 +868,28 @@ pub fn read_to_string_with_materialize_wait(
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn a_slow_system_download_request_does_not_hold_the_caller() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static TAKEN: AtomicUsize = AtomicUsize::new(0);
+        fn slow(_: &Path) -> Result<(), String> {
+            std::thread::sleep(Duration::from_millis(200));
+            TAKEN.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        let requests = SystemRequests::spawn(slow);
+        let asked = Instant::now();
+        for i in 0..5 {
+            requests.send(Path::new(&format!("/cloud/{i}.json")));
+        }
+        assert!(asked.elapsed() < Duration::from_millis(150), "the caller waited {:?}", asked.elapsed());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while TAKEN.load(Ordering::SeqCst) < 5 {
+            assert!(Instant::now() < deadline, "the requests were never made");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn a_save_landing_during_a_rewrite_is_kept() {

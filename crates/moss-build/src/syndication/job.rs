@@ -51,6 +51,25 @@ pub struct SiteRef {
     /// Absolute, no trailing slash.
     pub url: String,
     pub name: String,
+    /// Absolute URL of the largest square raster of the site's own icon, at
+    /// least 256 px; absent when the site has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+/// The smallest raster a channel is offered as the site's icon.
+const ICON_MIN: u32 = 256;
+
+/// The site's own icon as a channel can fetch it: the largest square raster of
+/// at least [`ICON_MIN`] px the latest build served, and only when the folder
+/// has an icon of its own (moss's mark is not the site's).
+pub fn site_icon(folder: &std::path::Path, site_url: &str) -> Option<String> {
+    crate::build::site_meta::favicon::own_icon_file(folder)?;
+    let served = crate::moss_paths::MossPaths::new(folder).current_ptr();
+    crate::build::site_meta::favicon::SIZES.iter().rev().filter(|&&size| size >= ICON_MIN).find_map(|&size| {
+        let path = crate::build::served_path::ServedPath::for_favicon_raster(size);
+        served.join(path.as_str()).is_file().then(|| format!("{}/{}", site_url.trim_end_matches('/'), path.as_str()))
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

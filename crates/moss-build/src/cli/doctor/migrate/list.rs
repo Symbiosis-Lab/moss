@@ -60,10 +60,9 @@ pub(super) fn to_text(found: &[Found]) -> String {
     }
     let mut out = String::new();
     for f in found {
-        let when = f.row.retired_in.map_or_else(|| "before moss 0.6.6".to_string(), |v| format!("in moss {v}"));
         let times = if f.occurrences == 1 { "once".to_string() } else { format!("{} times", f.occurrences) };
         let now = f.row.replaced_by().map_or_else(|| "nothing replaces it".to_string(), |now| format!("now {now}"));
-        out.push_str(&format!("{}  {} ({times}), retired {when}: {}; {now}\n", f.row.id(), f.files.join(", "), f.row.note));
+        out.push_str(&format!("{}  {} ({times}), retired {}: {}; {now}\n", f.row.id(), f.files.join(", "), f.row.when(), f.row.note));
     }
     out
 }

@@ -129,7 +129,7 @@ fn build_test_full(
     server_port: Option<u16>,
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>), String> {
     build_test_full_with_gates(
         folder_path,
         site_dir_state,
@@ -149,7 +149,7 @@ fn build_test_full_with_gates(
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>), String> {
     build_test_with_stash(folder_path, site_dir_state, progress_sender, server_port, services, resolved_slots, gates)
         .map(|(is_empty, missing, _)| (is_empty, missing))
 }
@@ -163,7 +163,7 @@ fn build_test_with_stash(
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>, crate::types::content::SiteHashes), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>, crate::types::content::SiteHashes), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -188,6 +188,7 @@ fn build_test_with_stash(
             build_documents: _documents,
             content_hashes,
             missing_references,
+            remote_pictures: _remote_pictures,
             unresolved_inputs: _unresolved_inputs,
             cancelled: _cancelled,
             home_ready: _home_ready,
@@ -237,6 +238,7 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     let gates = crate::build::render::IncrementalGates {
         render_skip: false,
         parse_cache: true,
+        defer_image_placeholders: false,
     };
 
     let (_, first) = build_test_full_with_gates(
@@ -272,7 +274,7 @@ fn a_raw_img_src_to_a_missing_file_is_a_missing_reference() {
     fs::create_dir_all(dir.join("img")).unwrap();
     fs::write(dir.join("img/here.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#).unwrap();
     fs::write(dir.join("index.md"), "---\ntitle: marks\n---\n<img src=\"img/here.svg\" alt=\"\">\n\n<img src=\"img/gone.svg\" alt=\"\">\n").unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: false };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: false, defer_image_placeholders: false };
 
     let (_, missing) = build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
     let named: Vec<&str> = missing.iter().map(|m| m.reference.as_str()).collect();
@@ -290,7 +292,7 @@ fn a_replayed_page_records_the_bytes_it_was_replayed_from() {
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let build = || build_test_full_with_gates(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
     let hashes = crate::moss_paths::MossPaths::new(&dir).hashes();
 
@@ -322,7 +324,7 @@ fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let hash = |s: &str| crate::build::render::blocking::source_metadata(None, s.as_bytes()).hash;
     let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
     let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
@@ -363,7 +365,7 @@ fn the_parse_cache_never_holds_a_uid_the_build_assigned() {
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
     fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nA").unwrap();
     fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopy").unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
 
     build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
         .expect("build");
@@ -422,7 +424,7 @@ fn a_duplicate_uid_keeps_cacheable_missing_reference_evidence_and_both_files() {
         )
         .unwrap();
     }
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let (_, first) = build_test_full_with_gates(
         dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
     )
@@ -563,6 +565,33 @@ async fn title_cards_do_not_block_preview_and_settle_in_pipeline_seal() {
     let cards: Vec<_> = sealed.image_outputs().iter().filter(|path| path.starts_with("_moss/og/")).collect();
     assert_eq!(cards.len(), 1, "the pipeline must include its planned card in the seal");
     assert!(stage.join(cards[0]).exists());
+}
+
+/// A build whose site has no picture left still sweeps the advisory the last one
+/// left in this process.
+#[tokio::test]
+async fn a_build_with_no_pictures_left_sweeps_the_last_ones_advisory() {
+    use crate::advisory::{Action, Advisory, Scope, Severity};
+    use crate::build::media::image::{compute_image_item_fingerprint, end_image_item, image_item_advisories, mark_image_items_pending, ImageCompressionConfig};
+    let folder = TempDir::new().unwrap();
+    fs::write(folder.path().join("index.md"), "# Home\n").unwrap();
+    image::RgbImage::from_pixel(40, 30, image::Rgb([200, 30, 30])).save(folder.path().join("gone.png")).unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder.path());
+    let fingerprint = std::sync::Arc::new(compute_image_item_fingerprint(root.as_str(), std::path::Path::new("gone.png"), &ImageCompressionConfig::default()).unwrap());
+    let advisory = Advisory::for_source(Scope::File, Severity::ShippedDegraded, "gone.png", "800w: rung encode failed".to_string(), Action::None);
+    let _marks = mark_image_items_pending(root.as_str(), [("gone.png".to_string(), fingerprint.clone())]);
+    end_image_item(root.as_str(), "gone.png", &fingerprint, true, &[advisory]);
+    fs::remove_file(folder.path().join("gone.png")).unwrap();
+
+    let project = scan_folder(root.as_str()).unwrap();
+    let port = crate::build::ports::port_of_this_build(None, None);
+    let services = BuildServices::headless();
+    let result = run(&root, None, None, &port, Some(&services), None, &project, None,
+        crate::build::render::IncrementalGates::default(),
+        crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys()).unwrap();
+    result.bg_handle.unwrap().await_completion().await.unwrap();
+
+    assert!(image_item_advisories(root.as_str(), "gone.png").is_empty(), "the removed picture's advisory outlived the build");
 }
 
 #[test]
@@ -2280,7 +2309,9 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
 /// staging only once the render the preview shows has been promoted.
 ///
 /// Build 2 starts after build 1's seal tail promoted build 1's render, so it
-/// parks on `current` and sweeps an orphan out of staging. Then a render is put
+/// parks on `current` and sweeps an orphan out of staging: residue of a build,
+/// in another process, that entered after that tail swept and died before
+/// sealing. Then a render is put
 /// on screen that nothing has promoted — what a rebuild meets when it starts
 /// before the last tail lands — and build 3 must leave the orphan intact.
 /// The preview may use the immutable prior route while staging is rewritten.
@@ -2348,6 +2379,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     assert!(mp.current_ptr().exists(), "build 1's tail promoted its render");
 
     let orphan = mp.staging_dir().join("orphan.txt");
+    crate::build::lifecycle::unless_tail_swept(&mp, 1, None);
     fs::write(&orphan, "left behind").unwrap();
     build().await.expect("build 2");
     assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
@@ -4136,7 +4168,7 @@ fn test_video_served_path_derivation_with_overrides() {
 #[test]
 fn test_notebook_processing_noop_when_empty() {
     let outputs = run_notebook_processing(None, &[], "/test", Path::new("/test/output"), None,
-        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")), None, Default::default());
+        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")), None, Default::default(), &Default::default());
     assert!(outputs.is_empty(), "No notebooks = no outputs");
 }
 
@@ -4160,7 +4192,7 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default()));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default(), &Default::default()));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -4206,7 +4238,7 @@ fn test_data_files_copied_to_jupyter_files() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default()));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default(), &Default::default()));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
@@ -4230,7 +4262,7 @@ fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
         size: content.len() as u64, modified: None,
     }];
     let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
-    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence, None, Default::default()));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence, None, Default::default(), &Default::default()));
     assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
     assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
     assert!(read_notebook_sibling(&notebook, &evidence).is_some());
@@ -4277,7 +4309,7 @@ fn test_notebook_processing_cancel_flag_returns_early() {
     let cancel = AtomicBool::new(true);
     let outputs =
         run_notebook_processing(None, &files, &source.to_string_lossy(), &output, Some(&cancel),
-            &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default());
+            &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default(), &Default::default());
 
     assert!(
         outputs.is_empty(),
@@ -5456,11 +5488,9 @@ fn build_test_sealed_at(folder_path: &str, site_url: Option<&str>) -> Result<Vec
 /// orphaned `.webp` → reclaim what the prune orphaned → write `hashes.json`
 /// → promote. Mirrors `build.rs`'s `exits_after_build` branch, which is the
 /// only place all of these run in order — this harness has no next build in
-/// its own process either, so it calls `ship::reclaim_staging_now` exactly
-/// where that branch does (moss#… the 2026-09-16 regression: without this
-/// call a single call here left an orphan's `.webp` sitting in staging, which
-/// every assertion below would have missed since none of them ran a SECOND
-/// build to let `pipeline::sweep_staging` cover for it).
+/// its own process either, so it calls `pipeline::sweep_staging` exactly
+/// where that branch does: without it an orphan's `.webp` stays in staging,
+/// and no assertion below runs a second build to sweep it.
 ///
 /// `build_test` and `build_test_sealed` both stop at the seal, so neither can
 /// observe anything the tail decides — and the tail is where the staging tree
@@ -5521,7 +5551,7 @@ fn build_test_shipped(
         // arm: this harness never has a next build in the same process
         // either, so without this call staging would hold orphaned bytes no
         // test here could ever observe going away.
-        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        super::sweep_staging(&stage_dir, sealed.site_hashes_view(), Some(&crate::build::lifecycle::permit_for_test()));
         let _ = sealed.write_to_disk(&mp.hashes());
         crate::build::ship::materialize_and_promote(
             &sealed,
@@ -5609,7 +5639,7 @@ fn build_test_with_focus(
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
-        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        super::sweep_staging(&stage_dir, sealed.site_hashes_view(), Some(&crate::build::lifecycle::permit_for_test()));
         let mut keys: Vec<String> = sealed.files().keys().cloned().collect();
         keys.sort();
         let verdict = crate::build::ship::ShipVerdict::after_presence_pass(&sealed, keys.len(), 0);
@@ -6158,10 +6188,10 @@ fn a_build_that_changes_nothing_does_nothing() {
 /// snapshot-test fixture are all one-shot: the process exits
 /// after this one build, so a next build that would do the sweeping never
 /// comes, and the orphaned bytes shipped in anything that read `stage_dir`
-/// directly. `ship::reclaim_staging_now` closes that gap for exactly the
+/// directly. The seal tail's `pipeline::sweep_staging` closes that gap for exactly the
 /// build shape that proves nobody is left to read `stage_dir` afterward.
 ///
-/// Ablate by commenting out the `reclaim_staging_now` call in
+/// Ablate by commenting out the `seal_reclaim` sweep in
 /// `build_test_shipped` above: `gone.webp` then survives on disk after build
 /// 2 and the last assertion here goes red.
 #[test]
@@ -6673,24 +6703,53 @@ fn every_page_a_publish_built_reads_back_as_served_or_held_back() {
     assert_eq!(last_publish_state(&dir, "footer.md"), PublishState::Absent, "a slot file makes no page");
 }
 
-/// A duplicated note carries the original's uid; the copy is built under a new
-/// one, and the publish that puts it online replaces the copied uid in its file.
-#[test]
-fn a_duplicate_is_published_under_its_own_uid_and_its_file_follows() {
-    let (dir, _cleanup) = create_test_dir();
+/// Publish a note, then a copy of it made by duplicating the file: the copy
+/// carries the original's uid. Returns the copy's bytes and the uid it was
+/// published under.
+fn publish_a_duplicate(dir: &Path) -> (String, String) {
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
     fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nOriginal").unwrap();
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
-    publish(&dir, &sealed);
-    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied").unwrap();
-
+    publish(dir, &sealed);
+    let copied = "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied".to_string();
+    fs::write(dir.join("copy.md"), &copied).unwrap();
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
-    publish(&dir, &sealed);
+    publish(dir, &sealed);
+    let built = built_uid(&sealed, "copy.md");
+    (copied, built)
+}
 
-    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
-    assert_eq!(file_uid("a.md").as_deref(), Some("aaaa1111"), "the published original keeps its uid");
-    let copy = file_uid("copy.md").expect("the copy keeps a uid");
-    assert_ne!(copy, "aaaa1111", "the copy's file now holds the uid it was published under");
+fn built_uid(sealed: &crate::build::manifest::SealedManifest, source: &str) -> String {
+    sealed.published_uids().find(|(s, _)| *s == source).and_then(|(_, page)| page.uid.clone()).expect(source)
+}
+
+/// The copy is published under a uid of its own, and its file keeps the uid it
+/// was copied with: a uid already in a file is never changed.
+#[test]
+fn a_duplicate_is_published_under_its_own_uid_and_its_file_is_left_alone() {
+    let (dir, _cleanup) = create_test_dir();
+    let (copied, built) = publish_a_duplicate(&dir);
+
+    assert_ne!(built, "aaaa1111", "the copy is published under its own uid");
+    assert_eq!(fs::read_to_string(dir.join("copy.md")).unwrap(), copied);
+    let original = crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join("a.md")).unwrap()).uid;
+    assert_eq!(original.as_deref(), Some("aaaa1111"));
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert_eq!(built_uid(&rebuilt, "copy.md"), built, "the next build keeps the copy's published uid");
+}
+
+/// Renaming the copy keeps the uid it was published under: its file still
+/// names the original's, and its unchanged bytes match the publish record.
+#[test]
+fn a_renamed_duplicate_keeps_its_published_uid() {
+    let (dir, _cleanup) = create_test_dir();
+    let (_, built) = publish_a_duplicate(&dir);
+    fs::rename(dir.join("copy.md"), dir.join("moved.md")).unwrap();
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert_eq!(built_uid(&rebuilt, "moved.md"), built);
+    assert_eq!(built_uid(&rebuilt, "a.md"), "aaaa1111");
 }
 
 /// An edit made between the build and its publish was not published: the
@@ -6977,6 +7036,53 @@ fn a_published_page_holds_its_uid_and_the_next_build_has_nothing_to_publish() {
     let record = crate::build::manifest::published_record::load_for(&paths, Some("moss:site-1")).unwrap();
     let left = crate::build::manifest::change_set::classify(Some(&record), second.site_hashes_view());
     assert!(left.pages.is_empty(), "{:?}", left.pages);
+}
+
+/// The build after a publish renders the generation that was published. If it
+/// did not, the next deploy would upload a different site with nothing changed
+/// in the folder, and could drop the stub of a page that moved before it.
+#[test]
+fn the_build_after_a_publish_renders_the_published_generation() {
+    let (dir, _cleanup) = create_test_dir();
+    let folder_path = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi\n").unwrap();
+    fs::write(dir.join("moved.md"), "---\ntitle: Moved\n---\n![A square](square.png)\n").unwrap();
+    fs::write(dir.join("gone.md"), "---\ntitle: Gone\n---\nText\n").unwrap();
+    image::RgbImage::from_pixel(24, 24, image::Rgb([23, 45, 67])).save(dir.join("square.png")).unwrap();
+    let history = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
+    let publish = |sealed: &crate::build::manifest::SealedManifest| {
+        let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+        tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(&dir, sealed, "moss:site-1", &ports, &history));
+        crate::vault::deployment_state::record_publish(folder_path, crate::vault::deployment_state::PublishOutcome {
+            url: "https://site-1.example.org".to_string(),
+            deployed_at: chrono::Utc::now().to_rfc3339(),
+            generation_id: Some(sealed.generation_id().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+    };
+
+    let (_, _, _, before) = build_test_promoted_or_withheld(folder_path).unwrap();
+    publish(&before);
+    fs::create_dir(dir.join("section")).unwrap();
+    fs::rename(dir.join("moved.md"), dir.join("section/moved.md")).unwrap();
+    fs::rename(dir.join("square.png"), dir.join("section/square.png")).unwrap();
+    fs::remove_file(dir.join("gone.md")).unwrap();
+    let (_, _, _, published) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(published.all_files().contains_key("moved/index.html"), "the moved page leaves a stub: {:?}", published.all_files().keys().collect::<Vec<_>>());
+    publish(&published);
+
+    let (_, rendered, _, again) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let unrendered: Vec<_> = published.all_files().keys().filter(|path| path.ends_with(".html") && !rendered.contains(*path)).collect();
+    assert!(unrendered.is_empty(), "the rebuild must be a render, not the published generation kept: {unrendered:?}");
+    let mut differ: Vec<_> = published.all_files().iter()
+        .filter(|(path, hash)| again.all_files().get(*path) != Some(*hash))
+        .map(|(path, _)| path.clone())
+        .chain(again.all_files().keys().filter(|path| !published.all_files().contains_key(*path)).cloned())
+        .collect();
+    differ.sort();
+    assert!(differ.is_empty(), "the rebuild differs from the published generation in {differ:?}");
 }
 
 #[cfg(target_os = "macos")]
@@ -7300,7 +7406,7 @@ fn notebook_sources_appear_in_sealed_sources() {
     without_jupyterlite_assets(|| {
         for incremental in [false, true] {
             build_test_full_with_gates(folder_path, None, None, None, None, &ResolvedSlots::empty(),
-                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental }).unwrap();
+                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental, defer_image_placeholders: false }).unwrap();
             let hashes = load_previous_hashes(folder_path);
             let meta = hashes.sources.get("lab.ipynb").expect("a walked notebook needs a sealed source hash");
             assert_eq!(meta.hash, format!("{:x}", Sha256::digest(notebook)));
@@ -7463,7 +7569,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     let mut sealed = pending.seal();
     let id_before = sealed.generation_id().to_string();
 
-    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None);
+    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None, Default::default());
 
     assert!(sealed.files().contains_key(real.as_str()), "a real output stays");
     assert!(
@@ -7570,7 +7676,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         return;
     }
 
-    let (verdict, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let (verdict, _, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
     let promotion = crate::build::ship::materialize_and_promote(
         &sealed,
         &mp,
@@ -8171,9 +8277,9 @@ fn cancelled_and_postponed_events_carry_the_matching_status() {
 #[test]
 fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
     let (dir, _c) = event_site(&[
-        ("B.md", "title: Second\nuid: bbbb0002\nstart: 2026-11-08 19:00\ntimezone: Europe/London\n"),
-        ("A.md", "title: First\nuid: aaaa0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\n"),
-        ("C.md", "title: Third\nuid: cccc0003\nstart: 2026-11-15\n"),
+        ("B.md", "title: Second\nuid: bbbb0002\nstart: 2096-11-08 19:00\ntimezone: Europe/London\n"),
+        ("A.md", "title: First\nuid: aaaa0001\nstart: 2096-11-01 19:00\ntimezone: Europe/London\n"),
+        ("C.md", "title: Third\nuid: cccc0003\nstart: 2096-11-15\n"),
         ("Notes.md", "title: Not an event\nuid: nnnn0004\n"),
     ]);
     let text = staged(&dir, "events/calendar.ics");
@@ -8199,13 +8305,41 @@ fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
 #[test]
 fn an_event_on_a_page_shell_keeps_its_calendar_link_once_at_the_end_of_the_body() {
     // `nav: true` pins a page to the Page shell, which renders no meta line.
-    let (dir, _c) = event_site(&[("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\nnav: true\n")]);
+    let (dir, _c) = event_site(&[("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2096-11-01 19:00\ntimezone: Europe/London\nnav: true\n")]);
     let page = staged(&dir, "events/pinned/index.html");
     assert!(!page.contains("moss-event-meta"), "a Page-shell event renders no meta line: {page}");
     assert_eq!(page.matches(">Add to calendar</a>").count(), 1, "{page}");
     let link = page.find(r#"<a class="moss-calendar-link" href="/events/pinned/event.ics" type="text/calendar">Add to calendar</a>"#);
     assert!(link.is_some(), "{page}");
     assert!(page.find("Body.").unwrap() < link.unwrap(), "the link closes the body, after the prose: {page}");
+}
+
+#[test]
+fn a_past_event_offers_no_calendar_link_with_or_without_a_meta_line() {
+    let (dir, _c) = event_site(&[
+        ("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2020-11-01 19:00\ntimezone: Europe/London\nnav: true\n"),
+        ("Talk.md", "title: Talk\nuid: tttt0001\nstart: 2020-11-01 19:00\ntimezone: Europe/London\n"),
+    ]);
+    for (rel, shell) in [("events/pinned/index.html", "Page"), ("events/talk/index.html", "article")] {
+        let page = staged(&dir, rel);
+        assert!(page.contains("Body."), "{page}");
+        assert!(!page.contains(">Add to calendar</a>"), "a past {shell}-shell event: {page}");
+    }
+}
+
+#[test]
+fn an_upcoming_event_carries_its_end_for_the_browser_and_a_past_one_does_not() {
+    let (dir, _c) = event_site(&[
+        ("Next.md", "title: Next\nuid: nnnn0009\nstart: 2096-11-01 19:00\nend: 2096-11-01 21:00\ntimezone: Europe/London\n"),
+        ("Done.md", "title: Done\nuid: dddd0009\nstart: 2020-11-01 19:00\ntimezone: Europe/London\n"),
+    ]);
+    let next = staged(&dir, "events/next/index.html");
+    assert!(next.contains(r#"class="date moss-event-meta" data-when="upcoming" data-ends="2096-11-01T21:00""#), "{next}");
+    assert!(next.contains("/_moss/js/event-ends."), "the site has an upcoming event, so the script loads: {next}");
+    let listing = staged(&dir, "events/index.html");
+    assert_eq!(listing.matches(r#"data-ends="2096-11-01T21:00""#).count(), 1, "the upcoming row carries its end: {listing}");
+    assert!(listing.contains(r#"data-when="past""#) && listing.matches("data-ends=").count() == 1, "the past row carries none: {listing}");
+    assert!(!staged(&dir, "events/done/index.html").contains("data-ends="));
 }
 
 fn staged_exists(test_dir: &std::path::Path, rel: &str) -> bool {
@@ -8230,6 +8364,42 @@ fn site_of(files: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
     }
     build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
     (dir, cleanup)
+}
+
+/// The titles a home page's listings show, in page order.
+fn listed_titles(dir: &std::path::Path, titles: &[&str]) -> Vec<String> {
+    let home = staged(dir, "index.html");
+    let body = &home[home.find("<main").unwrap_or(0)..];
+    let mut at: Vec<(usize, String)> = titles.iter().flat_map(|t| body.match_indices(&format!(">{t}<")).map(|(i, _)| (i, t.to_string())).collect::<Vec<_>>()).collect();
+    at.sort();
+    at.into_iter().map(|(_, t)| t).collect()
+}
+
+#[test]
+fn repeat_none_skips_what_a_listing_above_drew_and_counts_its_limit_after() {
+    let home = "---\ntitle: Home\nchildren: false\n---\n\n![[events/|group:upcoming,limit:1]]\n\n## Earlier\n\n![[events/|when:past,limit:2,repeat:none]]\n";
+    let titles = ["One", "Two", "Three", "Next"];
+    let build = |upcoming: bool| {
+        let (dir, cleanup) = create_test_dir();
+        fs::write(dir.join("index.md"), home).unwrap();
+        fs::create_dir_all(dir.join("events")).unwrap();
+        fs::write(dir.join("events/index.md"), "---\ntitle: Events\nchildren: false\n---\n").unwrap();
+        let mut events = vec![("one", "One", "2020-01-01"), ("two", "Two", "2020-02-01"), ("three", "Three", "2020-03-01")];
+        if upcoming {
+            events.push(("next", "Next", "2096-01-01"));
+        }
+        for (file, title, day) in events {
+            fs::write(dir.join(format!("events/{file}.md")), format!("---\ntitle: {title}\nstart: {day} 19:00\n---\n\nBody.\n")).unwrap();
+        }
+        build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+        let shown = listed_titles(&dir, &titles);
+        drop(cleanup);
+        shown
+    };
+    // Nothing upcoming: the lead falls back to the newest past event, and the wall below skips it.
+    assert_eq!(build(false), ["Three", "Two", "One"]);
+    // An upcoming lead: the wall drops nothing.
+    assert_eq!(build(true), ["Next", "Three", "Two"]);
 }
 
 #[test]
@@ -8907,7 +9077,7 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
 }
 
 fn build_with_preview_cache(dir: &std::path::Path) -> String {
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
         .expect("build");
     fs::read_to_string(MossPaths::new(dir).staging_dir().join("_moss/previews.json")).expect("previews.json")
@@ -9228,4 +9398,23 @@ async fn a_build_holds_its_activity_while_it_reports_progress() {
     });
     crate::platform::activity::HELD.scope(std::cell::Cell::new(0), build).await.expect("build completes");
     assert!(seen.0.load(Ordering::SeqCst) >= 1, "no activity held while the build reported progress");
+}
+
+/// The footer's subscribe form and an inline `:::subscribe` are bound by `forms.js`,
+/// so a site with either and no `:::form` still ships it, and a site with neither does not.
+#[test]
+fn every_subscribe_form_ships_the_form_script() {
+    for (channel, page, ships) in [
+        ("\n[channels.email]\n", "# Home\n", true),
+        ("", "# Home\n\n:::subscribe\n:::\n", true),
+        ("", "# Home\n", false),
+    ] {
+        let (test_dir, _cleanup) = create_test_dir();
+        fs::write(test_dir.join("index.md"), page).unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss/config.toml"), format!("schema_version = {}\n{channel}", crate::config::migrations::CURRENT_VERSION)).unwrap();
+        build_test(test_dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty()).unwrap();
+        let html = fs::read_to_string(MossPaths::new(&test_dir).staging_dir().join("index.html")).unwrap();
+        assert_eq!(html.contains("/_moss/js/forms."), ships, "channel {channel:?}, page {page:?}");
+    }
 }

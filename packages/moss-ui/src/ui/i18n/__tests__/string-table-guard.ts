@@ -28,6 +28,8 @@ const ALLOWLIST = new Set<string>(
     'schema.site_id_placeholder', // sample slug ("my-blog")
     'audience.breakdown_segment', // pure interpolation: "{name} · {count}"
     'pubmgr.lamp.tooltip', // pure interpolation: "{name} — {state} · {hint}"
+    'newsletter_service.connected', // pure interpolation: "{service} · {list}"
+    'newsletter_service.seta', // the service's name
     'pubmgr.lamp.tooltip_short', // pure interpolation: "{name} · {state}"
     'upload.size_pair', // pure interpolation: "{done}/{total} {unit}" — kB/MB/GB stay Latin in Chinese technical UI
     'upload.size_one', // pure interpolation: "{n} {unit}" — same reason as the pair
@@ -36,7 +38,7 @@ const ALLOWLIST = new Set<string>(
     'channels.name.matters', // brand name — identical in every locale (email IS localized)
     'channels.name.github', // brand name — identical in every locale
     'channels.name.onionpress', // brand name — identical in every locale
-    'deployment.host.moss', // brand name — the hosting destination is mosspub.com in every locale
+    'deployment.host.moss', // brand name — the hosting service is seta in every locale
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 
@@ -45,6 +47,7 @@ const GERMAN_IDENTICAL = [
   // German uses these English words as they are
   'launcher.import.kind_site', // Website
   'launcher.import.kind_file', // Export
+  'deployment.label.server', // Server
   // brand and product names
   'launcher.wordmark',
   'channels.name.matters',
@@ -104,6 +107,9 @@ const GERMAN_IDENTICAL = [
   'chip.route.label',
   // slash-menu block name, WordPress de_DE keeps "Buttons"
   'slash.buttons.label',
+  // the service's name, and a pure interpolation: "{service} · {list}"
+  'newsletter_service.seta',
+  'newsletter_service.connected',
 ].map((key) => `de:${key}`);
 for (const k of GERMAN_IDENTICAL) ALLOWLIST.add(k);
 
@@ -123,6 +129,9 @@ const BRAND_ALLOWLIST = new Set<string>(
     'device.needs_https',
     'browser.signed_out',
     'browser.no_folder',
+    // Mail not sent through the site's own service goes out under the sender name "moss".
+    'newsletter_service.sending_from_moss',
+    'newsletter_service.sender_refused',
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 

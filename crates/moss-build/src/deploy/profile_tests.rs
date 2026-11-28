@@ -1,58 +1,17 @@
 use super::*;
 use crate::deploy::{prebuilt, push, progress};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::deploy::push::deploy_resource_tests::{is_deploy_send, DeployStandIn, Reply, Seta};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// What the stub saw, to hold the record's counts against.
-#[derive(Default)]
-struct Seen { requests: AtomicU64, failed_put_bytes: AtomicU64 }
-
-/// Keeps the committed manifest so a redeploy really compares identical output.
-/// Every answer carries `ray` as its `cf-ray`; the first PUT is answered 503
-/// when `fail_first_put`.
-async fn mock_seta(ray: Option<&'static str>, fail_first_put: bool)
-    -> (std::net::SocketAddr, tokio::task::JoinHandle<()>, Arc<Seen>) {
-    let seen = Arc::new(Seen::default());
-    let seen_in_task = seen.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        let mut live = serde_json::Map::new();
-        let mut failed_once = !fail_first_put;
-        let seen = seen_in_task;
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let raw = crate::test_drain_http_request(&mut stream).await;
-            let head_end = raw.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
-            let head = String::from_utf8_lossy(&raw[..head_end]);
-            let line = head.lines().next().unwrap();
-            seen.requests.fetch_add(1, Ordering::Relaxed);
-            let (status, body) = if line.starts_with("PUT ") && !failed_once {
-                failed_once = true;
-                seen.failed_put_bytes.store((raw.len() - head_end) as u64, Ordering::Relaxed);
-                ("503 Service Unavailable", json!({}))
-            } else if line.contains("/sync ") {
-                let input: Value = serde_json::from_slice(&raw[head_end..]).unwrap();
-                let files = input["files"].as_object().unwrap();
-                let need: Vec<_> = files.iter().filter(|(k, v)| live.get(*k) != Some(*v)).map(|(k, _)| k).collect();
-                ("200 OK", json!({"need": need, "remove": []}))
-            } else if line.contains("/commit ") {
-                let input: Value = serde_json::from_slice(&raw[head_end..]).unwrap();
-                live = input["manifest"].as_object().unwrap().clone();
-                ("200 OK", json!({"url": "https://profile-test.mosspub.com", "files_updated": live.len(), "files_removed": 0, "timestamp": 1700000000}))
-            } else if line.starts_with("PUT ") {
-                ("200 OK", json!({}))
-            } else {
-                // Force the /sync comparison even when generation IDs match.
-                ("404 Not Found", json!({}))
-            };
-            let body = body.to_string();
-            let ray = ray.map(|r| format!("cf-ray: {r}\r\n")).unwrap_or_default();
-            let response = format!("HTTP/1.1 {status}\r\n{ray}Connection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-            crate::test_respond_and_close(&mut stream, response.as_bytes()).await;
-        }
-    });
-    (addr, task, seen)
+/// seta serving the deploy resource, every answer carrying `ray` as its
+/// `cf-ray`; the first send is answered 503 when `fail_first_send`.
+async fn mock_seta(ray: Option<&'static str>, fail_first_send: bool) -> DeployStandIn {
+    let failed = Arc::new(AtomicBool::new(!fail_first_send));
+    DeployStandIn::serve(Seta { ray, ..Seta::default() }, Box::new(move |r, _| {
+        (is_deploy_send(r) && !failed.swap(true, Ordering::Relaxed)).then(|| Reply::Json(503, json!({})))
+    }))
+    .await
 }
 
 fn records(folder: &Path) -> Vec<Value> {
@@ -73,9 +32,9 @@ async fn publish_twice(prebuilt: bool) {
     std::fs::create_dir(&output).unwrap();
     std::fs::write(output.join("index.html"), "<html>private-page-content</html>").unwrap();
     std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: profile-home\n---\n\nprivate-page-content\n").unwrap();
-    let (addr, server, _) = mock_seta(None, false).await;
+    let seta = mock_seta(None, false).await;
     let previous = std::env::var("MOSS_SETA_URL").ok();
-    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    std::env::set_var("MOSS_SETA_URL", &seta.url);
     let sink = progress::silent();
     for run in 1..=2 {
         let result = if prebuilt {
@@ -104,8 +63,8 @@ async fn publish_twice(prebuilt: bool) {
         if run == 1 {
             assert!(needed > 0);
             assert!(c["bytes_uploaded"].as_u64().unwrap() > 0);
-            assert_eq!(c["body_requests"], needed);
-            assert_eq!(c["single_put_files"], needed);
+            assert_eq!(c["body_requests"], 1, "the needed files fit one send");
+            assert_eq!(c["final_concurrency"], 6, "requests are sized for the server's concurrency hint");
             assert_eq!(c["server_files_updated"], c["manifest_files"]);
         } else {
             assert_eq!(needed, 0, "unchanged output needs no upload");
@@ -114,7 +73,7 @@ async fn publish_twice(prebuilt: bool) {
             let upload = record["phases"].as_array().unwrap().iter().find(|p| p["name"] == "upload").unwrap();
             assert_eq!(upload["ms"], 0, "no upload span was entered");
             assert_eq!((c["sent_kb"].as_u64(), c["resent_kb"].as_u64(), c["requests_failed"].as_u64()), (Some(0), Some(0), Some(0)));
-            assert!(c["requests"].as_u64().unwrap() >= 1, "the generation probe and sync were counted");
+            assert!(c["requests"].as_u64().unwrap() >= 1, "the open was counted");
             assert_eq!(record["edge"], "none", "an answer without cf-ray has no edge");
         }
         if !prebuilt {
@@ -125,7 +84,6 @@ async fn publish_twice(prebuilt: bool) {
             assert!(!encoded.contains(secret), "profile leaked {secret}");
         }
     }
-    server.abort();
     match previous { Some(v) => std::env::set_var("MOSS_SETA_URL", v), None => std::env::remove_var("MOSS_SETA_URL") }
 }
 
@@ -142,7 +100,7 @@ async fn deploy_profile_refusal_records_once_without_error_text() {
     crate::system::build_records::records().install_publish_preflight(
         folder.to_str().unwrap(), crate::build::types::PublishPreflightProjection {
             build_generation: 1, missing_references: vec![],
-            unresolved_inputs: vec!["private-note.md".into()], drafts_linked: vec![],
+            unresolved_inputs: vec!["private-note.md".into()], drafts_linked: vec![], remote_pictures: vec![],
         },
     );
     let sealed = crate::build::manifest::PendingManifest::for_build(
@@ -201,22 +159,22 @@ async fn deploy_profile_counts_requests_resends_and_edge_without_leaking_inputs(
     std::fs::create_dir(&output).unwrap();
     std::fs::write(output.join("index.html"), "<html>private-page-content</html>").unwrap();
     let ray = "12345678901234567890123-FRA";
-    let (addr, server, seen) = mock_seta(Some(ray), true).await;
+    let seta = mock_seta(Some(ray), true).await;
     let previous = std::env::var("MOSS_SETA_URL").ok();
-    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    std::env::set_var("MOSS_SETA_URL", &seta.url);
     let identity = crate::identity::Identity::generate().unwrap();
     let site_id = "../evil/host.example.com-1234567890123456";
     let result = prebuilt::push_prebuilt(dir.path(), &output, site_id, &identity, false, &progress::silent()).await;
     assert!(matches!(result, Ok(PushResult::Success { .. })), "{result:?}");
-    server.abort();
     match previous { Some(v) => std::env::set_var("MOSS_SETA_URL", v), None => std::env::remove_var("MOSS_SETA_URL") }
 
     let rows = records(dir.path());
     let record = rows.iter().find(|r| r["kind"] == "deploy").unwrap();
     let c = &record["counts"];
-    assert_eq!(c["requests"], seen.requests.load(Ordering::Relaxed), "every request the server saw was counted");
+    let seen = seta.requests();
+    assert_eq!(c["requests"], seen.len() as u64, "every request the server saw was counted");
     assert_eq!(c["requests_failed"], 1);
-    let lost = seen.failed_put_bytes.load(Ordering::Relaxed);
+    let lost = seen.iter().find(|r| is_deploy_send(r)).unwrap().body.len() as u64;
     assert!(lost > 0);
     assert_eq!(c["resent_kb"], lost.div_ceil(1024));
     assert_eq!(c["sent_kb"], lost.div_ceil(1024), "the retry carried the same body");
@@ -264,4 +222,32 @@ async fn named_seta_refusals_record_their_kinds() {
     let cap = SetaError::StorageCapExceeded { cap_bytes: 1, site_bytes: None, message: "over".into() };
     assert_eq!(kind_of(cap), Some(json!("size_limit")));
     assert_eq!(kind_of(SetaError::DeploySuperseded { message: "again".into() }), Some(json!("conflict")));
+}
+
+/// `--accept-removals` reaches seta's open on the hosted route, as it does on
+/// the prebuilt and direct ones.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_removals_reaches_the_hosted_open() {
+    let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("MOSS_DEPLOY_ALLOW_MASS_REMOVE");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".moss")).unwrap();
+    std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"profile-test\"\n").unwrap();
+    crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
+    std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: profile-home\n---\n\nHello\n").unwrap();
+    let seta = mock_seta(None, false).await;
+    let previous = std::env::var("MOSS_SETA_URL").ok();
+    std::env::set_var("MOSS_SETA_URL", &seta.url);
+    let result = push::run_hosted_deploy(dir.path(), &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, None,
+        push::PublishOverrides { accept_removals: true, ..Default::default() }, &progress::silent()).await;
+    match previous {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+    assert!(matches!(result, Ok(PushResult::Success { .. })), "{result:?}");
+    let opens: Vec<Value> = seta.requests().iter().filter(|r| crate::deploy::push::deploy_resource_tests::is_open(r))
+        .map(crate::deploy::push::deploy_resource_tests::manifest_part).collect();
+    assert!(!opens.is_empty(), "the publish never opened a deploy");
+    assert!(opens.iter().all(|m| m["allow_removal"] == true), "{opens:?}");
 }

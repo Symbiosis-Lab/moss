@@ -210,23 +210,11 @@ impl VaultRoot {
     pub fn find_containing_below(path: &Path, cwd: &Path, home: Option<&Path>) -> Option<Self> {
         let start_dir = Self::start_dir_in(path, cwd);
 
-        // Never walk above the user's home directory: `~/.moss/` is moss's app-level cache
-        // (bin/, cache/), not a project marker. Without this guard a folder with no `.moss/`
-        // resolves to `~` and moss scans the entire home directory. Canonical comparison
-        // too — on Windows an ancestor can surface as an 8.3 short path
-        // (`C:\Users\RUNNER~1`) while `dirs::home_dir()` is the long form.
-        let home_canon = home.and_then(|h| h.canonicalize().ok());
-
+        // Never walk above the user's home directory, so a folder with no `.moss/` never
+        // resolves to `~` and moss never scans the entire home directory.
         for ancestor in start_dir.ancestors() {
-            if let Some(home) = home {
-                let at_home = ancestor == home
-                    || matches!(
-                        (ancestor.canonicalize().ok(), home_canon.as_ref()),
-                        (Some(ac), Some(hc)) if &ac == hc
-                    );
-                if at_home {
-                    break;
-                }
+            if home.is_some_and(|home| crate::nested_roots::same_dir(ancestor, home)) {
+                break;
             }
             if crate::nested_roots::owns_moss(ancestor) {
                 return Some(Self::from_resolved(ancestor.to_path_buf()));

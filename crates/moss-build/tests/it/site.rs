@@ -175,7 +175,7 @@ impl Site {
         site
     }
 
-    fn unbuilt(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
+    pub fn unbuilt(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
         let root = std::env::temp_dir().join(format!("moss_inline_site_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let site = Site { root };
@@ -204,6 +204,20 @@ impl Site {
     /// The path a build wrote `rel` at.
     pub fn output(&self, rel: &str) -> PathBuf {
         MossPaths::new(&self.root).staging_dir().join(rel)
+    }
+
+    /// Every public address the last build wrote, with a file name's content
+    /// hash read as `HASH`: the hash is part of the file, not of its address.
+    pub fn served(&self) -> std::collections::BTreeSet<String> {
+        let staging = self.output("");
+        walkdir::WalkDir::new(&staging)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.path().strip_prefix(&staging).unwrap().to_string_lossy().replace('\\', "/"))
+            .filter(|p| moss_build::build::served_path::is_public_address(p))
+            .map(|p| without_hash(&p))
+            .collect()
     }
 
     pub fn html(&self, rel: &str) -> String {
@@ -260,6 +274,15 @@ impl Drop for Site {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+fn without_hash(path: &str) -> String {
+    let mut out = Vec::new();
+    for part in path.split('.') {
+        let hashed = part.len() >= 8 && part.bytes().all(|b| b.is_ascii_hexdigit());
+        out.push(if hashed { "HASH" } else { part });
+    }
+    out.join(".")
 }
 
 pub fn hrefs_in(html: &str) -> Vec<&str> {

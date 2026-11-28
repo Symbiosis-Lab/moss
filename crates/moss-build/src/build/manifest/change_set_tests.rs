@@ -491,6 +491,25 @@ fn a_prebuilt_records_html_files_count_as_pages_with_no_explanation() {
     assert_eq!(removed_of(&prev, &cur), [("old.html".to_string(), RemovalReason::Unexplained)]);
 }
 
+/// An alias the build skips (its target is outside the folder) is still in
+/// the folder at the address a record with no sources served it at.
+#[test]
+fn a_skipped_file_at_its_old_address_is_still_in_the_folder_against_a_record_without_sources() {
+    let mut prev = snapshot(&sealed_with_assets(&[], &[("scales.html", b"S"), ("old.html", b"O")], &[], &[]));
+    prev.asset_source_to_output = None;
+    let cur = sealed_with_assets(&[], &[], &[], &["scales.html"]);
+
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
+    let causes: Vec<(String, RemovalCause)> = pending_removals(&removed, None).into_iter().map(|p| (p.path, p.cause)).collect();
+    assert_eq!(
+        causes,
+        [
+            ("old.html".to_string(), RemovalCause::Generated),
+            ("scales.html".to_string(), RemovalCause::StillInFolder { source: "scales.html".to_string() }),
+        ]
+    );
+}
+
 #[test]
 fn internal_files_are_never_public_addresses_and_the_list_is_sorted() {
     let prev = snapshot(&sealed(

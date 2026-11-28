@@ -58,6 +58,25 @@
    (cm-format-keys.ts). */
 .cm-hang[data-indicator] { cursor: pointer; }
 .cm-hang[data-indicator]:hover { color: var(--moss-color-text-secondary); }
+/* A grip (cm/grip-drag.ts) also drags its block: the lifted block dims in place and one line marks where it would land. */
+.cm-grippable .cm-hang[data-grip] { cursor: grab; }
+.cm-hang[data-grip] { touch-action: none; }
+.cm-grip-dragging { cursor: grabbing; user-select: none; }
+.cm-grip-lifted { opacity: 0.4; }
+.cm-grip-insertion { position: absolute; height: 2px; margin-top: -1px; background: var(--moss-color-accent); pointer-events: none; z-index: 10; }
+/* One rail per enclosing `:::` block, the deepest outermost, so a line at depth n is n stripes of one gradient. */
+.moss-editor-cm .cm-line.cm-sc-rail::after {
+  --sc-rail-step: calc(0.2 * var(--moss-editor-reading-size));
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--moss-editor-line-inset) - 1.35 * var(--moss-editor-reading-size) - var(--sc-depth) * var(--sc-rail-step));
+  width: calc(var(--sc-depth) * var(--sc-rail-step));
+  background: repeating-linear-gradient(90deg, var(--moss-color-muted) 0 1.5px, transparent 1.5px var(--sc-rail-step));
+  opacity: 0.6;
+  pointer-events: none;
+}
 .cm-lp-h1 { --moss-hang-scale: calc(0.8 / 1.75); }
 .cm-lp-h2 { --moss-hang-scale: calc(0.8 / 1.45); }
 .cm-lp-h3 { --moss-hang-scale: calc(0.8 / 1.25); }

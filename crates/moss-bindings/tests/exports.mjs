@@ -19,6 +19,8 @@ const tests = {
       site.setNotes('{"b.md":"Embedded **words**"}');
       assert.ok(json(site.preview('a.md', '![[b]]', '/')).html.includes('Embedded <strong>words</strong>'));
       assert.equal(json(site.preview('a.md', text, '/')).title, 'Example');
+      site.setTexts('{"s/index.md":"---\\nseries: true\\n---\\n","s/a.md":"# A","s/b.md":"# B"}', 'site');
+      assert.ok(json(site.preview('s/b.md', '# B', '/')).html.includes('moss-series-nav'));
     } finally {
       site.free();
     }

@@ -36,6 +36,47 @@ pub use store::is_live;
 pub use timeline::{Row, SiteVersionPages};
 pub use tree::SourceTree;
 
+/// What a Versions request is about: the whole site, everything under one
+/// folder, or one page. A path is a key into a version's records, never
+/// joined onto the folder.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(tag = "kind", content = "path", rename_all = "snake_case")]
+pub enum VersionScope {
+    Site,
+    Folder(String),
+    Page(String),
+}
+
+impl VersionScope {
+    /// The scope with a folder's trailing `/` stripped, refusing an empty,
+    /// absolute, `.` or `..` path: such a key matches no record, so it would
+    /// show an empty history instead of an error.
+    pub fn validated(self) -> Result<Self, String> {
+        let inside = |path: &str| {
+            let bad = path.split('/').any(|part| matches!(part, "" | "." | "..")) || Path::new(path).is_absolute();
+            if bad { Err(format!("\"{path}\" is not a path inside the site")) } else { Ok(()) }
+        };
+        match self {
+            Self::Site => Ok(Self::Site),
+            Self::Folder(path) => {
+                let path = path.trim_end_matches('/').to_string();
+                inside(&path).map(|()| Self::Folder(path))
+            }
+            Self::Page(path) => inside(&path).map(|()| Self::Page(path)),
+        }
+    }
+
+    /// Whether the vault-relative `path` is in scope: a folder holds what is
+    /// under `folder/`, never a sibling that only shares its prefix.
+    pub fn holds(&self, path: &str) -> bool {
+        match self {
+            Self::Site => true,
+            Self::Folder(folder) => path.strip_prefix(folder.as_str()).is_some_and(|rest| rest.starts_with('/')),
+            Self::Page(page) => path == page,
+        }
+    }
+}
+
 /// One site's publish history: the resolved directory (see the module doc)
 /// plus the methods that read and write under it.
 #[derive(Debug, Clone)]
@@ -119,9 +160,10 @@ impl HistoryStore {
         vault_root: &Path,
         id: &str,
         current: &SourceTree,
+        scope: &VersionScope,
         trash: &dyn Fn(&Path, &str) -> Result<(), String>,
     ) -> RestoreReport {
-        restore::restore_site(&self.root, vault_root, id, current, trash)
+        restore::restore_site(&self.root, vault_root, id, current, scope, trash)
     }
 
     /// See [`timeline::page_timeline`].
@@ -130,13 +172,13 @@ impl HistoryStore {
     }
 
     /// See [`timeline::site_timeline`].
-    pub fn site_timeline(&self) -> Vec<Row> {
-        timeline::site_timeline(&self.root)
+    pub fn site_timeline(&self, scope: &VersionScope) -> Vec<Row> {
+        timeline::site_timeline(&self.root, scope)
     }
 
     /// See [`timeline::site_version_pages`].
-    pub fn site_version_pages(&self, id: &str, current: &SourceTree) -> Result<SiteVersionPages, String> {
-        timeline::site_version_pages(&self.root, id, current)
+    pub fn site_version_pages(&self, id: &str, current: &SourceTree, scope: &VersionScope) -> Result<SiteVersionPages, String> {
+        timeline::site_version_pages(&self.root, id, current, scope)
     }
 }
 
@@ -218,7 +260,7 @@ mod tests {
         assert_eq!(page_rows.len(), 1);
         assert_eq!(page_rows[0].label.as_deref(), Some("A checkpoint"));
 
-        let site_rows = store.site_timeline();
+        let site_rows = store.site_timeline(&VersionScope::Site);
         assert_eq!(site_rows.len(), 1);
         assert_eq!(site_rows[0].trigger, Trigger::Manual);
     }
@@ -234,7 +276,7 @@ mod tests {
         store.snapshot(&vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
         let (id, _) = store.list_records().into_iter().next().unwrap();
 
-        let pages = store.site_version_pages(&id, &SourceTree::from_sealed(&sealed)).unwrap();
+        let pages = store.site_version_pages(&id, &SourceTree::from_sealed(&sealed), &VersionScope::Site).unwrap();
         assert!(pages.changed_since.is_empty(), "nothing changed since the version just taken");
         assert_eq!(pages.unchanged, vec!["a.md".to_string()]);
 
@@ -245,7 +287,7 @@ mod tests {
         std::fs::write(vault.join("a.md"), b"edited again").unwrap();
         let current = one_page_manifest("a.md", "a/index.html", b"edited again");
         let no_trash = |_: &Path, _: &str| -> Result<(), String> { Ok(()) };
-        let report = store.restore_site(&vault, &id, &SourceTree::from_sealed(&current), &no_trash);
+        let report = store.restore_site(&vault, &id, &SourceTree::from_sealed(&current), &VersionScope::Site, &no_trash);
         assert_eq!(report.restored, vec!["a.md".to_string()]);
         assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"original");
     }

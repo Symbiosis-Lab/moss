@@ -944,6 +944,14 @@ button.moss-places-chip-crumb {
 .moss-places-cards:empty {
   display: none;
 }
+/* A collapsed embed this short (a phone-width 3:2 frame) would give most of
+   its map to the resting row; the cards come back when it is expanded. The
+   frame's own viewport is the embed, so its height is the media height. */
+@media (height < 20rem) {
+  [data-moss-places-embed-mode="collapsed"] .moss-places-cards {
+    display: none;
+  }
+}
 
 /* Each card is a two-row grid: the always-visible select row, then the
    detail region collapsed to a `0fr` track. Expanding to `1fr` (on

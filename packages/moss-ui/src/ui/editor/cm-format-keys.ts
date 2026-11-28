@@ -17,7 +17,9 @@ import { isolateHistory } from '@codemirror/commands';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { t } from "../i18n/index";
 import { openCtxMenu, type CtxMenuEntry } from "../shared/ui/ctx-menu";
+import { flattenBlocks, ownDividerLines, shortcodeBlockField, shortcodeBlocksIn } from '@symbiosis-lab/moss-syntax/cm6';
 import { hangsOnLine, indicatorEndingAt, type Hang } from './cm-hangs';
+import { gripDragExtension } from './cm/grip-drag';
 import type { SyntaxNode } from './cm-markdown-style';
 import { columnsOf, indentOf, itemOnLine, markerColumn, type Tree } from './cm-lists';
 import { wrapSelection, detectToggle } from './selection-toolbar';
@@ -165,7 +167,7 @@ export function toggleBlockquote(view: EditorView): boolean {
 }
 
 export function formatKeysExtension(): Extension {
-  return [blockMoveKeymap(),
+  return [shortcodeBlockField, blockMoveKeymap(),
     // Above minimalSetup's defaultKeymap, whose Mod-i (selectParentSyntax) runs
     // first at equal precedence and almost always succeeds.
     Prec.high(keymap.of([{ key: 'Mod-i', run: (view) => formatMark(view, 'italic') }])),
@@ -305,12 +307,14 @@ export function indentListItems(view: EditorView, outdent = false): boolean {
 //     a block inside an item (a fence, a quote) is part of the item;
 //   - a heading line: the heading and its section, up to the next heading of the
 //     same or a higher level;
+//   - a `:::` block, from either fence line: the block, fence to fence; a line in
+//     its body is a unit of that body;
 //   - any other top-level block (paragraph, fenced code, `$$`, quote or callout,
 //     table, rule, ...): its own lines.
 // Its siblings are the units one level up the same parent: the items of one list,
 // the sections of one heading level under the same parent heading, the blocks of
-// one section. A block never crosses a heading and an item never leaves its list,
-// so a move cannot change anything's depth.
+// one section. A block never crosses a heading or a fence and an item never leaves
+// its list, so a move cannot change anything's depth.
 
 /** Whole lines: `from` is a line start, `to` a line end. */
 export interface Span { from: number; to: number }
@@ -318,8 +322,14 @@ export interface Span { from: number; to: number }
 /** A unit and the sibling run it sits in; `key` names the run so two units can be told to share it. */
 interface Level { key: string; siblings: Span[]; at: number }
 
-/** The document's top-level blocks and headings, read once per key press. */
-interface Blocks { state: EditorState; tree: Tree; kids: SyntaxNode[]; heads: { i: number; level: number }[] }
+/** One unit of a container: a block's lines, or a whole `:::` block; `level` is a heading's level, else 0. */
+interface Item { span: Span; level: number }
+
+/** The blocks of the document, or of one `:::` body; `key` is the opening fence's line start, -1 for the document. */
+interface Container { key: number; items: Item[] }
+
+/** The document's top-level blocks grouped into containers, read once per key press. `where[i]` is the container and item of top-level node `i`. */
+interface Blocks { state: EditorState; tree: Tree; kids: SyntaxNode[]; where: { c: Container; at: number }[] }
 
 const HEADING = /^(?:ATX|Setext)Heading(\d)$/;
 const headingLevel = (c: SyntaxNode): number => Number(HEADING.exec(c.name)?.[1] ?? 0);
@@ -336,13 +346,42 @@ const linesOf = (state: EditorState, node: SyntaxNode): Span => ({
   to: state.doc.lineAt(Math.max(node.from, node.to - 1)).to,
 });
 
+/**
+ * The parser gives a `:::` block's fences as siblings of the blocks between them;
+ * the editor's one pairing (moss-syntax) says which are paired. A paired block is
+ * one item of its container, and its body is a container of its own, so nothing is
+ * moved across a fence. A fence the pairing leaves out, or one whose partner sits
+ * inside a list or quote, is an ordinary block.
+ */
 function blocksOf(state: EditorState): Blocks {
   const tree = treeUpTo(state, state.doc.length);
   const kids = childrenOf(tree.topNode);
-  return { state, tree, kids, heads: kids.map((c, i) => ({ i, level: headingLevel(c) })).filter((h) => h.level) };
+  const at = new Map<number, number>();
+  kids.forEach((c, i) => { if (/^Shortcode(Open|Close)Line$/.test(c.name)) at.set(state.doc.lineAt(c.from).from, i); });
+  const closeOf = new Map<number, number>();
+  for (const b of flattenBlocks(shortcodeBlocksIn(state, tree))) {
+    const o = at.get(b.from), c = at.get(state.doc.lineAt(b.closeFrom).from);
+    if (o !== undefined && c !== undefined) closeOf.set(o, c);
+  }
+  const where: Blocks['where'] = [];
+  const fill = (c: Container, lo: number, hi: number) => {
+    for (let i = lo; i < hi; i++) {
+      const j = closeOf.get(i);
+      if (j === undefined) {
+        where[i] = { c, at: c.items.push({ span: linesOf(state, kids[i]), level: headingLevel(kids[i]) }) - 1 };
+        continue;
+      }
+      const at = c.items.push({ span: { from: linesOf(state, kids[i]).from, to: linesOf(state, kids[j]).to }, level: 0 }) - 1;
+      where[i] = where[j] = { c, at };
+      fill({ key: state.doc.lineAt(kids[i].from).from, items: [] }, i + 1, j);
+      i = j;
+    }
+  };
+  fill({ key: -1, items: [] }, 0, kids.length);
+  return { state, tree, kids, where };
 }
 
-function levelOf({ state, tree, kids, heads }: Blocks, lineFrom: number): Level | null {
+function levelOf({ state, tree, kids, where }: Blocks, lineFrom: number): Level | null {
   const line = state.doc.lineAt(lineFrom);
   const probe = indentOf(line);
   if (!line.text.slice(probe.at - line.from).trim()) return null; // a blank line is nobody's
@@ -359,27 +398,30 @@ function levelOf({ state, tree, kids, heads }: Blocks, lineFrom: number): Level 
   if (!found || found.name === 'Document') return null;
   const block: SyntaxNode = found;
   const k = kids.findIndex((c) => c.from === block.from && c.name === block.name);
-  const mine = headingLevel(block);
+  if (k < 0) return null;
+  const { c: { key: box, items }, at } = where[k];
+  const mine = items[at].level;
+  const heads = items.map((it, i) => ({ i, level: it.level })).filter((h) => h.level);
 
   if (mine) {
-    // Sections of this level under the same parent heading. A section runs to the block before the next heading of its level or a higher one.
-    const hk = heads.findIndex((h) => h.i === k);
+    // Sections of this level under the same parent heading. A section runs to the item before the next heading of its level or a higher one, and ends with its container.
+    const hk = heads.findIndex((h) => h.i === at);
     let lo = hk, hi = hk;
     while (lo > 0 && heads[lo - 1].level >= mine) lo--;
     while (hi < heads.length - 1 && heads[hi + 1].level >= mine) hi++;
     const same = heads.slice(lo, hi + 1).filter((h) => h.level === mine);
     const sections = same.map((h) => {
       const next = heads.find((o) => o.i > h.i && o.level <= mine);
-      return { from: state.doc.lineAt(kids[h.i].from).from, to: linesOf(state, kids[next ? next.i - 1 : kids.length - 1]).to };
+      return { from: items[h.i].span.from, to: items[next ? next.i - 1 : items.length - 1].span.to };
     });
-    return { key: `H${mine}@${lo}`, siblings: sections, at: same.findIndex((h) => h.i === k) };
+    return { key: `H${mine}@${box}:${lo}`, siblings: sections, at: same.findIndex((h) => h.i === at) };
   }
 
-  // A plain block: its siblings are the blocks of the same section, so it never crosses a heading.
-  let lo = k, hi = k;
-  while (lo > 0 && !headingLevel(kids[lo - 1])) lo--;
-  while (hi < kids.length - 1 && !headingLevel(kids[hi + 1])) hi++;
-  return { key: `S${kids[lo].from}`, siblings: kids.slice(lo, hi + 1).map((c) => linesOf(state, c)), at: k - lo };
+  // A plain block or a whole `:::` block: its siblings are the items of the same section, so it never crosses a heading.
+  let lo = at, hi = at;
+  while (lo > 0 && !items[lo - 1].level) lo--;
+  while (hi < items.length - 1 && !items[hi + 1].level) hi++;
+  return { key: `S${box}:${items[lo].span.from}`, siblings: items.slice(lo, hi + 1).map((it) => it.span), at: at - lo };
 }
 
 /** The whole-line span of the innermost block containing `pos`, or null on a blank line. */
@@ -398,6 +440,7 @@ export function moveBlock(view: EditorView, dir: -1 | 1): boolean {
   const { state } = view;
   if (state.readOnly) return false;
   const blocks = blocksOf(state);
+  if (hungUnpairedFence(state, state.selection.main.head, blocks.tree)) return true;
   const range = state.selection.main;
   const { doc } = state;
   // A selection that ends at a line start has not touched that line.
@@ -414,17 +457,31 @@ export function moveBlock(view: EditorView, dir: -1 | 1): boolean {
 
   const run = top[0].level.siblings;
   const lo = top[0].level.at, hi = top[top.length - 1].level.at;
-  const moving = { from: run[lo].from, to: run[hi].to };
-  const other = run[dir < 0 ? lo - 1 : hi + 1];
-  if (!other) return true;
+  const gap = dir < 0 ? lo - 1 : hi + 2;
+  if (gap >= 0 && gap <= run.length) moveToGap(view, run, lo, hi, gap);
+  return true;
+}
 
-  const [a, b] = dir < 0 ? [other, moving] : [moving, other]; // a is the earlier span
-  const gap = doc.sliceString(a.to, b.from);
-  const text = doc.sliceString(b.from, b.to) + gap + doc.sliceString(a.from, a.to);
-  const shift = (dir < 0 ? -1 : 1) * (other.to - other.from + gap.length);
+/** The unit holding the line at `lineFrom` and the run of siblings it sits in, as whole-line spans; null on a blank line. */
+export function siblingsAt(state: EditorState, lineFrom: number): { siblings: Span[]; at: number } | null {
+  return levelOf(blocksOf(state), lineFrom);
+}
+
+/**
+ * Move the siblings `run[lo..hi]` to gap `gap`: gap `k` lies before `run[k]`, and `run.length` is after the last. One transaction and one undo step; the text between neighbours (blank lines, a missing final newline) stays where it is, and a selection endpoint inside the moved text or inside what it passes moves with it. Returns false, changing nothing, for the unit's own gaps (`lo`, `hi + 1`).
+ */
+export function moveToGap(view: EditorView, run: readonly Span[], lo: number, hi: number, gap: number): boolean {
+  if (view.state.readOnly || gap < 0 || gap > run.length || (gap >= lo && gap <= hi + 1)) return false;
+  const { doc, selection } = view.state;
+  const moving = { from: run[lo].from, to: run[hi].to };
+  const passed = gap < lo ? { from: run[gap].from, to: run[lo - 1].to } : { from: run[hi + 1].from, to: run[gap - 1].to };
+  const [a, b] = gap < lo ? [passed, moving] : [moving, passed]; // a is the earlier span
+  const sep = doc.sliceString(a.to, b.from);
+  const aLen = a.to - a.from, bLen = b.to - b.from;
+  const at = (pos: number): number => pos <= a.to ? (pos >= a.from ? pos + bLen + sep.length : pos) : pos >= b.from ? (pos <= b.to ? pos - aLen - sep.length : pos) : pos + bLen - aLen;
   view.dispatch({
-    changes: { from: a.from, to: b.to, insert: text },
-    selection: EditorSelection.single(range.anchor + shift, range.head + shift),
+    changes: { from: a.from, to: b.to, insert: doc.sliceString(b.from, b.to) + sep + doc.sliceString(a.from, a.to) },
+    selection: EditorSelection.single(at(selection.main.anchor), at(selection.main.head)),
     userEvent: 'move.line',
     annotations: isolateHistory.of('full'),
     scrollIntoView: true,
@@ -442,16 +499,19 @@ function blockMoveKeymap(): Extension {
 
 // ── Line type ──────────────────────────────────────────────────────────────
 // Editing a line's type through its margin indicator. The indicator — a heading's
-// `##`, a quote's `>` — is real source
+// `##`, a quote's `>`, a paired fence's `:::`, which has no line type and no menu — is real source
 // drawn in the margin by cm-markdown-style.ts, and the caret never enters it, so
 // it is edited from the text start and by pointer:
 //
 //   Backspace (Ctrl-H on a Mac) at the start of the text
 //                                        removes ONE level (`###` -> `##` -> `#`
 //                                        -> paragraph; `> ` -> paragraph), one
-//                                        undo step each
+//                                        undo step each; on a paired `:::` fence
+//                                        it unwraps the block (both fences go,
+//                                        the body stays)
 //   ⌘Backspace at the start of the text  the one exception: every indicator goes
-//                                        at once and the line is a paragraph
+//                                        at once and the line is a paragraph (a
+//                                        fence unwraps its block, as Backspace does)
 //   click on the indicator               opens a menu: Heading 1-3, Paragraph,
 //                                        Quote; a pick rewrites the clicked
 //                                        indicator in one transaction (a heading
@@ -464,6 +524,16 @@ function blockMoveKeymap(): Extension {
 type LineType = { kind: 'heading'; level: number } | { kind: 'paragraph' } | { kind: 'quote' };
 
 const PARAGRAPH: LineType = { kind: 'paragraph' };
+
+/** A fence has no line type: retyping one would orphan its partner. */
+const isFence = (h: Hang): boolean => h.kind === 'fence-open' || h.kind === 'fence-close';
+
+/** A hung fence the partial parse has not paired: the key does nothing, since falling through would delete a colon or move one fence line. */
+const hungUnpairedFence = (state: EditorState, pos: number, tree = treeUpTo(state, state.doc.length)): boolean => {
+  if (tree.length >= state.doc.length || !hangsOnLine(state, pos).some(isFence)) return false;
+  const line = state.doc.lineAt(pos).from;
+  return !flattenBlocks(shortcodeBlocksIn(state, tree)).some((b) => b.from === line || state.doc.lineAt(b.closeFrom).from === line);
+};
 
 const prefixFor = (type: LineType): string =>
   type.kind === 'heading' ? '#'.repeat(type.level) + ' ' : type.kind === 'quote' ? '> ' : '';
@@ -492,6 +562,7 @@ const isType = (h: Hang, type: LineType): boolean =>
 export function setLineType(view: EditorView, lineFrom: number, type: LineType, target?: Hang): boolean {
   const { state } = view;
   const hangs = hangsOnLine(state, lineFrom);
+  if (hangs.some(isFence)) return false;
   const slot = target ?? (type.kind === 'paragraph' ? undefined : hangs.find((h) => h.kind === type.kind));
   if (slot && isType(slot, type)) return false;
   const insert = prefixFor(type);
@@ -511,6 +582,33 @@ export function setLineType(view: EditorView, lineFrom: number, type: LineType, 
   return true;
 }
 
+/**
+ * Remove a paired block's two fence lines and its own cell dividers, keeping the
+ * body, in one transaction: `+++` left behind would be a stray paragraph and `---`
+ * a rule. A nested block is body and stays whole. Returns false for a fence the
+ * pairing does not know.
+ */
+function unwrapBlock(view: EditorView, fence: Hang): boolean {
+  const { state } = view;
+  const { doc } = state;
+  const lineFrom = doc.lineAt(fence.from).from;
+  const tree = treeUpTo(state, doc.length);
+  const block = flattenBlocks(shortcodeBlocksIn(state, tree)).find((b) => b.from === lineFrom || doc.lineAt(b.closeFrom).from === lineFrom);
+  if (!block) return hungUnpairedFence(state, fence.from, tree);
+  const lines: { from: number; to: number }[] = [doc.lineAt(block.from), ...ownDividerLines(state, block), doc.lineAt(block.closeFrom)];
+  // Each line goes with its newline: the one after it, or the one before the last line of the document.
+  const specs: { from: number; to: number }[] = [];
+  for (const l of lines) {
+    const span = l.to < doc.length ? { from: l.from, to: l.to + 1 } : { from: Math.max(0, l.from - 1), to: l.to };
+    const prev = specs[specs.length - 1];
+    if (prev && span.from <= prev.to) prev.to = Math.max(prev.to, span.to);
+    else specs.push(span);
+  }
+  const changes = state.changes(specs);
+  view.dispatch({ changes, selection: state.selection.map(changes, 1), userEvent: 'delete.backward', annotations: isolateHistory.of('full'), scrollIntoView: true });
+  return true;
+}
+
 /** Backspace at the first character of a heading's or quote's text: one level off, never the whole marker at once. */
 function stepBackspace(view: EditorView): boolean {
   if (view.composing) return false;
@@ -518,6 +616,7 @@ function stepBackspace(view: EditorView): boolean {
   const r = state.selection.main; // one range: the editor never allows several (allowMultipleSelections is not set)
   const h = r.empty ? indicatorEndingAt(state, r.head) : null;
   if (!h) return false; // any other range: CM6's own Backspace
+  if (isFence(h)) return unwrapBlock(view, h);
   const change: ChangeSpec =
     h.kind === 'heading' && h.level > 1 ? { from: h.from, to: h.from + 1 }
     : h.kind === 'quote' ? { from: h.from + state.doc.sliceString(h.from, h.to).lastIndexOf('>'), to: h.to }
@@ -533,6 +632,7 @@ function removeIndicators(view: EditorView): boolean {
   const r = view.state.selection.main;
   const hangs = hangsOnLine(view.state, r.head);
   if (!r.empty || !hangs.length || hangs[hangs.length - 1].to !== r.head) return false;
+  if (isFence(hangs[hangs.length - 1])) return unwrapBlock(view, hangs[hangs.length - 1]);
   view.dispatch({ changes: { from: hangs[0].from, to: r.head }, userEvent: 'delete.line', annotations: isolateHistory.of('full'), scrollIntoView: true });
   return true;
 }
@@ -574,19 +674,30 @@ export function lineIndicatorExtension(): Extension {
       // The indicator sits outside the text, so CM6 would map a press on it to a
       // caret in the margin. Take the press instead: caret to the text start, menu
       // open on the indicator that was pressed. A read-only editor leaves it to CM6.
+      // A grip is taken by its drag gesture, which calls `press` when nothing was dragged.
       mousedown(event, view) {
-        const el = (event.target as Element | null)?.closest?.<HTMLElement>('.cm-hang[data-indicator]');
+        const el = (event.target as Element | null)?.closest?.<HTMLElement>('.cm-hang[data-indicator]:not([data-grip])');
         if (!el || event.button !== 0 || view.state.readOnly) return false;
-        const pos = view.posAtDOM(el);
-        const hangs = hangsOnLine(view.state, pos);
-        const h = hangs.find((x) => pos >= x.from && pos < x.to);
-        if (!h) return false;
         event.preventDefault();
-        view.dispatch({ selection: { anchor: hangs[hangs.length - 1].to } });
-        view.focus();
-        openIndicatorMenu(view, el, view.state.doc.lineAt(pos).from, h.kind);
+        pressIndicator(view, el);
         return true;
       },
     }),
+    gripDragExtension({
+      press: pressIndicator,
+      siblingsAt,
+      move: (view, siblings, at, gap) => { moveToGap(view, siblings, at, at, gap); },
+    }),
   ];
+}
+
+/** The caret goes to the text start of the pressed indicator's line and a heading's or quote's indicator opens the line-type menu; a fence's marker does nothing. */
+function pressIndicator(view: EditorView, el: HTMLElement): void {
+  const pos = view.posAtDOM(el);
+  const hangs = hangsOnLine(view.state, pos);
+  const h = hangs.find((x) => pos >= x.from && pos < x.to);
+  if (!h || isFence(h)) return;
+  view.dispatch({ selection: { anchor: hangs[hangs.length - 1].to } });
+  view.focus();
+  openIndicatorMenu(view, el, view.state.doc.lineAt(pos).from, h.kind);
 }

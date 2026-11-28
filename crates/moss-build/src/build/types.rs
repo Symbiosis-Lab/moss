@@ -7,11 +7,12 @@
 //! `crate::types` back-compat re-exports were removed 2026-08-12 (M5a landing 3).
 
 use serde::{Deserialize, Serialize};
+use moss_core::page::site_page::SitePage;
 use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+pub use crate::build::render::{DraftLinkOccurrence, ReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
@@ -31,12 +32,7 @@ pub struct EventFields {
 
 impl EventFields {
     pub fn from_frontmatter(fm: &moss_core::frontmatter_typed::FrontMatter) -> Option<Self> {
-        use moss_core::event::{check_end_after_start, EventTime};
-        let start_raw = fm.start.as_deref()?;
-        let start = EventTime::parse(start_raw).ok()?;
-        let end = fm.end.as_deref()
-            .filter(|end| check_end_after_start(start_raw, end).is_ok())
-            .and_then(|end| EventTime::parse(end).ok());
+        let moss_core::event::EventSpan { start, end } = moss_core::event::EventSpan::from_fields(fm.start.as_deref(), fm.end.as_deref())?;
         Some(Self {
             when: start.sort_key(),
             start,
@@ -47,30 +43,15 @@ impl EventFields {
             online: fm.online.clone(),
         })
     }
+
+    pub fn span(&self) -> moss_core::event::EventSpan {
+        moss_core::event::EventSpan { start: self.start, end: self.end }
+    }
 }
 
-/// The accent a folder's `color:` gives the pages under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SectionAccent {
-    /// The validated colour, as written (`#rgb` or `#rrggbb`).
-    pub color: String,
-    /// The same hue as a text colour on the default light page, `#rrggbb`.
-    pub text_light: String,
-    /// The same hue as a text colour on the default dark page, `#rrggbb`.
-    pub text_dark: String,
-    /// The coloured folder's own url path segment; empty for the site root.
-    pub segment: String,
-}
+pub use moss_core::page::card::SectionAccent;
 
-/// The count and picture a term's pseudo-folder card shows.
-#[derive(Debug, Clone, Default)]
-pub struct TermCard {
-    pub count: usize,
-    pub cover: Option<String>,
-    /// The term kind's `count` wording for the card's language; `None` keeps the
-    /// default. Set by `terms::set_term_cards`.
-    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
-}
+pub use moss_core::page::card::TermCardFacts;
 
 /// Parsed markdown document with frontmatter and content.
 ///
@@ -150,7 +131,7 @@ pub struct ParsedDocument {
     /// the first member in the term page's order. Set by `terms::set_term_cards`.
     #[serde(skip)]
     #[specta(skip)]
-    pub term_card: Option<TermCard>,
+    pub term_card: Option<TermCardFacts>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
@@ -496,7 +477,7 @@ pub struct ParsedDocument {
     /// limit on cross-ref. Skip-serialize so it never round-trips into stored frontmatter.
     #[serde(skip_serializing, default)]
     pub from_sidebar_alias: Option<bool>,
-    /// Series declaration: bool for weight-based, Vec<String> for explicit wikilink order
+    /// Series declaration: bool turns the folder's series on or off, Vec<String> declares the order
     pub series: Option<SeriesField>,
     /// Override site-wide breadcrumb setting
     pub breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
@@ -606,7 +587,7 @@ pub struct ParsedDocument {
     /// the first of these a platform can use as-is.
     #[serde(skip)]
     #[specta(skip)]
-    pub body_cover_candidates: Vec<String>,
+    pub body_cover_candidates: Vec<crate::build::page::cover::BodyPicture>,
     /// The `# Heading` the body opens with when its text is not the title: a
     /// case study's question over its name. A card for the page headlines it.
     #[serde(skip)]
@@ -754,9 +735,9 @@ pub struct ParsedDocument {
     /// Scan-time axis inference over the folder's DIRECT children only
     /// (not flattened descendants). Renderers must NOT read this field
     /// directly — use [`ParsedDocument::resolve_for_direct_children`]
-    /// (cache hit) or [`ParsedDocument::resolve_for_flatten`]
-    /// (re-computes on the flattened scope) to get the right value for
-    /// what's about to be iterated.
+    /// (cache hit) or `moss_core::sort::resolve_folder_sort` (re-computes on
+    /// the flattened scope) to get the right value for what's about to be
+    /// iterated.
     ///
     /// Populated by `build::scan::sort_inference::populate_direct_children_sorts`.
     pub(crate) direct_children_sort: Option<moss_core::sort::ResolvedSort>,
@@ -816,14 +797,14 @@ pub struct ParsedDocument {
     /// Missing references with physical source evidence; not serialized.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
+    pub missing_reference_occurrences: Vec<ReferenceOccurrence>,
+    /// Pictures from other sites, with the same evidence; not serialized.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub remote_picture_occurrences: Vec<ReferenceOccurrence>,
 }
 
-/// Whether `folder` is `root` or a folder inside it. The one test for "at or
-/// under a passthrough root", shared by the listing plan and the breadcrumb.
-pub fn folder_within(root: &str, folder: &str) -> bool {
-    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
-}
+pub use moss_core::resolve::folder_within;
 
 /// Addresses of a page's copies on other sites, from its frontmatter
 /// `syndicated:` value (a list, or one string).
@@ -901,44 +882,6 @@ impl ParsedDocument {
         }
     }
 
-    /// Cache hit: return the scan-time inference over the folder's direct
-    /// children. Use this when the renderer iterates direct children
-    /// (`children_depth: direct`, or folder index with shallow listing,
-    /// or series-nav over direct-sibling pages).
-    ///
-    /// Fallback axis is `Date` (matches the default-when-uncertain
-    /// elsewhere in this module). This fallback is reached in two
-    /// situations:
-    ///
-    /// 1. Test paths that construct `ParsedDocument` by hand without
-    ///    seeding the cache.
-    /// 2. Production lookup paths where `sort_source_doc` resolves to a
-    ///    synthetic auto-index folder — those are constructed inline in
-    ///    `render/blocking.rs` (around line 1084) AFTER
-    ///    `populate_direct_children_sorts` has run, so their cache is
-    ///    intentionally `None`. The dedicated auto-index render loop
-    ///    (`render/blocking.rs:1331+`) calls `generate_children` with
-    ///    `parent_sort_axis: None` for the same reason, and this
-    ///    helper's Date fallback matches that convention.
-    ///
-    /// If a caller needs a different fallback (e.g. series-chrome
-    /// historically wanted Title), it must set up the cache explicitly.
-    pub fn resolve_for_direct_children(&self) -> moss_core::sort::ResolvedSort {
-        self.direct_children_sort.clone().unwrap_or(moss_core::sort::ResolvedSort {
-            axis: moss_core::sort::SortAxis::Date,
-            explicit_order: None,
-            series_default: false,
-        })
-    }
-
-    /// Re-compute axis on a flattened render scope. Use this when the
-    /// renderer flattens descendants (`children_depth: all`): the scan
-    /// cache only reflects direct-children inference and misrepresents
-    /// the corpus the reader sees.
-    pub fn resolve_for_flatten(&self, scope: &[&ParsedDocument]) -> moss_core::sort::ResolvedSort {
-        moss_core::sort::resolve_folder_sort(self, scope)
-    }
-
     /// The picture listings show for this page: its `cover:`, or else its own
     /// first picture. The page body and the folder cover row read `cover`
     /// itself, so an inferred picture is never drawn twice on its own page.
@@ -971,29 +914,10 @@ impl ParsedDocument {
         self.is_listable_in("")
     }
 
-    /// Whether a listing of the folder `folder` (`a/b/`, URL space; `""` for
-    /// the root) may show this document. False when **any** exclusion fires:
-    ///
-    /// 1. `draft == Some(true)` — rendered for the preview, never published.
-    /// 2. `listed == Some(false)` — a finished page curated *off-feed*, still
-    ///    a public page (see `is_public_page`).
-    /// 3. `search_engines == Some(false)` — a page reached only by its link.
-    /// 4. `slot_only == true` — layout chrome (e.g. `footer.md`) or a partial.
-    /// 5. `is_not_found_page()` — the site's `404.md`.
-    /// 6. The page sits in a hidden folder ([`Self::hidden_home`]) that
-    ///    `folder` is outside of.
-    ///
-    /// All list-emitting sites call this helper so any future visibility flag
-    /// is added in one place.
-    pub fn is_listable_in(&self, folder: &str) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && self.search_engines != Some(false)
-            && !self.slot_only && !self.is_not_found_page() && self.reaches(folder)
-    }
-
-    /// Whether a listing of `folder` may name this page at all: false only for
-    /// a page in a hidden folder that `folder` is outside of.
-    pub fn reaches(&self, folder: &str) -> bool {
-        self.hidden_home.as_deref().is_none_or(|home| folder.starts_with(home))
+    /// The source path with `/` separators, which every comparison and split
+    /// of it expects. `None` for a generated page.
+    pub fn source_path_slashed(&self) -> Option<String> {
+        self.source_path.as_deref().map(moss_core::slug::normalize_separators)
     }
 
     /// An authored `partial: true` file that is not a draft. Read from the
@@ -1003,28 +927,6 @@ impl ParsedDocument {
         self.slot_only
             && self.draft != Some(true)
             && self.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
-    }
-
-    /// A partial that says `listed: true`: a row in its own folder's listings
-    /// with no page behind it. Only folder listings take it; every surface
-    /// that needs an address (feeds, sitemap, search, prev/next, the "N pages"
-    /// count) keeps to [`Self::is_listable`].
-    pub fn is_pageless_entry(&self) -> bool {
-        self.is_partial() && self.listed == Some(true)
-    }
-
-    /// The site's `404.md`: the page a host shows for an unknown address. It
-    /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
-    /// the site's content, so no listing surface carries it.
-    pub fn is_not_found_page(&self) -> bool {
-        self.url_path == crate::build::served_path::NOT_FOUND_PAGE
-    }
-
-    /// The page names a `start` that moss could not read as a date, an empty
-    /// one included: an event still waiting for its date. It is in no
-    /// calendar file and in neither the past nor the upcoming listing.
-    pub fn awaits_event_date(&self) -> bool {
-        self.event.is_none() && self.raw_frontmatter.contains_key("start")
     }
 
     /// Whether this is a real reader-facing page, eligible for an og/twitter
@@ -1064,15 +966,11 @@ impl ParsedDocument {
 /// folder pages generated after. The site root is not such a home: the whole
 /// site's switch is `[site] search_engines`.
 pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
-    let homes: Vec<String> = docs.iter()
-        .filter(|doc| doc.kind == moss_core::PageKind::Folder && doc.search_engines == Some(false))
-        .filter_map(|doc| doc.url_path.strip_suffix("/index.html").map(|dir| format!("{dir}/")))
-        .collect();
-    for doc in docs.iter_mut() {
-        doc.hidden_home = homes.iter()
-            .filter(|home| doc.url_path.strip_prefix(home.as_str()).is_some_and(|rest| rest != "index.html"))
-            .max_by_key(|home| home.len())
-            .cloned();
+    let homes = moss_core::page::inherit::hidden_homes(
+        docs.iter().map(|d| (d.url_path.as_str(), d.kind == moss_core::PageKind::Folder && d.search_engines == Some(false))),
+    );
+    for (doc, home) in docs.iter_mut().zip(homes) {
+        doc.hidden_home = home;
     }
 }
 
@@ -1097,9 +995,9 @@ pub struct PageFeatures {
     /// places, nested ones included. Sorted, so each loads once.
     pub block_assets: std::collections::BTreeSet<crate::plugins::contributions::blocks::BlockAsset>,
     /// True if the page contains a `:::subscribe` inline shortcode block.
-    /// When any page in a build has this set, the email feature pass injects
-    /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
-    /// configured.
+    /// When any page in a build has this set, the subscribe form's CSS and reader
+    /// check ship even without `[channels.email]` (the email feature pass), and so
+    /// does `forms.js` (`SiteAssets::subscribe`).
     pub inline_subscribe: bool,
     /// True if the page contains an Obsidian-style callout (`> [!note]`),
     /// nested ones included. Gates the `callouts` stylesheet partial via
@@ -1121,10 +1019,6 @@ pub struct PageFeatures {
     /// `children_motion` is read from the document itself. Gates `marquee.js`
     /// via [`SiteAssets`].
     pub marquee: bool,
-    /// True if the page's hero is drawn from an event that has not ended, so
-    /// it must step aside at view time. Gates `hero-ends.js` via
-    /// [`SiteAssets`]. Set when the hero is drawn, after parsing.
-    pub hero_ends: bool,
     /// True if the page may have a picture the full-screen viewer opens: a
     /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
     /// decides which pictures actually open. Gates the viewer via
@@ -1156,8 +1050,6 @@ impl PageFeatures {
             footnotes,
             scroll_rows,
             marquee,
-            // The page's hero is not part of the body a listing draws.
-            hero_ends: _,
             viewer,
             field_places,
             diagrams,
@@ -1207,6 +1099,9 @@ impl PageFeatures {
 pub struct SiteAssets {
     /// Any page has a `:::form`. Gates the `forms` stylesheet partial and `forms.js`.
     pub forms: bool,
+    /// A subscribe form can be on a page: the email channel is installed or a
+    /// page has `:::subscribe`. Gates `forms.js`, which binds it.
+    pub subscribe: bool,
     /// Any page has a callout block.
     pub callouts: bool,
     /// Any page defines a footnote. Gates the sidenote runtime script — the
@@ -1218,8 +1113,9 @@ pub struct SiteAssets {
     pub scroll_rows: bool,
     /// Any page has a picture strip that slides sideways. Gates `marquee.js`.
     pub marquee: bool,
-    /// Any page's hero is drawn from an event. Gates `hero-ends.js`.
-    pub hero_ends: bool,
+    /// Some event has not ended at the build, so a hero, meta line, card or
+    /// row may turn past in the browser. Gates `event-ends.js`.
+    pub event_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// Click-to-copy section permalinks. Absent `[site].heading_anchors` means
@@ -1295,21 +1191,25 @@ impl SiteAssets {
     /// compile, and the failure mode is shipping `math-copy.js` on the flag
     /// that was meant to gate the search overlay. `callouts` and `vertical`
     /// are ignored — this function derives them from `pages` — so
-    /// `..SiteAssets::default()` is the idiomatic tail.
+    /// `..SiteAssets::default()` is the idiomatic tail. `subscribe` goes in as
+    /// "the email channel is installed" and comes out as "a subscribe form can
+    /// be on a page", through `features::should_inject_subscribe_assets`.
     pub fn of(
         pages: &[ParsedDocument],
         site_typesetting: Option<&str>,
+        now: chrono::NaiveDateTime,
         from_config: Self,
     ) -> Self {
         // One pass, no per-page clone: `PageFeatures` is a handful of bools,
         // and this runs once per build over every page in the site.
         let mut out = Self {
             forms: false,
+            subscribe: crate::build::features::should_inject_subscribe_assets(pages, from_config.subscribe),
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
             marquee: false,
-            hero_ends: false,
+            event_ends: false,
             viewer: false,
             field_places: false,
             diagrams: false,
@@ -1327,7 +1227,7 @@ impl SiteAssets {
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
             out.marquee |= page.features.marquee || page.children_motion.is_some();
-            out.hero_ends |= page.features.hero_ends;
+            out.event_ends |= crate::build::folder_embed::upcoming::is_upcoming(page, now);
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
             out.stream |= page.features.stream || page.declared.contains_key(moss_core::fields::IN_REPLY_TO);
@@ -1364,6 +1264,62 @@ impl SourceMetadata {
     }
 }
 
+impl moss_core::page::site_page::SitePage for ParsedDocument {
+    fn title(&self) -> &str { &self.title }
+    fn layout(&self) -> Option<&str> { self.layout.as_deref() }
+    fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
+    fn draft(&self) -> Option<bool> { self.draft }
+    fn listed(&self) -> Option<bool> { self.listed }
+    fn search_engines(&self) -> Option<bool> { self.search_engines }
+    fn slot_only(&self) -> bool { self.slot_only }
+    fn hidden_home(&self) -> Option<&str> { self.hidden_home.as_deref() }
+    fn direct_children_sort(&self) -> Option<&moss_core::sort::ResolvedSort> { self.direct_children_sort.as_ref() }
+    fn source_path(&self) -> Option<&str> { self.source_path.as_deref() }
+    fn lang(&self) -> crate::i18n::Language { self.lang }
+    fn edition(&self) -> &str { &self.edition }
+    fn is_root_level(&self) -> bool { self.is_root_level }
+    fn partial(&self) -> bool { self.is_partial() }
+    fn nav(&self) -> Option<bool> { self.nav }
+    fn nav_label(&self) -> Option<&str> { self.nav_label.as_deref() }
+    fn nav_link(&self) -> Option<&str> { crate::build::scan::page_map::nav_external_href(&self.raw_frontmatter) }
+    fn breadcrumb(&self) -> Option<moss_core::frontmatter_typed::BreadcrumbSetting> { self.breadcrumb }
+    fn translates_home(&self) -> bool { self.translations.iter().any(|t| t.url_path == "index.html") }
+    fn passthrough_root(&self) -> Option<&str> { self.passthrough_root.as_deref() }
+    fn also_in(&self) -> &[String] { self.also_in.as_deref().unwrap_or_default() }
+    fn translation_urls(&self) -> impl Iterator<Item = &str> { self.translations.iter().map(|t| t.url_path.as_str()) }
+    fn children_source(&self) -> Option<&str> { self.children_source.as_deref() }
+    fn children_depth(&self) -> Option<&str> { self.children_depth.as_deref() }
+    fn children_listed(&self) -> Option<&str> { self.children_listed.as_deref() }
+    fn term_listing(&self) -> Option<&str> { self.term_listing.as_deref() }
+    fn children_style(&self) -> Option<&moss_core::Resolved<String>> { self.children_style.as_ref() }
+    fn children_group(&self) -> Option<&moss_core::Resolved<String>> { self.children_group.as_ref() }
+    fn children_covers(&self) -> Option<&str> { self.children_covers.as_deref() }
+    fn children_when(&self) -> Option<&str> { self.children_when.as_deref() }
+    fn children_limit(&self) -> Option<u32> { self.children_limit }
+    fn term_values(&self, field: &str) -> Vec<String> { crate::build::terms::field_names(self, field) }
+    fn term_claim(&self, field: &str) -> Option<String> {
+        crate::build::terms::term_claim_of(self, field).map(|claim| claim.name(&self.title).to_string())
+    }
+    fn children_off(&self) -> bool { self.children == Some(false) }
+    fn event_span(&self) -> Option<moss_core::event::EventSpan> { self.event.as_ref().map(|e| moss_core::event::EventSpan { start: e.start, end: e.end }) }
+    fn awaits_event_date(&self) -> bool { self.event.is_none() && self.raw_frontmatter.contains_key("start") }
+    fn card_facts(&self) -> std::borrow::Cow<'_, moss_core::page::card::CardFacts> {
+        let str_field = |key: &str| self.raw_frontmatter.get(key).and_then(|v| v.as_str());
+        std::borrow::Cow::Owned(moss_core::page::card::CardFacts {
+            posted_date: self.date.clone(),
+            text: crate::build::components::child_list::explicit_card_text(self),
+            cover: self.cover.clone(),
+            cover_type: self.cover_type.clone(),
+            outlet: moss_core::page::card::outlet_href(str_field("external_url"), self.is_pageless_entry()),
+            kicker: str_field("publisher").filter(|s| !s.is_empty()).map(str::to_string),
+            location: self.location.clone(),
+            tickets: self.event.as_ref().and_then(|e| e.tickets.clone()),
+            online: self.event.as_ref().and_then(|e| e.online.clone()),
+            subtitle: crate::build::components::child_list::card_subtitle(self),
+        })
+    }
+}
+
 impl moss_core::sort::SortableDoc for ParsedDocument {
     fn url_path(&self) -> &str { &self.url_path }
     /// The page's one "when": its event `start` if it has one, else its `date`.
@@ -1391,22 +1347,7 @@ impl moss_core::sort::SortableDoc for ParsedDocument {
     /// is unavailable (a hand-built test document, say), and to
     /// `clean_stem` after that, same as before.
     fn order_match_name(&self) -> &str {
-        if self.is_folder_index() {
-            self.source_path
-                .as_deref()
-                .and_then(|p| p.rsplit('/').nth(1))
-                .or_else(|| {
-                    self.url_path
-                        .trim_end_matches("index.html")
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                })
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&self.clean_stem)
-        } else {
-            &self.clean_stem
-        }
+        moss_core::sort::order_match_name(self.is_folder_index(), self.source_path.as_deref(), &self.url_path, &self.clean_stem)
     }
 }
 
@@ -1511,6 +1452,33 @@ mod tests {
     /// never hit this, since its clean_stem already happened to equal
     /// "appendix"). `appendix` must keep its declared first position.
     #[test]
+    fn page_facts_sort_as_the_documents_they_come_from() {
+        let folder = ParsedDocument {
+            url_path: "trips/京都-鎌倉/index.html".to_string(),
+            source_path: Some("trips/京都・鎌倉/index.md".to_string()),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let page = ParsedDocument {
+            url_path: "trips/osaka.html".to_string(),
+            clean_stem: "osaka".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let resolved = moss_core::sort::ResolvedSort {
+            axis: moss_core::sort::SortAxis::Title,
+            explicit_order: Some(vec!["京都・鎌倉".to_string(), "osaka".to_string()]),
+        };
+        let docs: Vec<&ParsedDocument> = vec![&page, &folder];
+        let facts: Vec<moss_core::page::site_page::PageFacts> = docs.iter().map(|d| moss_core::page::site_page::PageFacts::from_page(*d)).collect();
+        let by_docs: Vec<&str> = moss_core::sort::sort_by_resolved(&docs, &resolved).iter().map(|d| d.url_path.as_str()).collect();
+        let by_facts: Vec<&str> = moss_core::sort::sort_by_resolved(&facts.iter().collect::<Vec<_>>(), &resolved).iter().map(|f| f.url_path.as_str()).collect();
+        assert_eq!(by_docs, ["trips/京都-鎌倉/index.html", "trips/osaka.html"]);
+        assert_eq!(by_facts, by_docs);
+    }
+
+    #[test]
     fn explicit_order_keeps_a_subfolder_in_its_declared_position() {
         let intro = ParsedDocument {
             url_path: "journal/intro.html".to_string(),
@@ -1547,7 +1515,6 @@ mod tests {
         let resolved = moss_core::sort::ResolvedSort {
             axis: moss_core::sort::SortAxis::Title,
             explicit_order: Some(vec!["appendix".to_string(), "intro".to_string()]),
-            series_default: true,
         };
         let docs: Vec<&ParsedDocument> = vec![&intro, &appendix, &closing];
         let sorted = moss_core::sort::sort_by_resolved(&docs, &resolved);
@@ -1623,10 +1590,10 @@ mod tests {
         };
         let without = ParsedDocument::default();
 
-        let assets = SiteAssets::of(&[without.clone(), with_footnote], None, SiteAssets::default());
+        let assets = SiteAssets::of(&[without.clone(), with_footnote], None, chrono::NaiveDateTime::default(), SiteAssets::default());
         assert!(assets.has_footnotes, "one footnote page must set the flag");
 
-        let none = SiteAssets::of(&[without], None, SiteAssets::default());
+        let none = SiteAssets::of(&[without], None, chrono::NaiveDateTime::default(), SiteAssets::default());
         assert!(!none.has_footnotes, "no footnote page must leave it clear");
     }
 

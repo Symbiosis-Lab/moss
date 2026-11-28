@@ -119,7 +119,7 @@ fn home_breadcrumb_globals_is_one_global_key_not_per_language() {
 
 #[test]
 fn home_breadcrumb_globals_ignores_a_non_root_homes_own_field() {
-    // Only the LITERAL root `index.html` is read — `compute_breadcrumb_segments`
+    // Only the LITERAL root `index.html` is read — `breadcrumb_segments`
     // never consults a per-language home's own `breadcrumb:` field (see the
     // function's doc comment), so this must not move the digest.
     let mut root = doc("index.html", PageKind::Folder);

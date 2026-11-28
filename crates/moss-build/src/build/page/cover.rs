@@ -52,6 +52,7 @@
 
 use crate::build::served_path::ServedPath;
 use crate::build::page::meta::CoverRef;
+pub use moss_core::page::card_pictures::BodyPicture;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -63,7 +64,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 /// size-capped deploy raster `copy_deferred_assets` lands at the source's own
 /// filename — never the author's original bytes. moss probes no cover, so it
 /// emits `og:image:width`/`:height` only for the auto-generated 1200×630 card
-/// and enforces no dimension floor of its own. The floor therefore lives
+/// and for a scanned cover, at the served raster's size ([`served_dims`]), and
+/// enforces no dimension floor of its own. The floor therefore lives
 /// entirely in the cap that sizes that raster, and this is where it is
 /// written down.
 ///
@@ -86,6 +88,16 @@ const _: () = assert!(
     "the raster og:image fallback's long-edge cap dropped below the floor at \
      which a 2:1 cover still clears the 300x157 social-card minimum"
 );
+
+/// The alt text of the body picture `cover` is, when it has one. A share
+/// image is described by what the author wrote for the picture; a cover
+/// that is not in the body (or a picture with no alt) has none.
+pub fn cover_alt<'a>(cover: &CoverRef, pictures: &'a [BodyPicture]) -> Option<&'a str> {
+    pictures.iter()
+        .filter(|p| !p.alt.trim().is_empty())
+        .find(|p| cover_from_frontmatter(Some(&p.href)).as_ref() == Some(cover))
+        .map(|p| p.alt.trim())
+}
 
 /// Inputs to the cover-image resolver.
 pub struct CoverChainInputs<'a> {
@@ -125,61 +137,18 @@ pub fn resolve_cover_chain(inputs: &CoverChainInputs) -> Option<CoverRef> {
 /// reaches the plate card; a row of tall slices or a small icon ahead of a
 /// real photograph no longer decides the share image.
 pub fn pick_body_cover<'a>(
-    candidates: &'a [String],
+    candidates: &'a [BodyPicture],
     first: Option<&'a str>,
     images: &[crate::types::content::MediaMetadata],
     dir_overrides: &HashMap<String, String>,
+    share_cover: ShareCover,
 ) -> Option<&'a str> {
-    let as_is = |raw: &&String| {
-        let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(raw)) else { return false };
+    let as_is = |picture: &&BodyPicture| {
+        let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(&picture.href)) else { return false };
         scanned_dims(images, &CoverRef::Local(sp), dir_overrides)
-            .is_some_and(|(w, h)| !needs_plate(w, h) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
+            .is_some_and(|(w, h)| !needs_plate(w, h, share_cover) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
     };
-    candidates.iter().find(as_is).map(String::as_str).or(first)
-}
-
-/// Whether a path names a raster picture. The share image and the listing card
-/// both take only these: most share targets cannot show a vector, and a card
-/// crops a picture, not a drawing or a video.
-pub fn is_raster_picture(path: &str) -> bool {
-    let bare = path.split(['#', '?']).next().unwrap_or("");
-    let ext = bare.rsplit('/').next().and_then(|f| f.rsplit_once('.')).map_or("", |(_, e)| e);
-    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif")
-}
-
-/// A page's own first picture as a listing-card source path, or `None`.
-/// Remote, `data:`, vector and video pictures make poor cards, so they are not taken.
-pub fn card_cover_from_page(hero_image_url: Option<&str>, body_cover_path: Option<&str>) -> Option<String> {
-    [hero_image_url, body_cover_path].into_iter().flatten().find_map(card_picture_path)
-}
-
-/// One picture reference as a listing-card source path, or `None` when a card
-/// cannot use it ([`card_cover_from_page`]).
-fn card_picture_path(raw: &str) -> Option<String> {
-    let (path, _attrs) = moss_core::media::split_pipe(raw);
-    let local = !(path.starts_with("http://") || path.starts_with("https://") || path.starts_with("//") || path.starts_with("data:"));
-    (local && is_raster_picture(path)).then(|| {
-        let decoded = urlencoding::decode(path).map(|d| d.into_owned()).unwrap_or_else(|_| path.to_string());
-        decoded.trim_start_matches('/').to_string()
-    })
-}
-
-/// The pictures after the listing cover that a strip of `n` draws, in reading
-/// order: the hero picture, then the body's raster pictures, none repeating the
-/// cover or each other. Empty when the page has no listing cover (a page that
-/// opted out with `cover: false` stays out).
-pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Option<&str>, body_images: &[String], n: usize) -> Vec<String> {
-    let Some(cover) = listing_cover else { return Vec::new() };
-    let mut taken = vec![card_picture_path(cover).unwrap_or_else(|| cover.to_string())];
-    for path in hero_image_url.into_iter().chain(body_images.iter().map(String::as_str)).filter_map(card_picture_path) {
-        if taken.len() >= n {
-            break;
-        }
-        if !taken.contains(&path) {
-            taken.push(path);
-        }
-    }
-    taken.split_off(1)
+    candidates.iter().find(as_is).map(|p| p.href.as_str()).or(first)
 }
 
 /// Resolve a frontmatter cover string to CoverRef. External http(s) URLs
@@ -190,6 +159,16 @@ pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Op
 /// because data-URIs are an opaque inline-payload scheme — they pass
 /// `ServedPath`'s structural rules (no `/`, no `..`, no reserved-prefix) but
 /// aren't valid as a served asset URL.
+/// A local cover as a picture every browser and crawler can draw: a HEIF,
+/// which only Safari draws, by its base webp encode, the one that exists
+/// whenever any encode of it does.
+fn drawable(path: &str) -> std::borrow::Cow<'_, str> {
+    match path.rsplit_once('.') {
+        Some((_, ext)) if moss_core::asset_paths::is_heif_source_ext(ext) => moss_core::asset_paths::to_webp(path).into(),
+        _ => path.into(),
+    }
+}
+
 fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
     let raw = s?;
     if raw.is_empty() {
@@ -223,6 +202,7 @@ fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
     let raw = moss_core::asset_paths::to_thumb_if_video(raw)
         .map(std::borrow::Cow::Owned)
         .unwrap_or(std::borrow::Cow::Borrowed(raw));
+    let raw = drawable(&raw);
     let stripped = raw.trim_start_matches('/');
     // `raw` arrives already percent-encoded (it is `PathResolver::resolve_url`
     // output), and `ServedPath::from_source` lowercases directory segments —
@@ -344,7 +324,7 @@ pub fn share_cover_url<F: Fn(&str) -> String>(
     if let Some(raw) = hero_image_url.filter(|s| !s.is_empty()) {
         let (path, _attrs) = moss_core::media::split_pipe(raw);
         if is_same_origin_url(path) && detect_cover_type(path, None) == CoverType::Image {
-            return Some(path.to_string());
+            return Some(drawable(path).into_owned());
         }
     }
 
@@ -355,7 +335,7 @@ pub fn share_cover_url<F: Fn(&str) -> String>(
         return None;
     }
     let url = resolve_cover(path);
-    is_same_origin_url(&url).then_some(url)
+    is_same_origin_url(&url).then(|| drawable(&url).into_owned())
 }
 
 /// The `data-share-cover` attribute for a page, or an empty string when the
@@ -474,6 +454,17 @@ mod tests {
             CoverRef::Local(sp) => assert_eq!(sp.as_str(), "images/page.jpg"),
             other => panic!("expected the path unchanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_heic_cover_or_hero_is_shared_as_its_webp_encode() {
+        let root = std::path::PathBuf::from("/tmp");
+        let mut inputs = empty_inputs(&root);
+        inputs.page_cover = Some("/notes/IMG_1.HEIC");
+        assert!(matches!(resolve_cover_chain(&inputs), Some(CoverRef::Local(sp)) if sp.as_str() == "notes/IMG_1.HEIC.webp"));
+        inputs.page_cover = None;
+        inputs.page_hero_image_url = Some("/notes/IMG_2.heic");
+        assert!(matches!(resolve_cover_chain(&inputs), Some(CoverRef::Local(sp)) if sp.as_str() == "notes/IMG_2.heic.webp"));
     }
 
     #[test]
@@ -684,6 +675,12 @@ mod tests {
     }
 
     #[test]
+    fn a_heic_share_cover_is_its_webp_encode() {
+        assert_eq!(share_cover_url(Some("/notes/IMG_1.HEIC"), None, None, resolve).as_deref(), Some("/notes/IMG_1.HEIC.webp"));
+        assert_eq!(share_cover_url(None, Some("notes/IMG_2.heic"), None, resolve).as_deref(), Some("/notes/IMG_2.heic.webp"));
+    }
+
+    #[test]
     fn share_cover_prefers_the_page_hero_image() {
         assert_eq!(
             share_cover_url(Some("/posts/a/assets/hero.jpg"), Some("other.png"), None, resolve),
@@ -835,9 +832,58 @@ mod tests {
 pub const PASSTHROUGH_MIN_AR: f32 = 1.25;
 pub const PASSTHROUGH_MAX_AR: f32 = 2.4;
 
-/// Is this cover's shape one a platform's centre crop would gut?
-pub fn needs_plate(width: u32, height: u32) -> bool {
-    if width == 0 || height == 0 {
+/// `[site].share_cover`: whether a cover outside the passthrough band is
+/// shared as itself or drawn into the generated card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShareCover {
+    #[default]
+    Auto,
+    AsIs,
+}
+
+impl ShareCover {
+    /// An unknown value is an error, not a fallback: a site that asked for its
+    /// poster to be shared as it is must not quietly get the card.
+    pub fn from_config(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("auto") => Ok(Self::Auto),
+            Some("as-is") => Ok(Self::AsIs),
+            Some(other) => Err(format!("[site].share_cover must be \"auto\" or \"as-is\", not \"{other}\"")),
+        }
+    }
+}
+
+/// The size a scanned cover is served at: a re-encoded raster caps the long
+/// edge at [`crate::build::media::fallback_raster::FALLBACK_MAX_EDGE`] and never
+/// upscales; any other format is served at its source size.
+pub fn served_dims(path: &str, (w, h): (u32, u32)) -> (u32, u32) {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let cap = crate::build::media::fallback_raster::FALLBACK_MAX_EDGE;
+    let long = w.max(h);
+    if !crate::build::media::fallback_raster::is_resized_raster(&ext) || long <= cap {
+        return (w, h);
+    }
+    let scale = |edge: u32| ((u64::from(edge) * u64::from(cap) + u64::from(long) / 2) / u64::from(long)).max(1) as u32;
+    (scale(w), scale(h))
+}
+
+/// `og:image:width`/`:height` for a local cover: the served file's size.
+pub fn served_cover_dims(
+    images: &[crate::types::content::MediaMetadata],
+    cover: &CoverRef,
+    dir_overrides: &std::collections::HashMap<String, String>,
+) -> Option<(u32, u32)> {
+    match cover {
+        CoverRef::External(_) => None,
+        CoverRef::Local(sp) => scanned_cover(images, &sp.to_relative_url(), dir_overrides)
+            .map(|(meta, d)| served_dims(&meta.path, d)),
+    }
+}
+
+/// Is this cover's shape one a platform's centre crop would gut? Under
+/// [`ShareCover::AsIs`] no shape is.
+pub fn needs_plate(width: u32, height: u32, share_cover: ShareCover) -> bool {
+    if share_cover == ShareCover::AsIs || width == 0 || height == 0 {
         return false;
     }
     let ar = width as f32 / height as f32;
@@ -899,12 +945,13 @@ pub fn plate_source(
     cover: &CoverRef,
     dir_overrides: &std::collections::HashMap<String, String>,
     source_root: &Path,
+    share_cover: ShareCover,
 ) -> Option<PlateSource> {
     let CoverRef::Local(sp) = cover else {
         return None;
     };
     let (meta, (width, height)) = scanned_cover(images, &sp.to_relative_url(), dir_overrides)?;
-    if !needs_plate(width, height) {
+    if !needs_plate(width, height, share_cover) {
         return None;
     }
     use sha2::{Digest, Sha256};
@@ -974,15 +1021,40 @@ mod plate_tests {
     /// scroll, a handscroll and a square seal do not.
     #[test]
     fn only_shapes_a_centre_crop_would_gut_become_plates() {
-        assert!(!needs_plate(1200, 630), "1.91:1, the shape the slots were drawn for");
-        assert!(!needs_plate(1920, 1080), "16:9");
-        assert!(!needs_plate(2000, 1500), "4:3");
-        assert!(needs_plate(2290, 4000), "a hanging scroll");
-        assert!(needs_plate(3400, 447), "a handscroll");
-        assert!(needs_plate(480, 480), "a square seal");
-        assert!(needs_plate(1080, 1350), "a portrait photograph");
+        assert!(!needs_plate(1200, 630, ShareCover::Auto), "1.91:1, the shape the slots were drawn for");
+        assert!(!needs_plate(1920, 1080, ShareCover::Auto), "16:9");
+        assert!(!needs_plate(2000, 1500, ShareCover::Auto), "4:3");
+        assert!(needs_plate(2290, 4000, ShareCover::Auto), "a hanging scroll");
+        assert!(needs_plate(3400, 447, ShareCover::Auto), "a handscroll");
+        assert!(needs_plate(480, 480, ShareCover::Auto), "a square seal");
+        assert!(needs_plate(1080, 1350, ShareCover::Auto), "a portrait photograph");
         // Nothing to divide by, and nothing to decide.
-        assert!(!needs_plate(0, 100));
+        assert!(!needs_plate(0, 100, ShareCover::Auto));
+    }
+
+    #[test]
+    fn as_is_needs_no_plate_for_any_shape() {
+        for (w, h) in [(2290, 4000), (3400, 447), (480, 480), (1080, 1350)] {
+            assert!(!needs_plate(w, h, ShareCover::AsIs), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn share_cover_names_two_values_and_refuses_the_rest() {
+        assert_eq!(ShareCover::from_config(None), Ok(ShareCover::Auto));
+        assert_eq!(ShareCover::from_config(Some("auto")), Ok(ShareCover::Auto));
+        assert_eq!(ShareCover::from_config(Some("as-is")), Ok(ShareCover::AsIs));
+        assert!(ShareCover::from_config(Some("asis")).unwrap_err().contains("share_cover"));
+    }
+
+    #[test]
+    fn served_dims_follow_the_served_file() {
+        assert_eq!(served_dims("a.jpg", (900, 1200)), (900, 1200), "at the cap, as scanned");
+        assert_eq!(served_dims("a.JPG", (1080, 1350)), (960, 1200));
+        assert_eq!(served_dims("a.png", (2000, 1145)), (1200, 687));
+        assert_eq!(served_dims("a.jpeg", (3400, 447)), (1200, 158));
+        assert_eq!(served_dims("a.webp", (2000, 1145)), (2000, 1145), "webp is served verbatim");
+        assert_eq!(served_dims("a.gif", (1600, 2000)), (1600, 2000));
     }
 
     /// An SVG cover has a scanned size (its layout box) but is neither drawn
@@ -993,8 +1065,8 @@ mod plate_tests {
         std::fs::write(dir.path().join("mark.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>"#).unwrap();
         let images = vec![scanned("mark.svg", (800, 800))];
         let cover = CoverRef::Local(crate::build::served_path::ServedPath::from_source("mark.svg").unwrap());
-        assert!(needs_plate(800, 800));
-        assert!(plate_source(&images, &cover, &std::collections::HashMap::new(), dir.path()).is_none());
+        assert!(needs_plate(800, 800, ShareCover::Auto));
+        assert!(plate_source(&images, &cover, &std::collections::HashMap::new(), dir.path(), ShareCover::Auto).is_none());
         assert_eq!(scanned_dims(&images, &cover, &std::collections::HashMap::new()), None);
     }
 
@@ -1036,7 +1108,9 @@ mod pick_body_cover_tests {
     }
 
     fn pick<'a>(candidates: &'a [String], images: &[MediaMetadata]) -> Option<&'a str> {
-        pick_body_cover(candidates, candidates.first().map(String::as_str), images, &HashMap::new())
+        let pictures: Vec<BodyPicture> = candidates.iter().map(|href| BodyPicture { href: href.clone(), alt: String::new() }).collect();
+        let picked = pick_body_cover(&pictures, candidates.first().map(String::as_str), images, &HashMap::new(), ShareCover::Auto)?;
+        candidates.iter().map(String::as_str).find(|c| *c == picked)
     }
 
     #[test]

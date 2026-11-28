@@ -160,6 +160,15 @@ pub async fn page_facts(
     Ok(crate::build::emit::inventory::page_facts_for_source(root, &rel))
 }
 
+/// The comments of the page built from `filePath`, for its owner to moderate.
+pub async fn page_comments(
+    host: &dyn CommandHost,
+    a: FileArgs,
+) -> Result<crate::build::features::comment::cli::PageComments, String> {
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    Ok(crate::build::features::comment::cli::page_comments(root, &rel))
+}
+
 /// A field the schema does not know is a warning, never silently accepted.
 pub async fn validate_content(host: &dyn CommandHost, a: FileArgs) -> Result<Vec<EditorDiagnostic>, String> {
     let path = resolve(host, &a.file_path)?;
@@ -410,7 +419,7 @@ pub async fn expand_derived(host: &dyn CommandHost, a: ExpandDerivedArgs) -> Res
     let root_str = root.to_str().ok_or("the site path is not valid UTF-8")?;
     let structure = crate::build::scan::scan::scan_folder_with_dedup_emit(root_str, None, None, true)?;
     let graph = crate::build::scan::scan::build_content_graph(&structure);
-    let site = crate::system::derive::site::DerivedSite::load(true, root);
+    let site = crate::system::derive::site::DerivedSite::load(true, root, Default::default());
     let empty = DerivedTable::new();
     let read_derived = |path: &str, fragment: &str| match &site {
         Some(site) => site.read(path, fragment),

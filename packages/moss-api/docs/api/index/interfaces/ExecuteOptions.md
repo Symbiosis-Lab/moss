@@ -36,7 +36,11 @@ binary: a PATH directory, a standard install directory such as
 optional env?: Record<string, string>;
 ```
 
-Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+Environment variables to add. The program inherits only `PATH`,
+`HOME`, the user name, locale, temp directory, proxy and certificate
+settings (and Windows' system variables) from moss's environment, so
+an SSH agent or a token the person exported never reaches it.
+Only `GIT_TERMINAL_PROMPT`,
 `COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
 refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
 `context.index_file`.

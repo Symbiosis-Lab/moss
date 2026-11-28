@@ -20,7 +20,6 @@
 //! HTTP/2 parallel upload (20 concurrent), commit, save deployment URL, and
 //! the publish record `moss deploy`'s stale-copy check reads.
 
-use crate::build::assets::paths::compute_manifest_generation_id;
 use crate::deploy::{progress, PushResult};
 use crate::deploy::progress::DeploySink;
 use std::sync::Arc;
@@ -211,6 +210,8 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("preparing_publish"),
     );
 
+    crate::build::features::comment::link_block::refuse_prebuilt(project_folder, prebuilt_dir)?;
+
     // 1. Hash the directory into a manifest.
     let mut manifest = build_manifest_from_dir(prebuilt_dir)?;
     super::profile::count("manifest_files", manifest.len() as u64);
@@ -224,10 +225,6 @@ async fn push_prebuilt_inner(
         let _phase = crate::build::phase::PhaseTrace::start("local_checks");
         super::profile::gate("removals", refuse_removed_addresses(project_folder, site_id, &manifest))?;
     }
-
-    // Compute the generation_id early so it's available for both the
-    // short-circuit (Piece 3) and the commit + save calls below.
-    let generation_id = compute_manifest_generation_id(&manifest);
 
     let env = crate::build::site_config::resolve_environment(&project_folder.to_string_lossy());
     let client = crate::deploy::publish_client(project_folder, identity, &env).await;
@@ -246,39 +243,22 @@ async fn push_prebuilt_inner(
     // unverified pubkey, a name already taken — moved to that owner, so every
     // route has them now instead of this one.
 
-    // 1c. Short-circuit: if the server is already live on our generation,
-    //     skip the whole sync/upload/commit cycle. Any Err or Ok(None) from
-    //     get_live_generation (404 = old server, network error, site never
-    //     deployed) falls through to the normal path for back-compat.
-    let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
-    if let Ok(Some(live_gen)) = client.get_live_generation(site_id).await {
-        if live_gen == generation_id {
-            log::info!(
-                "deploy(prebuilt): generation {} already live on server, skipping deploy",
-                live_gen
-            );
-            // Complete comes from `with_publish_guard` on the way out.
-            return Ok(PushResult::Success {
-                url: crate::deploy::view_site_url(&folder_str, site_id, env.clone()),
-                files_uploaded: 0,
-                files_removed: 0,
-            });
-        }
-    }
-    drop(probe_phase);
-
-    // 2. Sync manifest with seta — get back the diff of what to upload/remove.
     sink.stage(
         progress::DeployStage::Syncing,
         0,
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
-    let sizes = crate::deploy::upload::regular_file_sizes(prebuilt_dir, &manifest).await?;
-    super::profile::count("manifest_kb", sizes.values().sum::<u64>().div_ceil(1024));
-    let diff = super::profile::sync(client.sync_manifest(site_id, &manifest, &sizes, &generation_id)).await?;
-
-    if !diff.needs_commit() {
+    let transfer = super::transfer::Transfer {
+        client: &client,
+        site_id,
+        dir: prebuilt_dir,
+        sink,
+        allow_removal: super::mass_remove::removal_accepted(accept_removals),
+    };
+    let opened = transfer.open(&manifest).await.map_err(super::profile::profiled_refusal)?;
+    if opened.state == crate::seta::deploys::DeployState::Live && opened.files_updated.is_none() {
+        log::info!("deploy(prebuilt): generation {} already live on server, skipping deploy", opened.deploy);
         // Complete comes from `with_publish_guard` on the way out.
         return Ok(PushResult::Success {
             url: crate::deploy::view_site_url(&folder_str, site_id, env.clone()),
@@ -286,169 +266,15 @@ async fn push_prebuilt_inner(
             files_removed: 0,
         });
     }
-
-    // 3. Upload the files seta is missing, through the same window and the same
-    //    per-file routing as the interactive publish (crate::deploy::upload).
-    //
-    //    This loop used to be a private copy that had drifted: 20-wide batches
-    //    and NO size routing whatsoever, so a 100 MB video went out as a single
-    //    PUT and got a 524 from Cloudflare. Sharing the routing is the point —
-    //    a fix in one loop was not a fix.
-    //
-    //    Manifest entries are xxh3_64 here and in deploy.rs, so the upload
-    //    verifies each file against the hash the manifest carries.
-    let total = diff.need.len() as u32;
-    let uploaded = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let canonical_base = prebuilt_dir
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve prebuilt dir: {}", e))?;
-
-    let mut window = crate::deploy::upload::UploadWindow::new();
-    // Same self-heal accounting as `push_site_inner_impl`: `commit_sync`
-    // below sends `manifest` verbatim as the server's new source of truth,
-    // so a file that self-heals during upload needs its manifest entry
-    // corrected before that call, and this deploy needs the same cap on how
-    // many files may do so before the pattern itself fails the publish.
-    let self_heal_cap = crate::deploy::upload::self_heal_cap(diff.need.len());
-    let self_heal_corrections: std::sync::Arc<
-        std::sync::Mutex<std::collections::HashMap<String, String>>,
-    > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    for file_path in &diff.need {
-        // Size drives window admission, so it must be known before the task
-        // starts. A path that could not be stat'd is admitted as 0 and its
-        // task fails with "Failed to stat".
-        let size = sizes.get(file_path).copied();
-        let admit_size = window.admission_cost(size.unwrap_or(0));
-        window.reserve(admit_size).await?;
-        let entry_value = manifest.get(file_path).cloned().unwrap_or_default();
-        {
-            let client = client.clone();
-            let site_id = site_id.to_string();
-            let prebuilt_dir = prebuilt_dir.to_path_buf();
-            let canonical_base = canonical_base.clone();
-            let file_path = file_path.clone();
-            let sink = Arc::clone(sink);
-            let uploaded = uploaded.clone();
-            let generation_id = generation_id.clone();
-            // Shared per-deploy link estimate; see moss_build::seta::upload_policy.
-            let throughput = window.throughput();
-            let self_heal_corrections = std::sync::Arc::clone(&self_heal_corrections);
-
-            window.spawn(admit_size, async move {
-                let full_path = prebuilt_dir.join(&file_path);
-                // Path-traversal guard. Server enforces this too; client-side
-                // catch surfaces malformed manifests with a clear error
-                // instead of a 400 from the upload PUT.
-                let canonical = full_path
-                    .canonicalize()
-                    .map_err(|e| format!("Failed to resolve {}: {}", file_path, e))?;
-                if !canonical.starts_with(&canonical_base) {
-                    return Err(format!("Path traversal detected: {}", file_path));
-                }
-                let (_mode, expected_hash) = crate::types::content::parse_entry(&entry_value);
-                let file_size = size.ok_or_else(|| format!("Failed to stat {}", file_path))?;
-                let healed_hash = crate::deploy::upload::upload_regular_file(
-                    &client,
-                    &site_id,
-                    &file_path,
-                    &canonical,
-                    file_size,
-                    &generation_id,
-                    expected_hash,
-                    &throughput,
-                    self_heal_cap,
-                    // This path reports FILE-count progress, so it passes no
-                    // byte sink — but the stall watchdog needs the byte credit
-                    // even when the UI doesn't. Without it a single large file
-                    // on a slow link (2000s for 100 MB at 50 KB/s) would look
-                    // identical to a wedged socket.
-                    Some(&|_n: u64| crate::infra::liveness::bump()),
-                )
-                .await?;
-                if let Some(actual_hash) = healed_hash {
-                    self_heal_corrections.lock().unwrap().insert(
-                        file_path.clone(),
-                        crate::types::content::file_entry(&actual_hash),
-                    );
-                }
-                crate::infra::liveness::bump();
-                // follow-up: this prebuilt (CLI build+deploy) path still emits
-                // FILE-COUNT progress; the interactive publish (deploy.rs) emits
-                // byte-based progress via a ticker. The frontend falls back to
-                // file-count when byte fields are absent, so the hairline still
-                // moves here — just
-                // by file count. C4b unifies the two loops, when the prebuilt path
-                // crosses with the state.toml publish writer it needs.
-                let done = uploaded.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                sink.stage(
-                    progress::DeployStage::Uploading,
-                    done,
-                    total,
-                    &crate::build::progress::format_progress_message(
-                        &crate::infra::app_advisory::fmt(
-                            "uploading",
-                            &[("name", &file_path)],
-                        ),
-                        done,
-                        total,
-                    ),
-                );
-                Ok::<(), String>(())
-            });
-        }
-    }
-    window.drain().await?;
-
-    // Fold in any self-heals discovered during upload — see the comment
-    // where `self_heal_corrections` is created. `generation_id` was already
-    // computed from the pre-correction manifest above and stays fixed: it
-    // names the server-side directory this upload actually went into, not a
-    // hash of the manifest's final content.
-    {
-        let corrections = self_heal_corrections.lock().unwrap();
-        if !corrections.is_empty() {
-            log::info!(
-                "deploy(prebuilt): correcting {} manifest {} to actually-shipped hashes before commit",
-                corrections.len(),
-                if corrections.len() == 1 { "entry" } else { "entries" }
-            );
-        }
-        for (path, entry) in corrections.iter() {
-            manifest.insert(path.clone(), entry.clone());
-        }
-    }
-
-    // 4. Commit — activates the new manifest server-side.
-    sink.stage(
-        progress::DeployStage::Committing,
-        0,
-        0,
-        &crate::infra::app_advisory::t("making_changes_live"),
-    );
-    // generation_id was computed above after building the manifest.
-    let commit_result = super::profile::commit(client.commit_sync(site_id, &manifest, &generation_id)).await?;
+    let total = opened.needed.len() as u32;
+    let commit_result = transfer.finish(&mut manifest, opened).await?;
+    let generation_id = commit_result.deploy.clone();
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
-
-    // Skew detection: the server echoes its now-live generation_id.
-    // If it differs from what we just published, two deploys may have raced
-    // (oscillation / out-of-order commit). Log for diagnosis only.
-    // TODO: expose as a UI advisory (PushResult advisory slot) once bindings
-    //       churn is acceptable.
-    // Unlike `push.rs`'s (task 3b): no `PublishVerdict` burst — known gap,
-    // see plan's Step 3 "known scoped-out gap" note.
-    if let Some(server_gen) = commit_result.generation_id.as_deref() {
-        if server_gen != generation_id {
-            log::warn!(
-                "deploy: generation skew — published {} but server is live on {} (possible oscillation)",
-                generation_id, server_gen
-            );
-        }
-    }
 
     // 5. Save deployment info to state.toml so the user-visible "last published"
     //    URL stays accurate and re-deploys are idempotent.
     let folder_path_str = project_folder.to_string_lossy().to_string();
-    let deployed_at = chrono::DateTime::from_timestamp(commit_result.timestamp as i64, 0)
+    let deployed_at = commit_result.timestamp.and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
         .unwrap_or_else(chrono::Utc::now)
         .to_rfc3339();
     // The record a later `moss deploy` compares the live site against, from
@@ -457,7 +283,7 @@ async fn push_prebuilt_inner(
     if let Some(target) = crate::config::deployment::slot_for("moss", Some(site_id)) {
         crate::deploy::landed::record_prebuilt_landed(project_folder, &generation_id, &target, &manifest);
     }
-    let hosted = crate::deploy::hosted_address(&env, site_id, &commit_result.url);
+    let hosted = crate::deploy::hosted_address(&env, site_id, commit_result.url.as_deref().unwrap_or_default());
     if let Err(e) = crate::vault::deployment_state::record_publish(
         &folder_path_str,
         crate::vault::deployment_state::PublishOutcome {
@@ -479,7 +305,7 @@ async fn push_prebuilt_inner(
     Ok(PushResult::Success {
         url: crate::deploy::view_site_url(&folder_path_str, site_id, env),
         files_uploaded: total,
-        files_removed: commit_result.files_removed,
+        files_removed: commit_result.files_removed.unwrap_or(0),
     })
 }
 
