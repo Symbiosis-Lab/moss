@@ -56,6 +56,8 @@ fn render(s: &Site, md: &str) -> String {
 }
 
 fn process(s: &Site, md: &str) -> moss_build::build::types::ParsedDocument {
+    // The render logs its warnings, so it takes a turn like a build: a reading build's capture stays its own.
+    let _turn = crate::site::turn();
     let map = HashMap::new();
     let handlers = moss_build::build::embed_handlers::builtin_marker_handlers(
         s.root.clone(),
