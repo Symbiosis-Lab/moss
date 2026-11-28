@@ -474,7 +474,7 @@ run_gate() {
     else
       matched=""
     fi
-    inputs="$(mktemp -t render-gate-inputs)"
+    inputs="$(mktemp "${TMPDIR:-/tmp}/render-gate-inputs.XXXXXX")"
   fi
   if [ -n "$PROJECT" ]; then
     # Ask Playwright for the configured project set rather than grepping the
