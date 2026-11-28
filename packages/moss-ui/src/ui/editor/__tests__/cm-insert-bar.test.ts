@@ -206,7 +206,7 @@ describe('picker-backed builders', () => {
 
   test('mediaEmbeds writes the standard form from the engine destination', async () => {
     const dest = async (t: string) => `../${t}`;
-    expect(await mediaEmbeds(['assets/a.jpg', 'assets/b 2.png'], async (t) => `../${t.replace(' ', '%20')}`))
+    expect(await mediaEmbeds(['assets/a.jpg', 'assets/b 2.png'], async (t) => `../${t.replaceAll(' ', '%20')}`))
       .toEqual(['![](../assets/a.jpg)', '![](../assets/b%202.png)']);
     expect(await mediaEmbeds(['assets/a.jpg'], dest)).toEqual(['![](../assets/a.jpg)']);
   });

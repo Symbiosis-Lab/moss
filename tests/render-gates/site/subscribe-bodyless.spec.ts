@@ -43,7 +43,7 @@ async function serve(context: BrowserContext, answer: Answer, captcha: object[] 
     }
     if (url.pathname === '/captcha/') {
       if (captcha === 'blocked') return route.abort('blockedbyclient');
-      const sends = captcha.map((m, i) => `setTimeout(() => parent.postMessage(${JSON.stringify(m)}, "*"), ${i * 200})`).join(';');
+      const sends = captcha.map((m, i) => `setTimeout(() => parent.postMessage(${JSON.stringify(m).replace(/</g, '\\u003c')}, "*"), ${i * 200})`).join(';');
       return route.fulfill({ status: 200, headers: { 'content-type': 'text/html' }, body: `<script>${sends}</script>` });
     }
     if (url.pathname === '/_moss/account/session') {
